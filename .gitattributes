@@ -1,0 +1,15 @@
+* text=auto
+
+# Enforce LF for executable/runtime-sensitive files.
+*.sh text eol=lf
+*.py text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf
+
+# Enforce LF for project config/doc/schema files used across platforms.
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.in text eol=lf

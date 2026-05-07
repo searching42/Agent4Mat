@@ -13,7 +13,7 @@ from oled_agent.agent.session import (
     plan_request,
     plan_request_from_payload,
 )
-from oled_agent.diagnostics import run_doctor, run_external_connectivity_debug, run_external_preflight
+from oled_agent.diagnostics import run_doctor, run_external_connectivity_debug, run_external_preflight, run_llm_connectivity
 from oled_agent.runner import run_pipeline
 from oled_agent.smoke import run_smoke
 
@@ -60,6 +60,18 @@ def parse_args() -> argparse.Namespace:
         help="Workspace root (default: current directory)",
     )
     ext_dbg_p.add_argument("--json-out", default="", help="Optional path to write debug JSON report")
+
+    llm_conn_p = sub.add_parser(
+        "llm-connectivity",
+        help="Check LLM planner connectivity for command/backend mode",
+    )
+    llm_conn_p.add_argument(
+        "--workspace-root",
+        default=str(Path.cwd()),
+        help="Workspace root (default: current directory)",
+    )
+    llm_conn_p.add_argument("--catalog", default="", help="Optional model catalog path used by command probe")
+    llm_conn_p.add_argument("--json-out", default="", help="Optional path to write llm connectivity JSON report")
 
     smoke_p = sub.add_parser("smoke", help="Run minimal smoke pipeline")
     smoke_p.add_argument(
@@ -163,6 +175,17 @@ def main() -> None:
         print(json.dumps(report.get("connectivity", {}), ensure_ascii=False, indent=2))
         if json_out is not None:
             print(f"DEBUG_JSON={json_out}")
+        raise SystemExit(int(report.get("exit_code", 1)))
+
+    if args.command == "llm-connectivity":
+        workspace_root = Path(args.workspace_root).resolve()
+        catalog = Path(args.catalog).resolve() if args.catalog else None
+        json_out = Path(args.json_out).resolve() if args.json_out else None
+        report = run_llm_connectivity(workspace_root=workspace_root, catalog_path=catalog, json_out=json_out)
+        _print_doctor(report)
+        print(json.dumps(report.get("connectivity", {}), ensure_ascii=False, indent=2))
+        if json_out is not None:
+            print(f"LLM_CONNECTIVITY_JSON={json_out}")
         raise SystemExit(int(report.get("exit_code", 1)))
 
     if args.command == "smoke":

@@ -20,7 +20,7 @@ from oled_agent.agent.request_contract import (
     validate_request_payload,
 )
 from oled_agent.agent.tool_contracts import build_plan_tool_call_item_schema
-from oled_agent.diagnostics import run_external_connectivity_debug, run_external_preflight
+from oled_agent.diagnostics import run_external_connectivity_debug, run_external_preflight, run_llm_connectivity
 from oled_agent.agent.tools import (
     ExternalScorerError,
     ToolContext,
@@ -3275,6 +3275,95 @@ class RegressionTests(unittest.TestCase):
             payload = json.loads(json_out.read_text(encoding="utf-8"))
             self.assertEqual(payload.get("report_type"), "external_connectivity_debug_v1")
             self.assertEqual(payload.get("overall"), report.get("overall"))
+
+    def test_llm_connectivity_fails_when_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_LLM_PLANNER_CMD": "",
+                    "OLED_AGENT_LLM_BACKEND": "",
+                },
+                clear=False,
+            ):
+                report = run_llm_connectivity(workspace_root=td_path)
+            self.assertEqual(report["report_type"], "llm_connectivity_v1")
+            self.assertEqual(report["source"], "none")
+            self.assertEqual(report["overall"], "fail")
+            checks = report["connectivity"]["check_status"]
+            self.assertEqual(checks.get("llm:source"), "fail")
+            self.assertEqual(checks.get("llm:config"), "fail")
+
+    def test_llm_connectivity_command_probe_passes_with_mock_planner(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            llm_script = repo_root / "scripts" / "mock_llm_planner.py"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_LLM_PLANNER_CMD": f"{sys.executable} {llm_script}",
+                    "OLED_AGENT_LLM_BACKEND": "",
+                    "MOCK_LLM_MODE": "active",
+                },
+                clear=False,
+            ):
+                report = run_llm_connectivity(
+                    workspace_root=repo_root,
+                    catalog_path=repo_root / "configs" / "models" / "catalog.json",
+                )
+            self.assertEqual(report["source"], "command")
+            self.assertEqual(report["overall"], "pass")
+            checks = report["connectivity"]["check_status"]
+            self.assertEqual(checks.get("llm:source"), "pass")
+            self.assertEqual(checks.get("llm:command_probe"), "pass")
+
+    def test_llm_connectivity_backend_probe_http_error(self) -> None:
+        class _MockHttpErrorResponse:
+            def __init__(self, body: str):
+                self._body = body.encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def close(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+
+            def fake_urlopen(req, timeout=None):
+                import urllib.error
+
+                body = json.dumps({"error": {"message": "invalid token"}})
+                raise urllib.error.HTTPError(
+                    url=req.full_url,
+                    code=401,
+                    msg="Unauthorized",
+                    hdrs=None,
+                    fp=_MockHttpErrorResponse(body),
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_LLM_PLANNER_CMD": "",
+                    "OLED_AGENT_LLM_BACKEND": "openai_compat",
+                    "OLED_AGENT_LLM_MODEL": "gpt-test",
+                    "OLED_AGENT_LLM_API_KEY": "test-key",
+                    "OLED_AGENT_LLM_BASE_URL": "http://mock.local/v1",
+                    "OLED_AGENT_LLM_TIMEOUT_SEC": "3",
+                },
+                clear=False,
+            ):
+                with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                    report = run_llm_connectivity(workspace_root=td_path)
+            self.assertEqual(report["source"], "backend")
+            self.assertEqual(report["overall"], "fail")
+            checks = report["connectivity"]["check_status"]
+            self.assertEqual(checks.get("llm:backend_config"), "pass")
+            self.assertEqual(checks.get("llm:backend_probe"), "fail")
+            self.assertIn("llm:backend_probe", report["connectivity"]["blocking_checks"])
 
 
 if __name__ == "__main__":

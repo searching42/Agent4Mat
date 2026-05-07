@@ -7,6 +7,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -635,6 +637,74 @@ def _build_external_connectivity_summary(report: Dict[str, Any]) -> Dict[str, An
     }
 
 
+def _build_summary_from_checks(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    summary = {"pass": 0, "warn": 0, "fail": 0}
+    for c in checks:
+        status = str(c.get("status") or "")
+        if status in summary:
+            summary[status] += 1
+    return summary
+
+
+def _overall_from_summary(summary: Dict[str, int]) -> str:
+    if int(summary.get("fail", 0)) > 0:
+        return "fail"
+    if int(summary.get("warn", 0)) > 0:
+        return "warn"
+    return "pass"
+
+
+def _probe_openai_compat_connectivity(config: Dict[str, Any]) -> Dict[str, Any]:
+    endpoint = f"{config['base_url']}{config['chat_completions_path']}"
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    auth_scheme = str(config.get("auth_scheme", "Bearer"))
+    auth_header = str(config.get("auth_header", "Authorization"))
+    if auth_scheme:
+        headers[auth_header] = f"{auth_scheme} {config['api_key']}"
+    else:
+        headers[auth_header] = str(config["api_key"])
+    extra_headers = config.get("extra_headers")
+    if isinstance(extra_headers, dict):
+        for k, v in extra_headers.items():
+            headers[str(k)] = str(v)
+
+    body = {
+        "model": config["model"],
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": "You are a connectivity probe."},
+            {"role": "user", "content": "Reply with short text: ok"},
+        ],
+    }
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=float(config["timeout_sec"])) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"connectivity probe response is not JSON: {exc}") from exc
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("connectivity probe response missing choices")
+
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        raise RuntimeError("connectivity probe response missing message object")
+
+    return {
+        "endpoint": endpoint,
+        "response_id": str(payload.get("id") or ""),
+        "model": str(config.get("model") or ""),
+    }
+
+
 def run_external_connectivity_debug(
     *,
     workspace_root: Path,
@@ -643,6 +713,186 @@ def run_external_connectivity_debug(
     report = run_external_preflight(workspace_root=workspace_root.resolve())
     report["report_type"] = "external_connectivity_debug_v1"
     report["connectivity"] = _build_external_connectivity_summary(report)
+
+    if json_out is not None:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    return report
+
+
+def run_llm_connectivity(
+    *,
+    workspace_root: Path,
+    catalog_path: Optional[Path] = None,
+    json_out: Optional[Path] = None,
+) -> Dict[str, Any]:
+    from oled_agent.agent.planner import (
+        _llm_backend_config_from_env,
+        _llm_backend_from_env,
+        _llm_cmd_from_env,
+        _run_llm_planner_command,
+    )
+
+    ws_root = workspace_root.resolve()
+    cat_path = catalog_path.resolve() if catalog_path is not None else (ws_root / "configs" / "models" / "catalog.json")
+    checks: List[Dict[str, Any]] = []
+    source = "none"
+
+    cmd = _llm_cmd_from_env()
+    backend = _llm_backend_from_env()
+    if cmd:
+        source = "command"
+    elif backend:
+        source = "backend"
+
+    checks.append(
+        _mk_result(
+            name="llm:source",
+            status="pass" if source != "none" else "fail",
+            message=f"LLM source resolved to {source}",
+            details={"source": source, "catalog_path": str(cat_path)},
+        )
+    )
+
+    if source == "none":
+        checks.append(
+            _mk_result(
+                name="llm:config",
+                status="fail",
+                message="LLM source is not configured (set OLED_AGENT_LLM_PLANNER_CMD or OLED_AGENT_LLM_BACKEND)",
+            )
+        )
+    elif source == "command":
+        probe_payload = {
+            "task_id": "llm_connectivity_probe",
+            "request_text": "LLM connectivity probe",
+            "mode": "fast_screen",
+            "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+            "budget": {"max_candidates": 3},
+        }
+        try:
+            result = _run_llm_planner_command(
+                cmd=cmd,
+                payload=probe_payload,
+                catalog_path=cat_path,
+            )
+            if not isinstance(result, dict):
+                raise RuntimeError("planner command output is not JSON object")
+            checks.append(
+                _mk_result(
+                    name="llm:command_probe",
+                    status="pass",
+                    message="LLM planner command responded with JSON",
+                    details={
+                        "keys": sorted(result.keys()),
+                    },
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                _mk_result(
+                    name="llm:command_probe",
+                    status="fail",
+                    message="LLM planner command probe failed",
+                    details={"error": str(exc)},
+                )
+            )
+    else:
+        try:
+            config = _llm_backend_config_from_env(backend)
+            checks.append(
+                _mk_result(
+                    name="llm:backend_config",
+                    status="pass",
+                    message=f"LLM backend config parsed ({backend})",
+                    details={
+                        "backend": backend,
+                        "base_url": str(config.get("base_url") or ""),
+                        "chat_completions_path": str(config.get("chat_completions_path") or ""),
+                        "model": str(config.get("model") or ""),
+                        "auth_header": str(config.get("auth_header") or ""),
+                    },
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                _mk_result(
+                    name="llm:backend_config",
+                    status="fail",
+                    message="LLM backend config invalid",
+                    details={"backend": backend, "error": str(exc)},
+                )
+            )
+            config = None
+
+        if config is not None:
+            try:
+                details = _probe_openai_compat_connectivity(config)
+                checks.append(
+                    _mk_result(
+                        name="llm:backend_probe",
+                        status="pass",
+                        message="LLM backend connectivity probe succeeded",
+                        details=details,
+                    )
+                )
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                checks.append(
+                    _mk_result(
+                        name="llm:backend_probe",
+                        status="fail",
+                        message=f"LLM backend HTTP error: {exc.code}",
+                        details={"code": int(exc.code), "body_tail": _tail(body, 500)},
+                    )
+                )
+            except urllib.error.URLError as exc:
+                checks.append(
+                    _mk_result(
+                        name="llm:backend_probe",
+                        status="fail",
+                        message="LLM backend network error",
+                        details={"error": str(exc)},
+                    )
+                )
+            except TimeoutError as exc:
+                checks.append(
+                    _mk_result(
+                        name="llm:backend_probe",
+                        status="fail",
+                        message="LLM backend timeout",
+                        details={"error": str(exc)},
+                    )
+                )
+            except Exception as exc:
+                checks.append(
+                    _mk_result(
+                        name="llm:backend_probe",
+                        status="fail",
+                        message="LLM backend probe failed",
+                        details={"error": str(exc)},
+                    )
+                )
+
+    summary = _build_summary_from_checks(checks)
+    overall = _overall_from_summary(summary)
+    report: Dict[str, Any] = {
+        "report_type": "llm_connectivity_v1",
+        "generated_at": _now_iso(),
+        "workspace_root": str(ws_root),
+        "overall": overall,
+        "summary": summary,
+        "checks": checks,
+        "source": source,
+        "exit_code": 0 if overall == "pass" else 1,
+    }
+    report["connectivity"] = {
+        "source": source,
+        "is_ready": overall == "pass",
+        "check_status": {c.get("name", ""): c.get("status", "") for c in checks},
+        "blocking_checks": [c.get("name", "") for c in checks if c.get("status") == "fail"],
+    }
 
     if json_out is not None:
         json_out.parent.mkdir(parents=True, exist_ok=True)

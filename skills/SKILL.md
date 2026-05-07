@@ -1,21 +1,30 @@
-# oled-agent skill router
+# Agent4Mat skill router
 
-This skill delegates execution to stable CLI commands in this repository.
+This router maps user intent to stable CLI commands and tool-specific skills.
+Business logic stays in repository Python modules.
 
-## Use cases
-- Validate environment readiness
-- Run deterministic smoke tests
-- Execute configured OLED pipelines
-
-## Commands
-- Environment check:
+## Routing map
+- Environment or installation checks:
   - `PYTHONPATH=src python3 -m oled_agent.cli doctor --workspace-root .`
-- Smoke test:
+- LLM connectivity checks:
+  - `PYTHONPATH=src python3 -m oled_agent.cli llm-connectivity --workspace-root .`
+- Deterministic local smoke:
   - `PYTHONPATH=src python3 -m oled_agent.cli smoke --workspace-root .`
-- Run pipeline:
-  - `PYTHONPATH=src python3 -m oled_agent.cli run --config <config.json> --workspace-root .`
+- Request planning/execution:
+  - `PYTHONPATH=src python3 -m oled_agent.cli agent-plan --workspace-root . --task-id <task_id> --request "<text>"`
+  - `PYTHONPATH=src python3 -m oled_agent.cli agent-run --workspace-root . --task-id <task_id> --request "<text>"`
+
+## Tool-specific skills
+- Uni-Mol:
+  - `skills/unimol/SKILL.md`
+- REINVENT4:
+  - `skills/reinvent4/SKILL.md`
+- MinerU:
+  - `skills/mineru/SKILL.md`
+- MolScribe:
+  - `skills/molscribe/SKILL.md`
 
 ## Rules
-- Do not implement business logic inside this skill.
-- Always invoke repository CLI as the source of truth.
-- Keep outputs machine-readable (manifest/report JSON/MD files in `runs/`).
+- Always call repository CLI/adapter entrypoints; do not reimplement pipeline logic in prompt text.
+- Keep outputs machine-readable in `runs/` and adapter JSON contracts.
+- If a tool is not fully wired yet, return explicit preflight status and next required config.

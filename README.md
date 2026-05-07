@@ -44,6 +44,7 @@ Make targets:
 - `make release-check`
 - `make quickstart`
 - `make doctor`
+- `make llm-connectivity`
 - `make adapter-validate`
 - `make real-adapter-validate`
 - `make test-regressions`
@@ -74,6 +75,7 @@ Expected outcomes:
 ## CLI commands
 - `run`: run pipeline from config
 - `doctor`: check environment/dependencies/GPU tooling
+- `llm-connectivity`: check LLM source config and command/backend connectivity
 - `smoke`: run minimal deterministic demo pipeline
 - `agent-plan`: produce structured `DesignSpec + ToolCall[]` from user request
 - `agent-run`: plan + execute tools, save plan/execution/state artifacts
@@ -116,6 +118,18 @@ Built-in backend mode (`openai_compat`) env vars:
 - optional `OLED_AGENT_LLM_EXTRA_HEADERS_JSON` (JSON object string, e.g. `{"X-Client":"agent4mat"}`)
 - optional `OLED_AGENT_LLM_DISABLE_RESPONSE_FORMAT` (`1/true` to skip `response_format` for strict proxies)
 - optional `OLED_AGENT_LLM_DEBUG_ERROR` (`1/true` to include redacted backend error detail in fallback metadata; for debugging only)
+
+LLM connectivity probe:
+```bash
+PYTHONPATH=src python3 -m oled_agent.cli llm-connectivity \
+  --workspace-root . \
+  --catalog configs/models/catalog.json \
+  --json-out runs/llm_connectivity.json
+```
+This command checks:
+- source resolution (`command` vs `backend`)
+- command mode: planner command returns JSON object
+- backend mode: `openai_compat` config parsing and HTTP reachability
 
 Example for personal proxy:
 ```bash
@@ -209,6 +223,14 @@ PYTHONPATH=src python3 -m oled_agent.cli agent-plan --workspace-root . --task-id
 - `src/oled_agent/agent/tools.py`: tool registry + adapters + fallbacks
 - `src/oled_agent/agent/executor.py`: tool execution loop and step records
 - `src/oled_agent/agent/session.py`: plan-only and plan+execute orchestration
+
+## Skills
+- Router: `skills/SKILL.md`
+- Tool-focused skill docs:
+  - `skills/unimol/SKILL.md`
+  - `skills/reinvent4/SKILL.md`
+  - `skills/mineru/SKILL.md`
+  - `skills/molscribe/SKILL.md`
 
 ## Repository layout
 - `src/oled_agent/cli.py`: CLI entrypoint

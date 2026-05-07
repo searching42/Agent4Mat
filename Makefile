@@ -4,11 +4,12 @@ WORKSPACE_ROOT ?= .
 TASK_ID ?= make_quickstart
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
-.PHONY: doctor llm-smoke release-check
+.PHONY: doctor llm-smoke llm-connectivity release-check
 
 help:
 	@echo "Available targets:"
 	@echo "  make llm-smoke           - verify LLM integration path with mock planner"
+	@echo "  make llm-connectivity    - run LLM connectivity diagnostic (command/backend)"
 	@echo "  make release-check       - run adapter-validate + quickstart + llm-smoke + doctor"
 	@echo "  make quickstart          - run quickstart chain self-check"
 	@echo "  make adapter-validate    - validate adapter templates contract"
@@ -51,6 +52,9 @@ test-adapters:
 llm-smoke:
 	@$(PYTHONPATH_ENV) MOCK_LLM_MODE=active \
 		$(PYTHON) scripts/check_llm_planner_modes.py
+
+llm-connectivity:
+	@$(PYTHONPATH_ENV) $(PYTHON) -m oled_agent.cli llm-connectivity --workspace-root "$(WORKSPACE_ROOT)" --catalog "$(WORKSPACE_ROOT)/configs/models/catalog.json"
 
 release-check:
 	@$(MAKE) adapter-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"

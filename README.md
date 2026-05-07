@@ -232,6 +232,10 @@ PYTHONPATH=src python3 -m oled_agent.cli agent-plan --workspace-root . --task-id
   - `skills/mineru/SKILL.md`
   - `skills/molscribe/SKILL.md`
 
+## Assistant conventions
+- Repository-scoped assistant behavior policy:
+  - `SOUL.md`
+
 ## Repository layout
 - `src/oled_agent/cli.py`: CLI entrypoint
 - `src/oled_agent/runner.py`: stage orchestration + manifest

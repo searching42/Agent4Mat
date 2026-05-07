@@ -1,0 +1,35 @@
+{
+  "models": [
+    {
+      "id": "pred_tpl_v1",
+      "kind": "predictor",
+      "backend": "mock_predictor",
+      "task_types": [
+        "plqy"
+      ],
+      "runtime_profile": "cpu",
+      "notes": "Quickstart predictor template for adapter-based runs.",
+      "params": {
+        "adapters": {
+          "train_predictor_cmd": "python3 scripts/adapters/train_predictor_adapter_template.py",
+          "score_candidates_cmd": "python3 scripts/adapters/score_candidates_adapter_template.py"
+        }
+      }
+    },
+    {
+      "id": "gen_tpl_v1",
+      "kind": "generator",
+      "backend": "mock_generator",
+      "task_types": [
+        "molecule_generation"
+      ],
+      "runtime_profile": "cpu",
+      "notes": "Quickstart generator template for adapter-based runs.",
+      "params": {
+        "adapters": {
+          "generate_candidates_cmd": "python3 scripts/adapters/generate_candidates_adapter_template.py"
+        }
+      }
+    }
+  ]
+}

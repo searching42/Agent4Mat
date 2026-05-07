@@ -1,0 +1,54 @@
+{
+  "models": [
+    {
+      "id": "unimol_lambda_plqy_v1",
+      "kind": "predictor",
+      "backend": "unimol_tools",
+      "task_types": ["lambda_em", "plqy"],
+      "runtime_profile": "gpu",
+      "notes": "Primary predictor route; can be served local or remote.",
+      "params": {
+        "objective_default": "target_window",
+        "supports_training": true,
+        "adapters": {
+          "train_predictor_cmd": "",
+          "score_candidates_cmd": ""
+        }
+      }
+    },
+    {
+      "id": "embedding_baseline_v2",
+      "kind": "predictor",
+      "backend": "sklearn_hist_gbr",
+      "task_types": ["lambda_em"],
+      "runtime_profile": "cpu",
+      "notes": "Fallback baseline predictor",
+      "params": {
+        "supports_training": true
+      }
+    },
+    {
+      "id": "reinvent4_lambda_em_v2",
+      "kind": "generator",
+      "backend": "reinvent4",
+      "task_types": ["molecule_generation"],
+      "runtime_profile": "gpu",
+      "notes": "Primary constrained generator",
+      "params": {
+        "supports_conditioning": true,
+        "adapters": {
+          "generate_candidates_cmd": ""
+        }
+      }
+    },
+    {
+      "id": "generator_stub_v1",
+      "kind": "generator",
+      "backend": "stub",
+      "task_types": ["molecule_generation"],
+      "runtime_profile": "cpu",
+      "notes": "Local testing stub",
+      "params": {}
+    }
+  ]
+}

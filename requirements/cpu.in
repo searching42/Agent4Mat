@@ -1,0 +1,12 @@
+-r base.in
+
+# Optional scientific/tooling stack for CPU profile (no CUDA requirement).
+numpy==1.26.4; python_version < "3.11"
+numpy==2.4.4; python_version >= "3.11"
+pandas==2.2.3; python_version < "3.11"
+pandas==3.0.2; python_version >= "3.11"
+scikit-learn==1.5.2; python_version < "3.11"
+scikit-learn==1.8.0; python_version >= "3.11"
+# RDKit wheels are not consistently available on all Python/macOS combos via PyPI.
+# Keep it out of the default CPU lock; install via conda/uv/apt profile if needed.
+huggingface-hub==0.36.0

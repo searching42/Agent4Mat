@@ -1,0 +1,6 @@
+candidate_id,smiles,lambda_em_score,plqy_score,domain_score,common_prior_score
+cand_001,c1ccccc1,0.75,0.42,0.60,0.50
+cand_002,c1ncccc1,0.62,0.55,0.45,0.40
+cand_003,c1ccc2ccccc2c1,0.83,0.38,0.72,0.65
+cand_004,CN1C=NC2=CC=CC=C21,0.40,0.20,0.35,0.30
+cand_005,CCOC(=O)N1CCN(CC1)C,0.18,0.10,0.22,0.20

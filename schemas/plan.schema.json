@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/plan.schema.json",
+  "title": "OLED Agent Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "design_spec",
+    "tool_calls"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "design_spec": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "task_id",
+        "request_text",
+        "mode",
+        "targets",
+        "budget",
+        "model_choice"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "fast_screen",
+            "train_then_design"
+          ]
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "name",
+              "objective"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "enum": [
+                  "lambda_em",
+                  "plqy",
+                  "stability"
+                ]
+              },
+              "objective": {
+                "type": "string",
+                "enum": [
+                  "maximize",
+                  "minimize",
+                  "target_window"
+                ]
+              },
+              "target_center": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "sigma": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "min_value": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "max_value": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "weight": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "max_candidates"
+          ],
+          "properties": {
+            "max_candidates": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "model_choice": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "predictor_id",
+            "generator_id"
+          ],
+          "properties": {
+            "predictor_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "generator_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "tool_calls": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "args"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "list_models",
+              "search_dataset",
+              "train_predictor",
+              "generate_candidates",
+              "score_candidates",
+              "filter_and_rank",
+              "make_report"
+            ]
+          },
+          "args": {
+            "type": "object"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "list_models"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "predictor",
+                        "generator"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "search_dataset"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "preferences"
+                  ],
+                  "properties": {
+                    "preferences": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "train_predictor"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "predictor_id",
+                    "targets"
+                  ],
+                  "properties": {
+                    "predictor_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "targets": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "target_specs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "generate_candidates"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "generator_id"
+                  ],
+                  "properties": {
+                    "generator_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "max_candidates": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "input_csv": {
+                      "type": "string"
+                    },
+                    "constraints": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "score_candidates"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "predictor_id",
+                    "targets"
+                  ],
+                  "properties": {
+                    "predictor_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "targets": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "target_specs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "filter_and_rank"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "topn"
+                  ],
+                  "properties": {
+                    "topn": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "target_specs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "make_report"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [],
+                  "properties": {}
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

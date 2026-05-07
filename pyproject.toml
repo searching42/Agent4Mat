@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oled-agent"
+version = "0.1.0"
+description = "Config-driven OLED workflow runner with reproducible manifests"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "OpenClaw OLED Team" }]
+dependencies = [
+  "jsonschema>=4.0",
+]
+
+[project.scripts]
+oled-agent = "oled_agent.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/decision_summary.schema.json",
+  "title": "OLED Agent Decision Summary",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "task_id",
+    "status",
+    "model_choice",
+    "score_step"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "task_id": { "type": "string" },
+    "status": { "type": "string" },
+    "model_choice": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["predictor_id", "generator_id"],
+      "properties": {
+        "predictor_id": { "type": "string" },
+        "generator_id": { "type": "string" }
+      }
+    },
+    "score_step": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["used_fallback"],
+      "properties": {
+        "used_fallback": { "type": "boolean" },
+        "adapter": { "type": ["string", "null"] },
+        "fallback_reason": { "type": ["string", "null"] },
+        "fallback_code": { "type": "string" },
+        "fallback_retryable": { "type": "boolean" },
+        "fallback_details": { "type": ["object", "null"] }
+      }
+    }
+  }
+}

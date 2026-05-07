@@ -1,0 +1,22 @@
+# Copy to .env.external and fill values for your deployment.
+#
+# Required unless ALLOW_DEFAULT_UNIMOL_REMOTE=1:
+# - UNIMOL_REMOTE_HOST
+# - UNIMOL_REMOTE_PY
+# - UNIMOL_REMOTE_TMP_BASE
+
+# Always enable external scoring in integration runs.
+OLED_AGENT_USE_EXTERNAL_SCORER=1
+
+# Recommended explicit remote runtime config.
+UNIMOL_REMOTE_HOST=
+UNIMOL_REMOTE_PY=
+UNIMOL_REMOTE_TMP_BASE=
+
+# Optional legacy fallback to baked-in defaults in scorer script (not recommended).
+ALLOW_DEFAULT_UNIMOL_REMOTE=0
+
+# Optional retry tuning for external scorer adapter.
+OLED_AGENT_EXTERNAL_SCORER_TIMEOUT_SEC=900
+OLED_AGENT_EXTERNAL_SCORER_RETRIES=1
+OLED_AGENT_EXTERNAL_SCORER_BACKOFF_SEC=1.5

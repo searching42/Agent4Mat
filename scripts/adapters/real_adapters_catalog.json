@@ -1,0 +1,31 @@
+{
+  "models": [
+    {
+      "id": "unimol_lambda_plqy_real_v1",
+      "kind": "predictor",
+      "backend": "unimol_tools",
+      "task_types": ["lambda_em", "plqy"],
+      "runtime_profile": "gpu",
+      "params": {
+        "supports_training": true,
+        "adapters": {
+          "train_predictor_cmd": "python3 scripts/adapters/train_predictor_unimol_adapter.py",
+          "score_candidates_cmd": "python3 scripts/adapters/score_candidates_unimol_adapter.py"
+        }
+      }
+    },
+    {
+      "id": "mineru_generator_real_v1",
+      "kind": "generator",
+      "backend": "mineru",
+      "task_types": ["molecule_generation"],
+      "runtime_profile": "gpu",
+      "params": {
+        "supports_conditioning": true,
+        "adapters": {
+          "generate_candidates_cmd": "python3 scripts/adapters/generate_candidates_mineru_adapter.py"
+        }
+      }
+    }
+  ]
+}

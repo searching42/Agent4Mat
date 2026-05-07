@@ -1,0 +1,5 @@
+# Core runtime dependencies for oled-agent CLI and pipeline execution.
+# Keep this list minimal and cross-platform.
+setuptools==80.9.0
+
+jsonschema>=4.0

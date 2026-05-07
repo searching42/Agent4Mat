@@ -1,0 +1,10 @@
+-r cpu.in
+
+# GPU profile dependencies.
+# IMPORTANT: torch wheel index varies by CUDA version and platform.
+# Install torch first from the official index that matches your environment,
+# then install this file (or use scripts/install_profile.sh gpu).
+torch==2.8.0; python_version < "3.11"
+torch==2.9.0; python_version >= "3.11"
+unimol-tools==0.1.5
+magic-pdf[full]==1.4.2

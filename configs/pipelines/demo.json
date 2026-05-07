@@ -1,0 +1,41 @@
+{
+  "run_tag": "demo_multiobj",
+  "description": "Demo deterministic pipeline: compose -> filter -> report",
+  "input_csv": "configs/pipelines/demo_input.csv",
+  "output_root": "runs",
+  "metadata": {
+    "intent": "debug_or_acceptance",
+    "reference_regime": "mixed_or_unknown",
+    "source_note": "local demo run for architecture validation",
+    "expected_class": "n/a"
+  },
+  "stages": [
+    {
+      "name": "compose_multi_objective",
+      "params": {
+        "objectives": [
+          {"property_name": "lambda_em", "weight": 0.65},
+          {"property_name": "plqy", "weight": 0.10}
+        ],
+        "common": {
+          "domain_weight": 0.20,
+          "prior_weight": 0.05,
+          "diversity_weight": 0.0
+        }
+      }
+    },
+    {
+      "name": "filter_multi_objective",
+      "params": {
+        "min_multi_total_score": 0.20,
+        "topn": 3
+      }
+    },
+    {
+      "name": "export_simple_report",
+      "params": {
+        "topn": 3
+      }
+    }
+  ]
+}

@@ -160,14 +160,18 @@ jobs:
         with:
           name: plan-tool-schema-check
           path: runs/ci/plan_tool_schema_check.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Publish schema-check summary
         if: always()
         run: |
           echo "### Plan Tool Schema Check" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          cat runs/ci/plan_tool_schema_check.json >> "$GITHUB_STEP_SUMMARY"
+          if [ -f runs/ci/plan_tool_schema_check.json ]; then
+            cat runs/ci/plan_tool_schema_check.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "schema-check output file is missing (likely upstream step failed)." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Check llm planner modes
         run: python3 scripts/check_llm_planner_modes.py

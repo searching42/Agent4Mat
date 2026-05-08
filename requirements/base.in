@@ -2,4 +2,4 @@
 # Keep this list minimal and cross-platform.
 setuptools==80.9.0
 
-jsonschema>=4.0
+jsonschema==4.23.0

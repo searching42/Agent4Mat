@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import urllib.error
@@ -654,6 +655,61 @@ def _overall_from_summary(summary: Dict[str, int]) -> str:
     return "pass"
 
 
+def _redact_sensitive_text(text: str) -> str:
+    out = str(text or "")
+    api_key = str(os.environ.get("OLED_AGENT_LLM_API_KEY", "") or "")
+    if api_key:
+        out = out.replace(api_key, "***")
+    # Redact common bearer token patterns if upstream echoes headers.
+    out = out.replace("Bearer ", "Bearer ")
+    # Lightweight token masking after Bearer prefix.
+    marker = "Bearer "
+    pos = out.find(marker)
+    while pos >= 0:
+        start = pos + len(marker)
+        end = start
+        while end < len(out) and out[end] not in " \t\r\n\",;":
+            end += 1
+        if end > start:
+            out = out[:start] + "***" + out[end:]
+            pos = out.find(marker, start + 3)
+        else:
+            pos = out.find(marker, end)
+    return out
+
+
+def _build_minimal_probe_body(config: Dict[str, Any]) -> Dict[str, Any]:
+    body: Dict[str, Any] = {
+        "model": config["model"],
+        "messages": [
+            {"role": "system", "content": "You are a connectivity probe."},
+            {"role": "user", "content": "Reply with short text: ok"},
+        ],
+    }
+    extra_raw = str(os.environ.get("OLED_AGENT_LLM_CONNECTIVITY_PROBE_EXTRA_BODY_JSON", "") or "").strip()
+    if extra_raw:
+        try:
+            extra_obj = json.loads(extra_raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "Invalid OLED_AGENT_LLM_CONNECTIVITY_PROBE_EXTRA_BODY_JSON: must be JSON object"
+            ) from exc
+        if not isinstance(extra_obj, dict):
+            raise RuntimeError(
+                "Invalid OLED_AGENT_LLM_CONNECTIVITY_PROBE_EXTRA_BODY_JSON: must be JSON object"
+            )
+        body.update(extra_obj)
+    return body
+
+
+def _is_timeout_url_error(exc: urllib.error.URLError) -> bool:
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, (socket.timeout, TimeoutError)):
+        return True
+    text = str(reason or exc).lower()
+    return "timed out" in text or "timeout" in text
+
+
 def _probe_openai_compat_connectivity(config: Dict[str, Any]) -> Dict[str, Any]:
     endpoint = f"{config['base_url']}{config['chat_completions_path']}"
     headers: Dict[str, str] = {"Content-Type": "application/json"}
@@ -668,14 +724,7 @@ def _probe_openai_compat_connectivity(config: Dict[str, Any]) -> Dict[str, Any]:
         for k, v in extra_headers.items():
             headers[str(k)] = str(v)
 
-    body = {
-        "model": config["model"],
-        "temperature": 0,
-        "messages": [
-            {"role": "system", "content": "You are a connectivity probe."},
-            {"role": "user", "content": "Reply with short text: ok"},
-        ],
-    }
+    body = _build_minimal_probe_body(config)
     req = urllib.request.Request(
         endpoint,
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
@@ -750,7 +799,7 @@ def run_llm_connectivity(
         _mk_result(
             name="llm:source",
             status="pass" if source != "none" else "fail",
-            message=f"LLM source resolved to {source}",
+            message="LLM source unresolved (none)" if source == "none" else f"LLM source resolved to {source}",
             details={"source": source, "catalog_path": str(cat_path)},
         )
     )
@@ -760,7 +809,7 @@ def run_llm_connectivity(
             _mk_result(
                 name="llm:config",
                 status="fail",
-                message="LLM source is not configured (set OLED_AGENT_LLM_PLANNER_CMD or OLED_AGENT_LLM_BACKEND)",
+                message="LLM required config missing (set OLED_AGENT_LLM_PLANNER_CMD or OLED_AGENT_LLM_BACKEND)",
             )
         )
     elif source == "command":
@@ -795,7 +844,7 @@ def run_llm_connectivity(
                     name="llm:command_probe",
                     status="fail",
                     message="LLM planner command probe failed",
-                    details={"error": str(exc)},
+                    details={"error": _redact_sensitive_text(str(exc))},
                 )
             )
     else:
@@ -821,7 +870,7 @@ def run_llm_connectivity(
                     name="llm:backend_config",
                     status="fail",
                     message="LLM backend config invalid",
-                    details={"backend": backend, "error": str(exc)},
+                    details={"backend": backend, "error": _redact_sensitive_text(str(exc))},
                 )
             )
             config = None
@@ -839,21 +888,49 @@ def run_llm_connectivity(
                 )
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
+                details: Dict[str, Any] = {"code": int(exc.code)}
+                try:
+                    from oled_agent.agent.planner import _llm_debug_error_enabled
+
+                    debug_error = bool(_llm_debug_error_enabled())
+                except Exception:
+                    debug_error = False
+                if debug_error:
+                    details["body_tail"] = _tail(_redact_sensitive_text(body), 500)
                 checks.append(
                     _mk_result(
                         name="llm:backend_probe",
                         status="fail",
                         message=f"LLM backend HTTP error: {exc.code}",
-                        details={"code": int(exc.code), "body_tail": _tail(body, 500)},
+                        details=details,
                     )
                 )
             except urllib.error.URLError as exc:
+                if _is_timeout_url_error(exc):
+                    checks.append(
+                        _mk_result(
+                            name="llm:backend_probe",
+                            status="fail",
+                            message="LLM backend timeout",
+                            details={"error": _redact_sensitive_text(str(exc))},
+                        )
+                    )
+                else:
+                    checks.append(
+                        _mk_result(
+                            name="llm:backend_probe",
+                            status="fail",
+                            message="LLM backend network error",
+                            details={"error": _redact_sensitive_text(str(exc))},
+                        )
+                    )
+            except socket.timeout as exc:
                 checks.append(
                     _mk_result(
                         name="llm:backend_probe",
                         status="fail",
-                        message="LLM backend network error",
-                        details={"error": str(exc)},
+                        message="LLM backend timeout",
+                        details={"error": _redact_sensitive_text(str(exc))},
                     )
                 )
             except TimeoutError as exc:
@@ -862,7 +939,7 @@ def run_llm_connectivity(
                         name="llm:backend_probe",
                         status="fail",
                         message="LLM backend timeout",
-                        details={"error": str(exc)},
+                        details={"error": _redact_sensitive_text(str(exc))},
                     )
                 )
             except Exception as exc:
@@ -871,7 +948,7 @@ def run_llm_connectivity(
                         name="llm:backend_probe",
                         status="fail",
                         message="LLM backend probe failed",
-                        details={"error": str(exc)},
+                        details={"error": _redact_sensitive_text(str(exc))},
                     )
                 )
 
@@ -885,7 +962,7 @@ def run_llm_connectivity(
         "summary": summary,
         "checks": checks,
         "source": source,
-        "exit_code": 0 if overall == "pass" else 1,
+        "exit_code": 1 if int(summary.get("fail", 0)) > 0 else 0,
     }
     report["connectivity"] = {
         "source": source,

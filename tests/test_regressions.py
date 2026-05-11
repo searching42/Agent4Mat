@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import builtins
+import socket
 import subprocess
 import sys
 import tempfile
@@ -16,8 +17,12 @@ from oled_agent.agent.request_contract import (
     RequestValidationError,
     _validate_via_jsonschema,
     validate_decision_summary_payload,
+    validate_filtering_report_payload,
+    validate_model_report_payload,
     validate_plan_payload,
     validate_request_payload,
+    validate_data_report_payload,
+    validate_task_state_payload,
 )
 from oled_agent.agent.tool_contracts import build_plan_tool_call_item_schema
 from oled_agent.diagnostics import run_external_connectivity_debug, run_external_preflight, run_llm_connectivity
@@ -264,6 +269,98 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("fallback_error", result)
             self.assertEqual(result["fallback_error"]["code"], "external_workspace_missing")
 
+    def test_score_candidates_uses_bundled_unimol_adapter_when_catalog_cmd_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            candidate_csv = td_path / "generated.csv"
+            _write_csv(
+                candidate_csv,
+                fieldnames=["SMILES"],
+                rows=[{"SMILES": "c1ccccc1"}],
+            )
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "unimol_lambda_plqy_v1",
+                                "kind": "predictor",
+                                "backend": "unimol_tools",
+                                "task_types": ["plqy"],
+                                "runtime_profile": "gpu",
+                                "params": {"adapters": {"score_candidates_cmd": ""}},
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="t_bundled_unimol",
+                state={"candidate_csv": str(candidate_csv)},
+            )
+            with mock.patch.dict(os.environ, {"OLED_AGENT_UNIMOL_SCORE_MODE": "smoke"}, clear=False):
+                result = score_candidates(
+                    ctx,
+                    predictor_id="unimol_lambda_plqy_v1",
+                    targets=["plqy"],
+                    target_specs=[{"name": "plqy", "objective": "maximize", "target_center": 0.6, "sigma": 0.2}],
+                )
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["adapter"], "unimol_score_adapter_v1")
+            self.assertTrue(Path(ctx.state["scored_csv"]).exists())
+            scored = Path(ctx.state["scored_csv"]).read_text(encoding="utf-8")
+            self.assertIn("plqy_score", scored)
+
+    def test_score_candidates_non_unimol_without_cmd_keeps_local_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            candidate_csv = td_path / "generated.csv"
+            _write_csv(
+                candidate_csv,
+                fieldnames=["SMILES"],
+                rows=[{"SMILES": "c1ccccc1"}],
+            )
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "pred_non_unimol_v1",
+                                "kind": "predictor",
+                                "backend": "sklearn_hist_gbr",
+                                "task_types": ["plqy"],
+                                "runtime_profile": "cpu",
+                                "params": {"adapters": {"score_candidates_cmd": ""}},
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="t_non_unimol",
+                state={"candidate_csv": str(candidate_csv)},
+            )
+            result = score_candidates(
+                ctx,
+                predictor_id="pred_non_unimol_v1",
+                targets=["plqy"],
+                target_specs=[{"name": "plqy", "objective": "maximize", "target_center": 0.6, "sigma": 0.2}],
+            )
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["adapter"], "local_deterministic_fallback")
+            self.assertIn("fallback_error", result)
+            self.assertEqual(result["fallback_error"]["code"], "external_workspace_missing")
+
     def test_train_predictor_uses_external_command_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -489,6 +586,92 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(out["adapter"], "external_generate_cmd")
             self.assertTrue(Path(ctx.state["candidate_csv"]).exists())
 
+    def test_generate_candidates_bundled_reinvent4_adapter_failure_falls_back_to_local(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "reinvent4_lambda_em_v2",
+                                "kind": "generator",
+                                "backend": "reinvent4",
+                                "task_types": ["molecule_generation"],
+                                "runtime_profile": "gpu",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            ctx = ToolContext(workspace_root=td_path, catalog_path=catalog_path, task_id="t_reinvent4_fallback")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_GENERATE_CMD": "",
+                    "OLED_AGENT_DISABLE_BUNDLED_REINVENT4_GENERATE_ADAPTER": "0",
+                    "OLED_AGENT_REINVENT4_ADAPTER_MODE": "preflight",
+                },
+                clear=False,
+            ):
+                out = generate_candidates(
+                    ctx,
+                    generator_id="reinvent4_lambda_em_v2",
+                    max_candidates=7,
+                    constraints={"mw_max": 700},
+                )
+            self.assertEqual(out["status"], "success")
+            self.assertIn(out["adapter"], {"stub_generator", "reuse_latest_reinvent_artifact"})
+            self.assertIn("fallback_error", out)
+            self.assertEqual(out["fallback_error"].get("code"), "reinvent4_generate_cmd_failed")
+            self.assertIn("fallback_reason", out)
+            self.assertTrue(Path(ctx.state["candidate_csv"]).exists())
+
+    def test_generate_candidates_explicit_env_cmd_failure_raises_tool_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            bad_script = td_path / "generate_bad_env.py"
+            bad_script.write_text(
+                "import sys\nsys.exit(9)\n",
+                encoding="utf-8",
+            )
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "reinvent4_lambda_em_v2",
+                                "kind": "generator",
+                                "backend": "reinvent4",
+                                "task_types": ["molecule_generation"],
+                                "runtime_profile": "gpu",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            ctx = ToolContext(workspace_root=td_path, catalog_path=catalog_path, task_id="t_explicit_env_fail")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_GENERATE_CMD": f"{sys.executable} {bad_script}",
+                },
+                clear=False,
+            ):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    generate_candidates(
+                        ctx,
+                        generator_id="reinvent4_lambda_em_v2",
+                        max_candidates=5,
+                        constraints={},
+                    )
+
     def test_score_candidates_uses_catalog_model_adapter_when_env_cmd_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -576,6 +759,52 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("used_fallback", payload["score_step"])
             self.assertIn("fallback_code", payload["score_step"])
             self.assertIn("artifacts", payload)
+            self.assertIn("task_state_path", out)
+            self.assertIn("logging_dir", out)
+            self.assertIn("result_dir", out)
+
+            task_state_path = Path(out["task_state_path"])
+            self.assertTrue(task_state_path.exists())
+            task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(task_state.get("task_id"), "task_decision_summary")
+            self.assertIn(task_state.get("current_state"), ("DONE", "FAILED"))
+            self.assertIsInstance(task_state.get("history"), list)
+            self.assertGreater(len(task_state.get("history", [])), 0)
+            allowed_states = {
+                "INIT",
+                "REQUIREMENT_COLLECTION",
+                "VALIDATION",
+                "PLAN_GENERATION",
+                "USER_CONFIRMATION",
+                "DATA_ACQUISITION",
+                "PREPROCESSING",
+                "ROUTING",
+                "TRAINING_OPTIONAL",
+                "INFERENCE",
+                "FILTERING",
+                "SAVING",
+                "REPORTING",
+                "QA",
+                "DONE",
+                "FAILED",
+            }
+            self.assertIn(task_state.get("current_state"), allowed_states)
+            self.assertIn(task_state.get("status"), ("success", "failed"))
+            for item in task_state.get("history", []):
+                self.assertIn(item.get("state"), allowed_states)
+                self.assertIn(item.get("status"), ("completed", "success", "failed", "unknown"))
+
+            logging_dir = Path(out["logging_dir"])
+            result_dir = Path(out["result_dir"])
+            self.assertTrue(logging_dir.exists())
+            self.assertTrue(result_dir.exists())
+            self.assertTrue((logging_dir / "task.json").exists())
+            self.assertTrue((logging_dir / "plan.md").exists())
+            self.assertTrue((logging_dir / "execution.log").exists())
+            self.assertTrue((logging_dir / "data_report.json").exists())
+            self.assertTrue((logging_dir / "model_report.json").exists())
+            self.assertTrue((logging_dir / "filtering_report.json").exists())
+            self.assertTrue((result_dir / "metadata.json").exists())
 
     def test_external_preflight_warns_when_workspace_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -691,7 +920,12 @@ class RegressionTests(unittest.TestCase):
         content = script.read_text(encoding="utf-8")
         self.assertIn("agent-run-json", content)
         self.assertIn("scripts/adapters/quickstart_catalog.json", content)
-        self.assertIn("validate_decision_summary.py", content)
+        self.assertIn("validate_run_artifacts.py", content)
+        self.assertIn("--decision-summary", content)
+        self.assertIn("--task-state", content)
+        self.assertIn("--data-report", content)
+        self.assertIn("--model-report", content)
+        self.assertIn("--filtering-report", content)
         self.assertIn("[PASS] quickstart chain completed", content)
 
     def test_env_example_uses_tmp_base_name(self) -> None:
@@ -706,6 +940,9 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("OLED_AGENT_UNIMOL_TRAIN_MODE=", content)
         self.assertIn("OLED_AGENT_UNIMOL_SCORE_MODE=", content)
         self.assertIn("OLED_AGENT_MINERU_ADAPTER_MODE=", content)
+        self.assertIn("OLED_AGENT_REINVENT4_ADAPTER_MODE=", content)
+        self.assertIn("OLED_AGENT_MOLSCRIBE_ADAPTER_MODE=", content)
+        self.assertIn("OLED_AGENT_MOLSCRIBE_CMD=", content)
 
     def test_deploy_and_troubleshooting_docs_exist(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -753,6 +990,21 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("git tag -a v0.1.0", release_text)
         self.assertIn("make release-check", release_text)
         self.assertIn("make real-adapter-validate", release_text)
+
+    def test_docs_examples_molscribe_requests_are_contract_valid(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        examples_dir = repo_root / "docs" / "examples"
+        image_json = examples_dir / "request_molscribe_image.json"
+        pdf_json = examples_dir / "request_molscribe_pdf.json"
+        examples_readme = examples_dir / "README.md"
+        self.assertTrue(image_json.exists(), msg=f"Missing example: {image_json}")
+        self.assertTrue(pdf_json.exists(), msg=f"Missing example: {pdf_json}")
+        self.assertTrue(examples_readme.exists(), msg=f"Missing example readme: {examples_readme}")
+
+        image_payload = json.loads(image_json.read_text(encoding="utf-8"))
+        pdf_payload = json.loads(pdf_json.read_text(encoding="utf-8"))
+        validate_request_payload(payload=image_payload, workspace_root=repo_root)
+        validate_request_payload(payload=pdf_payload, workspace_root=repo_root)
 
     def test_request_schema_rejects_invalid_mode(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -893,6 +1145,115 @@ class RegressionTests(unittest.TestCase):
                 with self.assertRaises(RequestValidationError):
                     _validate_via_jsonschema(payload, schema, contract_kind="decision_summary")
 
+    def test_data_report_schema_validates_happy_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-09T00:00:00Z",
+                "task_id": "task_1",
+                "status": "success",
+                "dataset_step": {
+                    "status": "success",
+                    "selected": ["master_database"],
+                    "available": ["master_database", "subsidiary_database"],
+                },
+                "candidate_step": {
+                    "status": "success",
+                    "adapter": "template_generate_cmd",
+                    "rows": 1,
+                    "source_csv": "a.csv",
+                    "input_csv": "b.csv",
+                },
+                "artifacts": {"candidate_csv": "cand.csv", "scored_csv": "score.csv"},
+            }
+            self.assertEqual(validate_data_report_payload(payload, workspace_root=td_path), payload)
+
+    def test_data_report_schema_allows_additional_properties(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-09T00:00:00Z",
+                "task_id": "task_1",
+                "status": "success",
+                "dataset_step": {"status": "success", "selected": [], "available": []},
+                "candidate_step": {"status": "success", "rows": 1},
+                "artifacts": {"candidate_csv": "cand.csv", "scored_csv": "score.csv"},
+            }
+            self.assertEqual(validate_data_report_payload(payload, workspace_root=td_path), payload)
+
+    def test_data_report_schema_rejects_non_array_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-09T00:00:00Z",
+                "task_id": "task_1",
+                "status": "success",
+                "dataset_step": {"status": "success", "selected": "master_database", "available": []},
+                "candidate_step": {"status": "success", "rows": 1},
+                "artifacts": {"candidate_csv": "cand.csv", "scored_csv": "score.csv"},
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_data_report_payload(payload, workspace_root=td_path)
+
+    def test_model_report_schema_validates_happy_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-09T00:00:00Z",
+                "task_id": "task_1",
+                "status": "success",
+                "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                "training_step": {"ran": False, "status": "skipped", "adapter": "", "result": {}},
+                "inference_step": {"status": "success", "adapter": "local_deterministic_fallback", "used_fallback": True, "fallback_error": {"code": "x"}, "result": {}},
+            }
+            self.assertEqual(validate_model_report_payload(payload, workspace_root=td_path), payload)
+
+    def test_model_report_schema_rejects_missing_used_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-09T00:00:00Z",
+                "task_id": "task_1",
+                "status": "success",
+                "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                "training_step": {"ran": False, "status": "skipped"},
+                "inference_step": {"status": "success", "adapter": "local_deterministic_fallback", "fallback_error": {"code": "x"}, "result": {}},
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_model_report_payload(payload, workspace_root=td_path)
+
+    def test_filtering_report_schema_validates_happy_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-09T00:00:00Z",
+                "task_id": "task_1",
+                "status": "success",
+                "filter_step": {"status": "success", "topn": 10, "manifest": "m.json", "final_output": "r.md"},
+                "report_step": {"status": "success", "report": "r.md", "latest_run_dir": "runs/1"},
+            }
+            self.assertEqual(validate_filtering_report_payload(payload, workspace_root=td_path), payload)
+
+    def test_filtering_report_schema_rejects_negative_topn(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-09T00:00:00Z",
+                "task_id": "task_1",
+                "status": "success",
+                "filter_step": {"status": "success", "topn": -1},
+                "report_step": {"status": "success"},
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_filtering_report_payload(payload, workspace_root=td_path)
+
     def test_agent_plan_json_happy_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -946,6 +1307,60 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(payload["design_spec"]["budget"]["max_candidates"], 12)
             self.assertEqual(len(payload["design_spec"]["targets"]), 2)
 
+    def test_agent_plan_json_propagates_generation_input_to_generate_candidates_args(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            source_img = td_path / "figure1.png"
+            source_img.write_bytes(b"\x89PNG\r\n\x1a\n")
+            request_json = td_path / "request_plan_generation_input.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_plan_generation_input",
+                        "request_text": "从论文图像提取候选分子并设计高PLQY",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 6},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_real_v1",
+                            "generator_id": "molscribe_generator_real_v1",
+                        },
+                        "generation_input": {
+                            "source_image": str(source_img),
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-plan-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            gen_call = next(c for c in payload["tool_calls"] if c["name"] == "generate_candidates")
+            self.assertEqual(gen_call["args"]["source_image"], str(source_img))
+            self.assertEqual(gen_call["args"]["generator_id"], "molscribe_generator_real_v1")
+
     def test_agent_run_json_happy_path_writes_request_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -996,6 +1411,256 @@ class RegressionTests(unittest.TestCase):
             self.assertTrue(request_path.exists())
             req_saved = json.loads(request_path.read_text(encoding="utf-8"))
             self.assertEqual(req_saved["task_id"], "task_json_run")
+            self.assertIn("task_state_path", payload)
+            self.assertIn("logging_dir", payload)
+            self.assertIn("result_dir", payload)
+            self.assertTrue(Path(payload["task_state_path"]).exists())
+            self.assertTrue(Path(payload["logging_dir"]).exists())
+            self.assertTrue(Path(payload["result_dir"]).exists())
+            self.assertIn("logging_data_report_path", payload)
+            self.assertIn("logging_model_report_path", payload)
+            self.assertIn("logging_filtering_report_path", payload)
+            self.assertTrue(Path(payload["logging_data_report_path"]).exists())
+            self.assertTrue(Path(payload["logging_model_report_path"]).exists())
+            self.assertTrue(Path(payload["logging_filtering_report_path"]).exists())
+
+    def test_agent_run_json_molscribe_smoke_uses_generation_input_source_image(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            source_img = td_path / "paper_figure.png"
+            source_img.write_bytes(b"\x89PNG\r\n\x1a\n")
+            request_json = td_path / "request_molscribe_input.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_molscribe_input",
+                        "request_text": "从图片中提取分子并筛选高PLQY",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 4},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_real_v1",
+                            "generator_id": "molscribe_generator_real_v1",
+                        },
+                        "generation_input": {
+                            "source_image": str(source_img),
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(repo_root / "src"),
+                    "OLED_AGENT_MOLSCRIBE_ADAPTER_MODE": "smoke",
+                    "OLED_AGENT_UNIMOL_SCORE_MODE": "smoke",
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload["status"], "success")
+            execution = json.loads(Path(payload["execution_path"]).read_text(encoding="utf-8"))
+            by_name = {r.get("name"): r for r in execution.get("records", []) if isinstance(r, dict)}
+            gen_rec = by_name["generate_candidates"]
+            self.assertEqual(gen_rec["status"], "success")
+            self.assertEqual(gen_rec["result"].get("adapter"), "molscribe_generate_adapter_v1")
+            self.assertEqual(gen_rec["args"].get("source_image"), str(source_img))
+
+    def test_agent_run_json_molscribe_real_source_pdf_with_pdf_extract_cmd(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+
+            source_pdf = td_path / "paper.pdf"
+            source_pdf.write_bytes(b"%PDF-1.4\n%EOF\n")
+            marker = td_path / "pdf_extract_ran.marker"
+
+            pdf_extract_script = td_path / "pdf_extract_stub.py"
+            pdf_extract_script.write_text(
+                (
+                    "import argparse, os\n"
+                    "ap=argparse.ArgumentParser()\n"
+                    "ap.add_argument('--input-pdf', required=True)\n"
+                    "ap.add_argument('--output-dir', required=True)\n"
+                    "ap.add_argument('--index', required=True)\n"
+                    "args=ap.parse_args()\n"
+                    "os.makedirs(args.output_dir, exist_ok=True)\n"
+                    "img=os.path.join(args.output_dir, f'extract_{args.index}.png')\n"
+                    "open(img,'wb').write(b'\\x89PNG\\r\\n\\x1a\\n')\n"
+                    "marker=os.environ.get('OLED_AGENT_TEST_PDF_EXTRACT_MARKER','')\n"
+                    "if marker:\n"
+                    "  open(marker,'w',encoding='utf-8').write('ok')\n"
+                ),
+                encoding="utf-8",
+            )
+
+            molscribe_cmd_script = td_path / "molscribe_cmd_stub.py"
+            molscribe_cmd_script.write_text(
+                (
+                    "import argparse,csv,os\n"
+                    "ap=argparse.ArgumentParser()\n"
+                    "ap.add_argument('--output-csv', required=True)\n"
+                    "ap.add_argument('--input', action='append', default=[])\n"
+                    "args=ap.parse_args()\n"
+                    "os.makedirs(os.path.dirname(args.output_csv), exist_ok=True)\n"
+                    "with open(args.output_csv,'w',encoding='utf-8',newline='') as f:\n"
+                    "  w=csv.DictWriter(f,fieldnames=['candidate_id','smiles','source'])\n"
+                    "  w.writeheader()\n"
+                    "  w.writerow({'candidate_id':'cand_000001','smiles':'c1ccccc1','source':'molscribe_cmd_stub'})\n"
+                ),
+                encoding="utf-8",
+            )
+
+            request_json = td_path / "request_molscribe_pdf.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_molscribe_pdf",
+                        "request_text": "从PDF结构图提取分子并筛选高PLQY",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 3},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_real_v1",
+                            "generator_id": "molscribe_generator_real_v1",
+                        },
+                        "generation_input": {
+                            "source_pdf": str(source_pdf),
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(repo_root / "src"),
+                    "OLED_AGENT_MOLSCRIBE_ADAPTER_MODE": "real",
+                    "OLED_AGENT_MOLSCRIBE_CMD": f"{sys.executable} {molscribe_cmd_script}",
+                    "OLED_AGENT_MOLSCRIBE_PDF_EXTRACT_CMD": (
+                        f"{sys.executable} {pdf_extract_script} "
+                        "--input-pdf {input_pdf} --output-dir {output_dir} --index {index}"
+                    ),
+                    "OLED_AGENT_UNIMOL_SCORE_MODE": "smoke",
+                    "OLED_AGENT_TEST_PDF_EXTRACT_MARKER": str(marker),
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload["status"], "success")
+            self.assertTrue(marker.exists(), msg="pdf extract command was not invoked")
+            execution = json.loads(Path(payload["execution_path"]).read_text(encoding="utf-8"))
+            by_name = {r.get("name"): r for r in execution.get("records", []) if isinstance(r, dict)}
+            gen_rec = by_name["generate_candidates"]
+            self.assertEqual(gen_rec["status"], "success")
+            self.assertEqual(gen_rec["result"].get("adapter"), "molscribe_generate_adapter_v1")
+            self.assertEqual(gen_rec["args"].get("source_pdf"), str(source_pdf))
+
+    def test_agent_run_json_llm_v1_molscribe_generation_input_e2e(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            source_img = td_path / "llm_run_source.png"
+            source_img.write_bytes(b"\x89PNG\r\n\x1a\n")
+            request_json = td_path / "request_llm_run_molscribe.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_llm_run_molscribe",
+                        "request_text": "从图片提取分子并进行高PLQY筛选",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 4},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_real_v1",
+                            "generator_id": "molscribe_generator_real_v1",
+                        },
+                        "generation_input": {"source_image": str(source_img)},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            llm_script = repo_root / "scripts" / "mock_llm_planner.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                    "--planner-provider",
+                    "llm_v1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(repo_root / "src"),
+                    "OLED_AGENT_LLM_PLANNER_CMD": f"{sys.executable} {llm_script}",
+                    "MOCK_LLM_MODE": "active",
+                    "OLED_AGENT_MOLSCRIBE_ADAPTER_MODE": "smoke",
+                    "OLED_AGENT_UNIMOL_SCORE_MODE": "smoke",
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "success")
+            execution = json.loads(Path(payload["execution_path"]).read_text(encoding="utf-8"))
+            by_name = {r.get("name"): r for r in execution.get("records", []) if isinstance(r, dict)}
+            gen_rec = by_name["generate_candidates"]
+            self.assertEqual(gen_rec["status"], "success")
+            self.assertEqual(gen_rec["args"].get("source_image"), str(source_img))
+            self.assertEqual(gen_rec["result"].get("adapter"), "molscribe_generate_adapter_v1")
 
     def test_agent_run_json_uses_catalog_generate_and_score_adapters_when_env_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1573,6 +2238,51 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(cp.returncode, 2)
             self.assertIn("[FAIL] invalid request json", cp.stdout)
 
+    def test_request_minimal_generation_input_rejects_extra_field_when_jsonschema_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "task_id": "task_gen_input_minimal",
+                "request_text": "design molecule from figure",
+                "mode": "fast_screen",
+                "targets": [{"property": "plqy", "objective": "maximize"}],
+                "budget": {"max_candidates": 8},
+                "generation_input": {"unknown_key": "x"},
+            }
+            real_import = builtins.__import__
+
+            def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == "jsonschema":
+                    raise ImportError("forced missing jsonschema")
+                return real_import(name, globals, locals, fromlist, level)
+
+            with mock.patch("builtins.__import__", side_effect=_fake_import):
+                with self.assertRaises(RequestValidationError):
+                    validate_request_payload(payload=payload, workspace_root=td_path)
+
+    def test_request_minimal_generation_input_rejects_non_string_array_item_when_jsonschema_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "task_id": "task_gen_input_minimal_bad_array_item",
+                "request_text": "design molecule from figure",
+                "mode": "fast_screen",
+                "targets": [{"property": "plqy", "objective": "maximize"}],
+                "budget": {"max_candidates": 8},
+                "generation_input": {"source_images": ["ok.png", 42]},
+            }
+            real_import = builtins.__import__
+
+            def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == "jsonschema":
+                    raise ImportError("forced missing jsonschema")
+                return real_import(name, globals, locals, fromlist, level)
+
+            with mock.patch("builtins.__import__", side_effect=_fake_import):
+                with self.assertRaises(RequestValidationError) as cm:
+                    validate_request_payload(payload=payload, workspace_root=td_path)
+            self.assertIn("$.generation_input.source_images[2]: must be string", str(cm.exception))
+
     def test_agent_plan_json_rejects_unknown_generator_id(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -1617,6 +2327,67 @@ class RegressionTests(unittest.TestCase):
             )
             self.assertEqual(cp.returncode, 2)
             self.assertIn("[FAIL] invalid request json", cp.stdout)
+
+    def test_agent_plan_json_llm_provider_preserves_generation_input_into_generate_candidates_args(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            source_img = td_path / "llm_source.png"
+            source_img.write_bytes(b"\x89PNG\r\n\x1a\n")
+            request_json = td_path / "request_llm_generation_input.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_llm_generation_input",
+                        "request_text": "从图像提取分子并进行设计",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 6},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_real_v1",
+                            "generator_id": "molscribe_generator_real_v1",
+                        },
+                        "generation_input": {"source_image": str(source_img)},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            llm_script = repo_root / "scripts" / "mock_llm_planner.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-plan-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                    "--planner-provider",
+                    "llm_v1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(repo_root / "src"),
+                    "OLED_AGENT_LLM_PLANNER_CMD": f"{sys.executable} {llm_script}",
+                    "MOCK_LLM_MODE": "active",
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            md = payload["design_spec"]["metadata"]
+            self.assertEqual(md["planner_provider_effective"], "llm_v1")
+            self.assertEqual(md["planner_provider_status"], "active")
+            gen_call = next(c for c in payload["tool_calls"] if c["name"] == "generate_candidates")
+            self.assertEqual(gen_call["args"].get("source_image"), str(source_img))
 
     def test_agent_plan_default_planner_provider_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1898,6 +2669,67 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(md["planner_provider_status"], "fallback")
             self.assertEqual(md["planner_provider_reason"], "llm_output_invalid")
 
+    def test_agent_plan_json_llm_provider_preserves_generation_input_into_generate_candidates_args(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            source_img = td_path / "llm_source.png"
+            source_img.write_bytes(b"\x89PNG\r\n\x1a\n")
+            request_json = td_path / "request_llm_generation_input.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_llm_generation_input",
+                        "request_text": "从图像提取分子并进行设计",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 6},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_real_v1",
+                            "generator_id": "molscribe_generator_real_v1",
+                        },
+                        "generation_input": {"source_image": str(source_img)},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            llm_script = repo_root / "scripts" / "mock_llm_planner.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-plan-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                    "--planner-provider",
+                    "llm_v1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(repo_root / "src"),
+                    "OLED_AGENT_LLM_PLANNER_CMD": f"{sys.executable} {llm_script}",
+                    "MOCK_LLM_MODE": "active",
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            md = payload["design_spec"]["metadata"]
+            self.assertEqual(md["planner_provider_effective"], "llm_v1")
+            self.assertEqual(md["planner_provider_status"], "active")
+            gen_call = next(c for c in payload["tool_calls"] if c["name"] == "generate_candidates")
+            self.assertEqual(gen_call["args"].get("source_image"), str(source_img))
+
     def test_agent_plan_json_llm_provider_bad_tools_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -1952,6 +2784,64 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(md["planner_provider_effective"], "rule_based_v1")
             self.assertEqual(md["planner_provider_status"], "fallback")
             self.assertEqual(md["planner_provider_reason"], "llm_output_invalid")
+
+    def test_agent_plan_json_llm_provider_load_model_catalog_alias_active(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            request_json = td_path / "request_llm_provider_alias_tools.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_llm_provider_alias_tools",
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 6},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            llm_script = repo_root / "scripts" / "mock_llm_planner.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-plan-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                    "--planner-provider",
+                    "llm_v1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(repo_root / "src"),
+                    "OLED_AGENT_LLM_PLANNER_CMD": f"{sys.executable} {llm_script}",
+                    "MOCK_LLM_MODE": "alias_load_model_catalog",
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            md = payload["design_spec"]["metadata"]
+            self.assertEqual(md["planner"], "llm_v1")
+            self.assertEqual(md["planner_provider_requested"], "llm_v1")
+            self.assertEqual(md["planner_provider_effective"], "llm_v1")
+            self.assertEqual(md["planner_provider_status"], "active")
+            list_model_calls = [c for c in payload["tool_calls"] if c["name"] == "list_models"]
+            self.assertEqual(len(list_model_calls), 2)
+            kinds = sorted(c["args"].get("kind") for c in list_model_calls)
+            self.assertEqual(kinds, ["generator", "predictor"])
 
     def test_agent_plan_json_llm_provider_bad_model_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -3066,6 +3956,189 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             self.assertIn("[PASS] decision summary schema valid", cp.stdout)
 
+    def test_validate_task_state_script_rejects_empty_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_state = td_path / "task_state.json"
+            task_state.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-03T00:00:00Z",
+                        "task_id": "task_bad_state",
+                        "status": "success",
+                        "current_state": "DONE",
+                        "history": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_task_state.py", str(task_state)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 1)
+            self.assertIn("[FAIL] task state schema invalid", cp.stdout)
+
+    def test_validate_task_state_script_rejects_unknown_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_state = td_path / "task_state.json"
+            task_state.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-03T00:00:00Z",
+                        "task_id": "task_bad_state",
+                        "status": "success",
+                        "current_state": "ALIEN_STATE",
+                        "history": [
+                            {"state": "INIT", "status": "completed", "at": "2026-05-03T00:00:00Z"},
+                            {"state": "ALIEN_STATE", "status": "completed", "at": "2026-05-03T00:00:01Z"}
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_task_state.py", str(task_state)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 1)
+            self.assertIn("[FAIL] task state schema invalid", cp.stdout)
+
+    def test_validate_task_state_script_accepts_valid_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_state = td_path / "task_state.json"
+            task_state.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-03T00:00:00Z",
+                        "task_id": "task_ok_state",
+                        "status": "success",
+                        "current_state": "DONE",
+                        "history": [
+                            {"state": "INIT", "status": "completed", "at": "2026-05-03T00:00:00Z"},
+                            {"state": "DONE", "status": "success", "at": "2026-05-03T00:00:01Z"},
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_task_state.py", str(task_state)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            self.assertIn("[PASS] task state schema valid", cp.stdout)
+
+    def test_validate_task_state_payload_accepts_runtime_generated_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            out = execute_request(
+                workspace_root=td_path,
+                user_request="设计470nm附近且高PLQY分子",
+                task_id="task_task_state_contract",
+                catalog_path=repo_root / "configs" / "models" / "catalog.json",
+            )
+            task_state_path = Path(out["task_state_path"])
+            payload = json.loads(task_state_path.read_text(encoding="utf-8"))
+            validated = validate_task_state_payload(payload=payload, workspace_root=td_path)
+            self.assertEqual(validated.get("task_id"), "task_task_state_contract")
+
+    def test_validate_run_artifacts_script_accepts_result_json(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            out = execute_request(
+                workspace_root=td_path,
+                user_request="设计470nm附近且高PLQY分子",
+                task_id="task_validate_run_artifacts",
+                catalog_path=repo_root / "configs" / "models" / "catalog.json",
+            )
+            result_json = td_path / "run_result.json"
+            result_json.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/validate_run_artifacts.py",
+                    "--workspace-root",
+                    str(td_path),
+                    "--result-json",
+                    str(result_json),
+                ],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+            self.assertIn("[PASS] decision summary schema valid", cp.stdout)
+            self.assertIn("[PASS] task state schema valid", cp.stdout)
+            self.assertIn("[PASS] data report schema valid", cp.stdout)
+            self.assertIn("[PASS] model report schema valid", cp.stdout)
+            self.assertIn("[PASS] filtering report schema valid", cp.stdout)
+
+    def test_validate_run_artifacts_script_rejects_missing_result_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            broken_result_json = td_path / "broken_result.json"
+            broken_result_json.write_text(
+                json.dumps(
+                    {
+                        "decision_summary_path": "/tmp/a.json",
+                        "task_state_path": "/tmp/b.json",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/validate_run_artifacts.py",
+                    "--workspace-root",
+                    str(td_path),
+                    "--result-json",
+                    str(broken_result_json),
+                ],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 1)
+            self.assertIn("[FAIL] invalid artifact inputs:", cp.stdout)
+
     def test_validate_plan_payload_accepts_valid_shape(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -3294,6 +4367,12 @@ class RegressionTests(unittest.TestCase):
             checks = report["connectivity"]["check_status"]
             self.assertEqual(checks.get("llm:source"), "fail")
             self.assertEqual(checks.get("llm:config"), "fail")
+            by_name = {c["name"]: c for c in report.get("checks", [])}
+            self.assertEqual(by_name["llm:source"]["message"], "LLM source unresolved (none)")
+            self.assertEqual(
+                by_name["llm:config"]["message"],
+                "LLM required config missing (set OLED_AGENT_LLM_PLANNER_CMD or OLED_AGENT_LLM_BACKEND)",
+            )
 
     def test_llm_connectivity_command_probe_passes_with_mock_planner(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -3364,6 +4443,179 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(checks.get("llm:backend_config"), "pass")
             self.assertEqual(checks.get("llm:backend_probe"), "fail")
             self.assertIn("llm:backend_probe", report["connectivity"]["blocking_checks"])
+            by_name = {c["name"]: c for c in report.get("checks", [])}
+            self.assertNotIn("body_tail", by_name["llm:backend_probe"].get("details", {}))
+
+    def test_llm_connectivity_backend_probe_http_error_debug_mode_redacts_body(self) -> None:
+        class _MockHttpErrorResponse:
+            def __init__(self, body: str):
+                self._body = body.encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def close(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            leaked_key = "test-key"
+
+            def fake_urlopen(req, timeout=None):
+                import urllib.error
+
+                body = (
+                    "{\"error\":{\"message\":\"invalid token\","
+                    f"\"debug\":\"Authorization: Bearer {leaked_key}\"}}"
+                )
+                raise urllib.error.HTTPError(
+                    url=req.full_url,
+                    code=401,
+                    msg="Unauthorized",
+                    hdrs=None,
+                    fp=_MockHttpErrorResponse(body),
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_LLM_PLANNER_CMD": "",
+                    "OLED_AGENT_LLM_BACKEND": "openai_compat",
+                    "OLED_AGENT_LLM_MODEL": "gpt-test",
+                    "OLED_AGENT_LLM_API_KEY": leaked_key,
+                    "OLED_AGENT_LLM_BASE_URL": "http://mock.local/v1",
+                    "OLED_AGENT_LLM_TIMEOUT_SEC": "3",
+                    "OLED_AGENT_LLM_DEBUG_ERROR": "1",
+                },
+                clear=False,
+            ):
+                with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                    report = run_llm_connectivity(workspace_root=td_path)
+            by_name = {c["name"]: c for c in report.get("checks", [])}
+            details = by_name["llm:backend_probe"].get("details", {})
+            self.assertIn("body_tail", details)
+            self.assertNotIn(leaked_key, str(details.get("body_tail", "")))
+            self.assertIn("***", str(details.get("body_tail", "")))
+
+    def test_llm_connectivity_backend_probe_socket_timeout_classified_as_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+
+            def fake_urlopen(req, timeout=None):
+                raise socket.timeout("timed out")
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_LLM_PLANNER_CMD": "",
+                    "OLED_AGENT_LLM_BACKEND": "openai_compat",
+                    "OLED_AGENT_LLM_MODEL": "gpt-test",
+                    "OLED_AGENT_LLM_API_KEY": "test-key",
+                    "OLED_AGENT_LLM_BASE_URL": "http://mock.local/v1",
+                    "OLED_AGENT_LLM_TIMEOUT_SEC": "3",
+                },
+                clear=False,
+            ):
+                with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                    report = run_llm_connectivity(workspace_root=td_path)
+            by_name = {c["name"]: c for c in report.get("checks", [])}
+            backend_probe = by_name["llm:backend_probe"]
+            self.assertEqual(backend_probe.get("status"), "fail")
+            self.assertEqual(backend_probe.get("message"), "LLM backend timeout")
+
+    def test_llm_connectivity_backend_probe_urlerror_timeout_classified_as_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+
+            def fake_urlopen(req, timeout=None):
+                import urllib.error
+
+                raise urllib.error.URLError(socket.timeout("timed out"))
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_LLM_PLANNER_CMD": "",
+                    "OLED_AGENT_LLM_BACKEND": "openai_compat",
+                    "OLED_AGENT_LLM_MODEL": "gpt-test",
+                    "OLED_AGENT_LLM_API_KEY": "test-key",
+                    "OLED_AGENT_LLM_BASE_URL": "http://mock.local/v1",
+                    "OLED_AGENT_LLM_TIMEOUT_SEC": "3",
+                },
+                clear=False,
+            ):
+                with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                    report = run_llm_connectivity(workspace_root=td_path)
+            by_name = {c["name"]: c for c in report.get("checks", [])}
+            backend_probe = by_name["llm:backend_probe"]
+            self.assertEqual(backend_probe.get("status"), "fail")
+            self.assertEqual(backend_probe.get("message"), "LLM backend timeout")
+
+    def test_llm_connectivity_probe_body_minimal_and_supports_extra_json(self) -> None:
+        class _MockResponse:
+            def __init__(self, body: str):
+                self._body = body.encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            seen_payloads: list[dict] = []
+
+            def fake_urlopen(req, timeout=None):
+                seen_payloads.append(json.loads(req.data.decode("utf-8")))
+                resp_obj = {
+                    "id": "chatcmpl-probe",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                }
+                return _MockResponse(json.dumps(resp_obj, ensure_ascii=False))
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_LLM_PLANNER_CMD": "",
+                    "OLED_AGENT_LLM_BACKEND": "openai_compat",
+                    "OLED_AGENT_LLM_MODEL": "gpt-test",
+                    "OLED_AGENT_LLM_API_KEY": "test-key",
+                    "OLED_AGENT_LLM_BASE_URL": "http://mock.local/v1",
+                    "OLED_AGENT_LLM_TIMEOUT_SEC": "3",
+                    "OLED_AGENT_LLM_CONNECTIVITY_PROBE_EXTRA_BODY_JSON": '{"top_p":0.9}',
+                },
+                clear=False,
+            ):
+                with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                    report = run_llm_connectivity(workspace_root=td_path)
+
+            self.assertEqual(report.get("overall"), "pass")
+            self.assertGreaterEqual(len(seen_payloads), 1)
+            sent = seen_payloads[0]
+            self.assertIn("model", sent)
+            self.assertIn("messages", sent)
+            self.assertNotIn("temperature", sent)
+            self.assertEqual(sent.get("top_p"), 0.9)
+
+    def test_llm_connectivity_exit_code_is_fail_only(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OLED_AGENT_LLM_PLANNER_CMD": f"{sys.executable} /definitely/not/found.py",
+                    "OLED_AGENT_LLM_BACKEND": "",
+                },
+                clear=False,
+            ):
+                report = run_llm_connectivity(workspace_root=td_path)
+            self.assertEqual(report.get("overall"), "fail")
+            self.assertEqual(report.get("exit_code"), 1)
 
 
 if __name__ == "__main__":
@@ -3420,9 +4672,16 @@ class SchemaSyncScriptTests(unittest.TestCase):
 
 
 class WorkflowPolicyTests(unittest.TestCase):
+    @staticmethod
+    def _workflow_path(repo_root: Path) -> Path:
+        local = repo_root / ".github" / "workflows" / "agent4mat-ci.yml"
+        if local.exists():
+            return local
+        return repo_root.parent / ".github" / "workflows" / "oled-agent-ci.yml"
+
     def test_oled_agent_ci_external_acceptance_only_manual_trigger(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        workflow = repo_root / ".github" / "workflows" / "agent4mat-ci.yml"
+        workflow = self._workflow_path(repo_root)
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("external-chain-acceptance:", content)
         self.assertIn("github.event_name == 'workflow_dispatch'", content)
@@ -3431,7 +4690,7 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_oled_agent_ci_uses_schema_check_json_and_artifact(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        workflow = repo_root / ".github" / "workflows" / "agent4mat-ci.yml"
+        workflow = self._workflow_path(repo_root)
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("scripts/sync_plan_tool_schema.py --check --json", content)
         self.assertIn("plan_tool_schema_check.json", content)
@@ -3441,7 +4700,7 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_oled_agent_ci_has_llm_backend_retry_guard_job(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        workflow = repo_root / ".github" / "workflows" / "agent4mat-ci.yml"
+        workflow = self._workflow_path(repo_root)
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("llm-backend-retry-guard:", content)
         self.assertIn("Run openai_compat retry guard tests", content)
@@ -3456,7 +4715,7 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_oled_agent_ci_has_acceptance_matrix_jobs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        workflow = repo_root / ".github" / "workflows" / "agent4mat-ci.yml"
+        workflow = self._workflow_path(repo_root)
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("acceptance-cpu-mock:", content)
         self.assertIn("name: acceptance cpu-mock", content)
@@ -3469,7 +4728,7 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_oled_agent_ci_has_adapter_contract_guard_job(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        workflow = repo_root / ".github" / "workflows" / "agent4mat-ci.yml"
+        workflow = self._workflow_path(repo_root)
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("adapter-contract-guard:", content)
         self.assertIn("Validate adapter templates contract", content)
@@ -3480,7 +4739,7 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_oled_agent_ci_has_make_entrypoint_guard_job(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        workflow = repo_root / ".github" / "workflows" / "agent4mat-ci.yml"
+        workflow = self._workflow_path(repo_root)
         content = workflow.read_text(encoding="utf-8")
         section_start = content.index("make-entrypoint-guard:")
         section_end = content.index("  acceptance-cpu-mock:", section_start)
@@ -3496,10 +4755,18 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_oled_agent_ci_external_acceptance_uses_shell_entrypoint(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        workflow = repo_root / ".github" / "workflows" / "agent4mat-ci.yml"
+        workflow = self._workflow_path(repo_root)
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("run_external_chain_acceptance_with_debug.sh", content)
         self.assertNotIn("run_external_chain_acceptance.py", content)
+
+    def test_oled_agent_ci_validates_structured_reports_schema(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("Validate structured artifacts schema", content)
+        self.assertIn("scripts/validate_run_artifacts.py", content)
+        self.assertIn("--result-json runs/ci/agent_run_ci_smoke.json", content)
 
 
 class BuildEntrypointTests(unittest.TestCase):
@@ -3522,11 +4789,32 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("train_predictor_unimol_adapter.py", content)
         self.assertIn("score_candidates_unimol_adapter.py", content)
         self.assertIn("generate_candidates_mineru_adapter.py", content)
+        self.assertIn("generate_candidates_reinvent4_adapter.py", content)
+        self.assertIn("generate_candidates_molscribe_adapter.py", content)
         self.assertIn("$(MAKE) adapter-validate", content)
         self.assertIn("$(MAKE) quickstart", content)
         self.assertIn("$(MAKE) llm-smoke", content)
         self.assertIn("$(MAKE) doctor", content)
         self.assertIn("oled_agent.cli doctor", content)
+
+
+class ModelCatalogTests(unittest.TestCase):
+    def test_default_catalog_contains_real_adapter_commands(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        catalog = json.loads((repo_root / "configs" / "models" / "catalog.json").read_text(encoding="utf-8"))
+        entries = {item["id"]: item for item in catalog.get("models", []) if isinstance(item, dict)}
+        self.assertEqual(
+            entries["unimol_lambda_plqy_v1"]["params"]["adapters"]["score_candidates_cmd"],
+            "python3 scripts/adapters/score_candidates_unimol_adapter.py",
+        )
+        self.assertEqual(
+            entries["unimol_lambda_plqy_v1"]["params"]["adapters"]["train_predictor_cmd"],
+            "python3 scripts/adapters/train_predictor_unimol_adapter.py",
+        )
+        self.assertEqual(
+            entries["reinvent4_lambda_em_v2"]["params"]["adapters"]["generate_candidates_cmd"],
+            "python3 scripts/adapters/generate_candidates_reinvent4_adapter.py",
+        )
 
 
 class OpenclawEnvExportScriptTests(unittest.TestCase):
@@ -3720,6 +5008,42 @@ class AdapterContractValidatorTests(unittest.TestCase):
         preview = payload.get("result_preview", {})
         self.assertEqual(preview.get("adapter"), "unimol_score_adapter_v1")
 
+    def test_validate_adapter_contract_real_unimol_score_real_mode_with_stub_scorer(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "adapters" / "score_candidates_unimol_adapter.py"
+        stub_scorer = repo_root / "scripts" / "adapters" / "stub_unimol_score.py"
+        cp = subprocess.run(
+            [
+                sys.executable,
+                "scripts/adapters/validate_adapter_contract.py",
+                "--tool",
+                "score_candidates",
+                "--cmd",
+                f"{sys.executable} {script}",
+                "--workspace-root",
+                str(repo_root),
+                "--json",
+            ],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "OLED_AGENT_UNIMOL_SCORE_MODE": "real",
+                "OLED_AGENT_UNIMOL_SCORE_SCRIPT": str(stub_scorer),
+                "UNIMOL_REMOTE_HOST": "stub_host",
+                "UNIMOL_REMOTE_PY": "stub_py",
+                "UNIMOL_REMOTE_TMP_BASE": "/tmp",
+            },
+        )
+        self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+        payload = json.loads(cp.stdout)
+        self.assertEqual(payload.get("status"), "pass")
+        self.assertEqual(payload.get("tool"), "score_candidates")
+        preview = payload.get("result_preview", {})
+        self.assertEqual(preview.get("adapter"), "unimol_score_adapter_v1")
+
     def test_validate_adapter_contract_real_mineru_generate_smoke(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         script = repo_root / "scripts" / "adapters" / "generate_candidates_mineru_adapter.py"
@@ -3747,6 +5071,124 @@ class AdapterContractValidatorTests(unittest.TestCase):
         self.assertEqual(payload.get("tool"), "generate_candidates")
         preview = payload.get("result_preview", {})
         self.assertEqual(preview.get("adapter"), "mineru_generate_adapter_v1")
+
+    def test_validate_adapter_contract_real_reinvent4_generate_smoke(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "adapters" / "generate_candidates_reinvent4_adapter.py"
+        cp = subprocess.run(
+            [
+                sys.executable,
+                "scripts/adapters/validate_adapter_contract.py",
+                "--tool",
+                "generate_candidates",
+                "--cmd",
+                f"{sys.executable} {script}",
+                "--workspace-root",
+                str(repo_root),
+                "--json",
+            ],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "OLED_AGENT_REINVENT4_ADAPTER_MODE": "smoke"},
+        )
+        self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+        payload = json.loads(cp.stdout)
+        self.assertEqual(payload.get("status"), "pass")
+        self.assertEqual(payload.get("tool"), "generate_candidates")
+        preview = payload.get("result_preview", {})
+        self.assertEqual(preview.get("adapter"), "reinvent4_generate_adapter_v1")
+
+    def test_validate_adapter_contract_real_reinvent4_generate_real_mode_with_stub_pipeline(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "adapters" / "generate_candidates_reinvent4_adapter.py"
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            source_csv = td_path / "sampling.csv"
+            source_csv.write_text(
+                "SMILES\nc1ccccc1\nCCO\n",
+                encoding="utf-8",
+            )
+            rankready_csv = td_path / "rankready.csv"
+            stub_pipeline = td_path / "stub_reinvent4_pipeline.sh"
+            stub_pipeline.write_text(
+                (
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    "SOURCE_CSV=\"$1\"\n"
+                    "if [ ! -f \"$SOURCE_CSV\" ]; then\n"
+                    "  echo \"missing source csv: $SOURCE_CSV\" >&2\n"
+                    "  exit 9\n"
+                    "fi\n"
+                    "OUT=\"${OLED_AGENT_REINVENT4_RANKREADY_CSV:?}\"\n"
+                    "mkdir -p \"$(dirname \"$OUT\")\"\n"
+                    "cat > \"$OUT\" <<'CSV'\n"
+                    "SMILES\n"
+                    "c1ccccc1\n"
+                    "CCO\n"
+                    "CSV\n"
+                ),
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/adapters/validate_adapter_contract.py",
+                    "--tool",
+                    "generate_candidates",
+                    "--cmd",
+                    f"{sys.executable} {script}",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--json",
+                ],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "OLED_AGENT_REINVENT4_ADAPTER_MODE": "real",
+                    "OLED_AGENT_REINVENT4_SOURCE_CSV": str(source_csv),
+                    "OLED_AGENT_REINVENT4_PIPELINE_SCRIPT": str(stub_pipeline),
+                    "OLED_AGENT_REINVENT4_RANKREADY_CSV": str(rankready_csv),
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("tool"), "generate_candidates")
+            preview = payload.get("result_preview", {})
+            self.assertEqual(preview.get("adapter"), "reinvent4_generate_adapter_v1")
+
+    def test_validate_adapter_contract_real_molscribe_generate_smoke(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "adapters" / "generate_candidates_molscribe_adapter.py"
+        cp = subprocess.run(
+            [
+                sys.executable,
+                "scripts/adapters/validate_adapter_contract.py",
+                "--tool",
+                "generate_candidates",
+                "--cmd",
+                f"{sys.executable} {script}",
+                "--workspace-root",
+                str(repo_root),
+                "--json",
+            ],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "OLED_AGENT_MOLSCRIBE_ADAPTER_MODE": "smoke"},
+        )
+        self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+        payload = json.loads(cp.stdout)
+        self.assertEqual(payload.get("status"), "pass")
+        self.assertEqual(payload.get("tool"), "generate_candidates")
+        preview = payload.get("result_preview", {})
+        self.assertEqual(preview.get("adapter"), "molscribe_generate_adapter_v1")
 
     def test_validate_adapter_contract_real_unimol_train_smoke(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -3781,6 +5223,64 @@ class AdapterContractValidatorTests(unittest.TestCase):
         self.assertEqual(payload.get("tool"), "train_predictor")
         preview = payload.get("result_preview", {})
         self.assertEqual(preview.get("adapter"), "unimol_train_adapter_v1")
+
+    def test_agent_run_json_with_real_adapter_catalog_reinvent4_smoke(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        request_json = repo_root / "runs" / "test_request_real_adapter_reinvent4_smoke.json"
+        request_json.parent.mkdir(parents=True, exist_ok=True)
+        request_json.write_text(
+            json.dumps(
+                {
+                    "task_id": "task_real_adapter_reinvent4_smoke",
+                    "request_text": "设计470nm附近且高PLQY分子",
+                    "mode": "fast_screen",
+                    "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                    "budget": {"max_candidates": 5},
+                    "model_preferences": {
+                        "predictor_id": "unimol_lambda_plqy_real_v1",
+                        "generator_id": "reinvent4_generator_real_v1",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        cp = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "oled_agent.cli",
+                "agent-run-json",
+                "--workspace-root",
+                str(repo_root),
+                "--catalog",
+                str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                "--request-json",
+                str(request_json),
+            ],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": str(repo_root / "src"),
+                "OLED_AGENT_REINVENT4_ADAPTER_MODE": "smoke",
+                "OLED_AGENT_UNIMOL_SCORE_MODE": "smoke",
+            },
+        )
+        self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+        payload = json.loads(cp.stdout)
+        self.assertEqual(payload.get("status"), "success")
+        execution_path = Path(str(payload.get("execution_path") or ""))
+        self.assertTrue(execution_path.exists())
+        execution = json.loads(execution_path.read_text(encoding="utf-8"))
+        records = execution.get("records", [])
+        by_name = {r.get("name"): r for r in records}
+        gen = by_name.get("generate_candidates", {}).get("result", {})
+        score = by_name.get("score_candidates", {}).get("result", {})
+        self.assertEqual(gen.get("adapter"), "reinvent4_generate_adapter_v1")
+        self.assertEqual(score.get("adapter"), "unimol_score_adapter_v1")
 
     def test_check_quickstart_chain_script_smoke(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

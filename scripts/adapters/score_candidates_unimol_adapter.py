@@ -163,7 +163,11 @@ def main() -> int:
             )
 
         repo_root = repo_root_from_script()
-        scorer = (repo_root.parent / "scripts" / "score_unimol_property_candidates.py").resolve()
+        scorer_override = (os.environ.get("OLED_AGENT_UNIMOL_SCORE_SCRIPT") or "").strip()
+        if scorer_override:
+            scorer = resolve_path(scorer_override, workspace_root=workspace_root)
+        else:
+            scorer = (repo_root.parent / "scripts" / "score_unimol_property_candidates.py").resolve()
         if not scorer.exists():
             raise AdapterFailure(
                 code="external_scorer_script_missing",

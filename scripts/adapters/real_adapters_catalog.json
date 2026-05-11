@@ -15,6 +15,19 @@
       }
     },
     {
+      "id": "reinvent4_generator_real_v1",
+      "kind": "generator",
+      "backend": "reinvent4",
+      "task_types": ["molecule_generation"],
+      "runtime_profile": "gpu",
+      "params": {
+        "supports_conditioning": true,
+        "adapters": {
+          "generate_candidates_cmd": "python3 scripts/adapters/generate_candidates_reinvent4_adapter.py"
+        }
+      }
+    },
+    {
       "id": "mineru_generator_real_v1",
       "kind": "generator",
       "backend": "mineru",
@@ -24,6 +37,19 @@
         "supports_conditioning": true,
         "adapters": {
           "generate_candidates_cmd": "python3 scripts/adapters/generate_candidates_mineru_adapter.py"
+        }
+      }
+    },
+    {
+      "id": "molscribe_generator_real_v1",
+      "kind": "generator",
+      "backend": "molscribe",
+      "task_types": ["molecule_generation", "image_to_smiles"],
+      "runtime_profile": "gpu",
+      "params": {
+        "supports_conditioning": true,
+        "adapters": {
+          "generate_candidates_cmd": "python3 scripts/adapters/generate_candidates_molscribe_adapter.py"
         }
       }
     }

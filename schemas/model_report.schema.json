@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/model_report.schema.json",
+  "title": "Agent4Mat Model Report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "task_id",
+    "status",
+    "model_choice",
+    "training_step",
+    "inference_step"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "task_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["success", "failed"] },
+    "model_choice": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["predictor_id", "generator_id"],
+      "properties": {
+        "predictor_id": { "type": "string" },
+        "generator_id": { "type": "string" }
+      }
+    },
+    "training_step": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ran", "status"],
+      "properties": {
+        "ran": { "type": "boolean" },
+        "status": { "type": "string" },
+        "adapter": { "type": "string" },
+        "result": { "type": ["object", "array", "string", "number", "boolean", "null"] }
+      }
+    },
+    "inference_step": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status", "used_fallback"],
+      "properties": {
+        "status": { "type": "string" },
+        "adapter": { "type": "string" },
+        "used_fallback": { "type": "boolean" },
+        "fallback_error": { "type": ["object", "null"] },
+        "result": { "type": ["object", "array", "string", "number", "boolean", "null"] }
+      }
+    }
+  }
+}

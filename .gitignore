@@ -15,3 +15,5 @@ pip-wheel-metadata/
 
 runs/
 /.venv/
+logging/
+result/

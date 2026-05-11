@@ -357,6 +357,36 @@ def _budget_from_payload(payload: Dict[str, Any]) -> BudgetSpec:
     return BudgetSpec(max_candidates=max_candidates)
 
 
+def _collect_generation_inputs(payload: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if not isinstance(payload, dict):
+        return out
+
+    generation_input = payload.get("generation_input")
+    if isinstance(generation_input, dict):
+        for key in ("source_image", "source_images", "source_pdf", "source_pdfs", "input_image", "input_pdf", "paper_path", "image_paths", "pdf_paths"):
+            if key in generation_input and generation_input.get(key) is not None:
+                out[key] = generation_input.get(key)
+
+    constraints = payload.get("constraints")
+    if isinstance(constraints, dict):
+        for key in ("source_image", "source_images", "source_pdf", "source_pdfs", "input_image", "input_pdf", "paper_path", "image_paths", "pdf_paths"):
+            if key in constraints and constraints.get(key) is not None:
+                out[key] = constraints.get(key)
+
+    for key in ("source_image", "source_images", "source_pdf", "source_pdfs", "input_image", "input_pdf", "paper_path", "image_paths", "pdf_paths"):
+        if key in payload and payload.get(key) is not None:
+            out[key] = payload.get(key)
+    return out
+
+
+def _generation_input_to_tool_args(generation_inputs: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(generation_inputs, dict):
+        return {}
+    out = dict(generation_inputs)
+    return {k: v for k, v in out.items() if v not in (None, "", [], {})}
+
+
 def _build_rule_based_plan_from_request_payload(
     *,
     request_payload: Dict[str, Any],
@@ -381,6 +411,7 @@ def _build_rule_based_plan_from_request_payload(
     targets = _targets_from_payload(request_payload)
     constraints = _constraints_from_payload(request_payload)
     budget = _budget_from_payload(request_payload)
+    generation_inputs = _collect_generation_inputs(request_payload)
 
     design = DesignSpec(
         task_id=task_id,
@@ -419,6 +450,7 @@ def _build_rule_based_plan_from_request_payload(
                     "generator_id": generator,
                     "max_candidates": design.budget.max_candidates,
                     "constraints": design.constraints.to_dict(),
+                    **_generation_input_to_tool_args(generation_inputs),
                 },
             ),
             ToolCall(
@@ -804,6 +836,58 @@ def _parse_tool_args(value: Any, *, index: int) -> Dict[str, Any]:
     raise PlannerValidationError(f"tool_calls[{index}].args must be object")
 
 
+def _normalize_model_kind(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip().lower()
+    if text in {"predictor", "predictors", "pred", "prediction", "scorer", "score"}:
+        return "predictor"
+    if text in {"generator", "generators", "gen", "generation"}:
+        return "generator"
+    return ""
+
+
+def _expand_load_model_catalog_alias(args: Dict[str, Any]) -> List[Dict[str, Any]]:
+    kinds: List[str] = []
+
+    for key in ("kind", "model_kind", "type"):
+        kind = _normalize_model_kind(args.get(key))
+        if kind:
+            kinds.append(kind)
+
+    for key in ("kinds", "model_kinds", "types"):
+        value = args.get(key)
+        if isinstance(value, list):
+            for item in value:
+                kind = _normalize_model_kind(item)
+                if kind:
+                    kinds.append(kind)
+
+    if not kinds:
+        kinds = ["predictor", "generator"]
+
+    ordered_unique_kinds: List[str] = []
+    for kind in kinds:
+        if kind not in ordered_unique_kinds:
+            ordered_unique_kinds.append(kind)
+
+    return [{"name": "list_models", "args": {"kind": kind}} for kind in ordered_unique_kinds]
+
+
+def _canonicalize_tool_call_name_and_args(name: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
+    normalized_name = str(name or "").strip()
+    alias = normalized_name.lower()
+    if alias in {
+        "load_model_catalog",
+        "load_models_catalog",
+        "list_model_catalog",
+        "get_model_catalog",
+        "load_models",
+    }:
+        return _expand_load_model_catalog_alias(args)
+    return [{"name": normalized_name, "args": args}]
+
+
 def _normalize_tool_call_items(raw_tool_calls: Any) -> List[Dict[str, Any]]:
     # Accept common OpenAI-compatible variants:
     # - {"name": "...", "args": {...}}
@@ -860,7 +944,7 @@ def _normalize_tool_call_items(raw_tool_calls: Any) -> List[Dict[str, Any]]:
                 has_args = True
 
         args = _parse_tool_args(args_source if has_args else {}, index=i)
-        normalized.append({"name": name, "args": args})
+        normalized.extend(_canonicalize_tool_call_name_and_args(name, args))
 
     return normalized
 
@@ -978,6 +1062,7 @@ def _build_plan_from_normalized_payload(
         raise PlannerValidationError("; ".join(errors))
 
     mode = str(payload.get("mode") or "fast_screen")
+    generation_inputs = _collect_generation_inputs(payload)
     design = DesignSpec(
         task_id=str(payload.get("task_id") or ""),
         user_request=str(payload.get("request_text") or ""),
@@ -990,6 +1075,16 @@ def _build_plan_from_normalized_payload(
         metadata={"planner": metadata_planner},
     )
     calls = _tool_calls_from_payload(tool_calls_payload)
+    # Merge request-level generation inputs into generate_candidates args for
+    # image/pdf-conditioned generators (e.g., MolScribe) without requiring
+    # callers to handcraft tool-call args.
+    merged_generation_args = _generation_input_to_tool_args(generation_inputs)
+    if merged_generation_args:
+        for call in calls:
+            if call.name == "generate_candidates":
+                merged = dict(merged_generation_args)
+                merged.update(call.args)
+                call.args = merged
     _validate_tool_calls(calls, mode=mode)
     return AgentPlan(
         summary=summary,

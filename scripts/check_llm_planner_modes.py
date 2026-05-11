@@ -125,6 +125,14 @@ def main() -> int:
     )
     _assert_mode(
         repo_root=repo_root,
+        mode="alias_load_model_catalog",
+        task_id="ci_llm_mode_alias_load_model_catalog",
+        expected_planner="llm_v1",
+        expected_effective="llm_v1",
+        expected_status="active",
+    )
+    _assert_mode(
+        repo_root=repo_root,
         mode="exit_nonzero",
         task_id="ci_llm_mode_exit_nonzero",
         expected_planner="rule_based_v1",

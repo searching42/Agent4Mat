@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/data_report.schema.json",
+  "title": "Agent4Mat Data Report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "task_id",
+    "status",
+    "dataset_step",
+    "candidate_step",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "task_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["success", "failed"] },
+    "dataset_step": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status", "selected", "available"],
+      "properties": {
+        "status": { "type": "string" },
+        "selected": { "type": "array", "items": { "type": "string" } },
+        "available": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "candidate_step": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status", "rows"],
+      "properties": {
+        "status": { "type": "string" },
+        "adapter": { "type": "string" },
+        "rows": { "type": "integer", "minimum": 0 },
+        "source_csv": { "type": "string" },
+        "input_csv": { "type": "string" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["candidate_csv", "scored_csv"],
+      "properties": {
+        "candidate_csv": { "type": "string" },
+        "scored_csv": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/filtering_report.schema.json",
+  "title": "Agent4Mat Filtering Report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "task_id",
+    "status",
+    "filter_step",
+    "report_step"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "task_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["success", "failed"] },
+    "filter_step": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status", "topn"],
+      "properties": {
+        "status": { "type": "string" },
+        "topn": { "type": "integer", "minimum": 0 },
+        "manifest": { "type": "string" },
+        "final_output": { "type": "string" }
+      }
+    },
+    "report_step": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string" },
+        "report": { "type": "string" },
+        "latest_run_dir": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "task_id": "task_molscribe_pdf_example",
+  "request_text": "从论文PDF提取候选分子并筛选高PLQY",
+  "mode": "fast_screen",
+  "targets": [
+    {
+      "property": "plqy",
+      "objective": "maximize",
+      "target_value": 0.6
+    }
+  ],
+  "budget": {
+    "max_candidates": 20
+  },
+  "model_preferences": {
+    "predictor_id": "unimol_lambda_plqy_real_v1",
+    "generator_id": "molscribe_generator_real_v1"
+  },
+  "generation_input": {
+    "source_pdf": "/abs/path/to/paper.pdf"
+  }
+}

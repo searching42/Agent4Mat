@@ -8,6 +8,8 @@ This directory provides runnable JSON-in/JSON-out adapter templates for:
   - `train_predictor_unimol_adapter.py`
   - `score_candidates_unimol_adapter.py`
   - `generate_candidates_mineru_adapter.py`
+  - `generate_candidates_reinvent4_adapter.py`
+  - `generate_candidates_molscribe_adapter.py`
 - `quickstart_catalog.json` (ready-to-run catalog example wired to these templates)
 - `real_adapters_catalog.json` (catalog example wired to real adapter shells)
 - `validate_adapter_contract.py` (offline contract checker for custom adapters)
@@ -59,9 +61,9 @@ Expected scored CSV columns:
   - records `fallback_error.code=external_score_cmd_failed`
 
 - `generate_candidates` adapter failure:
-  - current step fails directly
-  - execution becomes `failed`
-  - no local generation fallback in adapter branch
+  - default bundled REINVENT4 adapter failures fall back to local generation
+  - execution can stay `success` with `fallback_error.code=reinvent4_generate_cmd_failed`
+  - explicitly configured `OLED_AGENT_GENERATE_CMD` failures still fail directly
 
 ## Local Smoke Example
 
@@ -92,6 +94,22 @@ Adapter shell modes:
 - `OLED_AGENT_UNIMOL_TRAIN_MODE=preflight|smoke|real` (default: `preflight`)
 - `OLED_AGENT_UNIMOL_SCORE_MODE=preflight|smoke|real` (default: `preflight`)
 - `OLED_AGENT_MINERU_ADAPTER_MODE=preflight|smoke` (default: `preflight`)
+- `OLED_AGENT_REINVENT4_ADAPTER_MODE=preflight|smoke|real` (default: `preflight`)
+- `OLED_AGENT_MOLSCRIBE_ADAPTER_MODE=preflight|smoke|real` (default: `preflight`)
+
+Real-runtime helper knobs:
+- Uni-Mol score:
+  - `OLED_AGENT_UNIMOL_SCORE_SCRIPT` (optional local scorer override for real-mode contract checks)
+- REINVENT4:
+  - `OLED_AGENT_REINVENT4_SOURCE_CSV`
+  - `OLED_AGENT_REINVENT4_PIPELINE_SCRIPT`
+  - `OLED_AGENT_REINVENT4_RANKREADY_CSV`
+  - `OLED_AGENT_REINVENT4_ADAPTER_TIMEOUT_SEC`
+- MolScribe:
+  - external command mode: `OLED_AGENT_MOLSCRIBE_CMD`
+  - native python mode: `OLED_AGENT_MOLSCRIBE_CHECKPOINT` (+ optional `OLED_AGENT_MOLSCRIBE_DEVICE`)
+  - optional PDF extraction hook: `OLED_AGENT_MOLSCRIBE_PDF_EXTRACT_CMD`
+  - `OLED_AGENT_MOLSCRIBE_ADAPTER_TIMEOUT_SEC`
 
 Recommended rollout:
 1. keep `preflight` in CI (fast fail on missing config)

@@ -13,7 +13,7 @@ RESULT_JSON="${RUN_DIR}/quickstart_result.json"
 
 mkdir -p "${RUN_DIR}"
 
-echo "[1/4] build request payload"
+echo "[1/8] build request payload"
 python3 - "${REQUEST_JSON}" "${TASK_ID}" "${REQUEST_TEXT}" <<'PY'
 import json
 import pathlib
@@ -40,7 +40,7 @@ unset OLED_AGENT_TRAIN_CMD
 unset OLED_AGENT_GENERATE_CMD
 unset OLED_AGENT_SCORE_CMD
 
-echo "[2/4] run agent-run-json with quickstart catalog"
+echo "[2/8] run agent-run-json with quickstart catalog"
 PYTHONPATH=src python3 -m oled_agent.cli agent-run-json \
   --workspace-root . \
   --catalog scripts/adapters/quickstart_catalog.json \
@@ -56,10 +56,56 @@ print(obj["decision_summary_path"])
 PY
 )"
 
-echo "[3/4] validate decision summary schema"
-python3 scripts/validate_decision_summary.py "${DECISION_PATH}"
+TASK_STATE_PATH="$(python3 - "${RESULT_JSON}" <<'PY'
+import json
+import pathlib
+import sys
 
-echo "[4/4] summarize adapters"
+obj = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(obj["task_state_path"])
+PY
+)"
+
+DATA_REPORT_PATH="$(python3 - "${RESULT_JSON}" <<'PY'
+import json
+import pathlib
+import sys
+
+obj = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(obj["logging_data_report_path"])
+PY
+)"
+
+MODEL_REPORT_PATH="$(python3 - "${RESULT_JSON}" <<'PY'
+import json
+import pathlib
+import sys
+
+obj = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(obj["logging_model_report_path"])
+PY
+)"
+
+FILTERING_REPORT_PATH="$(python3 - "${RESULT_JSON}" <<'PY'
+import json
+import pathlib
+import sys
+
+obj = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(obj["logging_filtering_report_path"])
+PY
+)"
+
+echo "[3/8] validate structured artifacts schema"
+python3 scripts/validate_run_artifacts.py \
+  --workspace-root . \
+  --decision-summary "${DECISION_PATH}" \
+  --task-state "${TASK_STATE_PATH}" \
+  --data-report "${DATA_REPORT_PATH}" \
+  --model-report "${MODEL_REPORT_PATH}" \
+  --filtering-report "${FILTERING_REPORT_PATH}"
+
+echo "[4/8] summarize adapters"
 python3 - "${RESULT_JSON}" <<'PY'
 import json
 import pathlib

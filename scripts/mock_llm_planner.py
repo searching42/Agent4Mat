@@ -108,6 +108,28 @@ def main() -> int:
         return 3
     if mock_mode == "bad_tools":
         tool_calls = [{"name": "unsupported_tool", "args": {}}]
+    if mock_mode == "alias_load_model_catalog":
+        tool_calls = [
+            {"name": "load_model_catalog", "args": {"kinds": ["predictor", "generator"]}},
+            {"name": "search_dataset", "args": {"preferences": ["master_database", "subsidiary_database"]}},
+            {
+                "name": "generate_candidates",
+                "args": {
+                    "generator_id": generator_id,
+                    "max_candidates": max_candidates,
+                    "constraints": request_payload.get("constraints") if isinstance(request_payload.get("constraints"), dict) else {},
+                },
+            },
+            {
+                "name": "score_candidates",
+                "args": {
+                    "predictor_id": predictor_id,
+                    "targets": [str(t.get("property") or "") for t in targets],
+                },
+            },
+            {"name": "filter_and_rank", "args": {"topn": 10}},
+            {"name": "make_report", "args": {}},
+        ]
     if mock_mode == "bad_model":
         predictor_id = "not_exists_predictor"
         generator_id = "not_exists_generator"

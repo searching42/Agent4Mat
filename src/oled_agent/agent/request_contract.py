@@ -17,6 +17,10 @@ class RequestContractPaths:
     request_schema: Path
     decision_summary_schema: Path
     plan_schema: Path
+    task_state_schema: Path
+    data_report_schema: Path
+    model_report_schema: Path
+    filtering_report_schema: Path
 
 
 def default_contract_paths(workspace_root: Path) -> RequestContractPaths:
@@ -28,6 +32,10 @@ def default_contract_paths(workspace_root: Path) -> RequestContractPaths:
         request_schema=base / "request.schema.json",
         decision_summary_schema=base / "decision_summary.schema.json",
         plan_schema=base / "plan.schema.json",
+        task_state_schema=base / "task_state.schema.json",
+        data_report_schema=base / "data_report.schema.json",
+        model_report_schema=base / "model_report.schema.json",
+        filtering_report_schema=base / "filtering_report.schema.json",
     )
 
 
@@ -55,6 +63,14 @@ def _validate_via_jsonschema(
             _validate_decision_summary_minimal(instance, schema)
         elif contract_kind == "plan":
             _validate_plan_minimal(instance, schema)
+        elif contract_kind == "task_state":
+            _validate_task_state_minimal(instance, schema)
+        elif contract_kind == "data_report":
+            _validate_data_report_minimal(instance, schema)
+        elif contract_kind == "model_report":
+            _validate_model_report_minimal(instance, schema)
+        elif contract_kind == "filtering_report":
+            _validate_filtering_report_minimal(instance, schema)
         else:
             raise RequestValidationError(f"Unsupported contract kind: {contract_kind}")
         return
@@ -123,6 +139,29 @@ def _validate_request_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) 
 
     if "budget" in instance and not isinstance(instance["budget"], dict):
         raise RequestValidationError("$.budget: must be object")
+
+    if "generation_input" in instance:
+        generation_input = instance["generation_input"]
+        if not isinstance(generation_input, dict):
+            raise RequestValidationError("$.generation_input: must be object")
+        gen_schema = properties.get("generation_input", {}) if isinstance(properties.get("generation_input", {}), dict) else {}
+        gen_props = gen_schema.get("properties", {}) if isinstance(gen_schema.get("properties", {}), dict) else {}
+        if gen_schema.get("additionalProperties") is False:
+            extras = sorted(k for k in generation_input.keys() if k not in gen_props)
+            if extras:
+                raise RequestValidationError(f"$.generation_input: unexpected field(s): {extras}")
+        for key, value in generation_input.items():
+            field_schema = gen_props.get(key, {})
+            field_type = field_schema.get("type") if isinstance(field_schema, dict) else None
+            if field_type == "string":
+                if not isinstance(value, str):
+                    raise RequestValidationError(f"$.generation_input.{key}: must be string")
+            elif field_type == "array":
+                if not isinstance(value, list):
+                    raise RequestValidationError(f"$.generation_input.{key}: must be array")
+                for idx, item in enumerate(value, start=1):
+                    if not isinstance(item, str):
+                        raise RequestValidationError(f"$.generation_input.{key}[{idx}]: must be string")
 
 
 def _validate_decision_summary_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
@@ -198,6 +237,142 @@ def _validate_plan_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> 
             raise RequestValidationError(str(exc)) from exc
 
 
+def _validate_task_state_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    _validate_required_and_additional(instance, schema, path="$")
+    for key in ("schema_version", "generated_at", "task_id", "status", "current_state"):
+        if not isinstance(instance.get(key), str) or not str(instance.get(key)).strip():
+            raise RequestValidationError(f"$.{key}: must be non-empty string")
+    status_enum = {"success", "failed"}
+    if instance.get("status") not in status_enum:
+        raise RequestValidationError("$.status: must be one of: ['success', 'failed']")
+    state_enum = {
+        "INIT",
+        "REQUIREMENT_COLLECTION",
+        "VALIDATION",
+        "PLAN_GENERATION",
+        "USER_CONFIRMATION",
+        "DATA_ACQUISITION",
+        "PREPROCESSING",
+        "ROUTING",
+        "TRAINING_OPTIONAL",
+        "INFERENCE",
+        "FILTERING",
+        "SAVING",
+        "REPORTING",
+        "QA",
+        "DONE",
+        "FAILED",
+    }
+    if instance.get("current_state") not in state_enum:
+        raise RequestValidationError("$.current_state: unsupported state")
+    history = instance.get("history")
+    if not isinstance(history, list) or not history:
+        raise RequestValidationError("$.history: must be non-empty array")
+    history_status_enum = {"completed", "success", "failed", "unknown"}
+    for idx, item in enumerate(history, start=1):
+        if not isinstance(item, dict):
+            raise RequestValidationError(f"$.history[{idx}]: must be object")
+        if not isinstance(item.get("state"), str) or not str(item.get("state")).strip():
+            raise RequestValidationError(f"$.history[{idx}].state: must be non-empty string")
+        if not isinstance(item.get("status"), str) or not str(item.get("status")).strip():
+            raise RequestValidationError(f"$.history[{idx}].status: must be non-empty string")
+        if item.get("state") not in state_enum:
+            raise RequestValidationError(f"$.history[{idx}].state: unsupported state")
+        if item.get("status") not in history_status_enum:
+            raise RequestValidationError(
+                f"$.history[{idx}].status: must be one of: ['completed', 'success', 'failed', 'unknown']"
+            )
+
+
+def _validate_data_report_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    _validate_required_and_additional(instance, schema, path="$")
+    for key in ("schema_version", "generated_at", "task_id", "status"):
+        if not isinstance(instance.get(key), str) or not str(instance.get(key)).strip():
+            raise RequestValidationError(f"$.{key}: must be non-empty string")
+    if instance.get("status") not in ("success", "failed"):
+        raise RequestValidationError("$.status: must be one of: ['success', 'failed']")
+
+    dataset = instance.get("dataset_step")
+    if not isinstance(dataset, dict):
+        raise RequestValidationError("$.dataset_step: must be object")
+    if not isinstance(dataset.get("status"), str) or not str(dataset.get("status")).strip():
+        raise RequestValidationError("$.dataset_step.status: must be non-empty string")
+    for key in ("selected", "available"):
+        value = dataset.get(key)
+        if not isinstance(value, list):
+            raise RequestValidationError(f"$.dataset_step.{key}: must be array")
+
+    candidate = instance.get("candidate_step")
+    if not isinstance(candidate, dict):
+        raise RequestValidationError("$.candidate_step: must be object")
+    if not isinstance(candidate.get("status"), str) or not str(candidate.get("status")).strip():
+        raise RequestValidationError("$.candidate_step.status: must be non-empty string")
+    if not isinstance(candidate.get("rows"), int) or candidate.get("rows", 0) < 0:
+        raise RequestValidationError("$.candidate_step.rows: must be integer >= 0")
+
+    artifacts = instance.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise RequestValidationError("$.artifacts: must be object")
+    for key in ("candidate_csv", "scored_csv"):
+        if not isinstance(artifacts.get(key), str):
+            raise RequestValidationError(f"$.artifacts.{key}: must be string")
+
+
+def _validate_model_report_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    _validate_required_and_additional(instance, schema, path="$")
+    for key in ("schema_version", "generated_at", "task_id", "status"):
+        if not isinstance(instance.get(key), str) or not str(instance.get(key)).strip():
+            raise RequestValidationError(f"$.{key}: must be non-empty string")
+    if instance.get("status") not in ("success", "failed"):
+        raise RequestValidationError("$.status: must be one of: ['success', 'failed']")
+
+    model_choice = instance.get("model_choice")
+    if not isinstance(model_choice, dict):
+        raise RequestValidationError("$.model_choice: must be object")
+    for key in ("predictor_id", "generator_id"):
+        if not isinstance(model_choice.get(key), str) or not str(model_choice.get(key)).strip():
+            raise RequestValidationError(f"$.model_choice.{key}: must be non-empty string")
+
+    training = instance.get("training_step")
+    if not isinstance(training, dict):
+        raise RequestValidationError("$.training_step: must be object")
+    if not isinstance(training.get("ran"), bool):
+        raise RequestValidationError("$.training_step.ran: must be boolean")
+    if not isinstance(training.get("status"), str):
+        raise RequestValidationError("$.training_step.status: must be string")
+
+    inference = instance.get("inference_step")
+    if not isinstance(inference, dict):
+        raise RequestValidationError("$.inference_step: must be object")
+    if not isinstance(inference.get("used_fallback"), bool):
+        raise RequestValidationError("$.inference_step.used_fallback: must be boolean")
+    if not isinstance(inference.get("status"), str) or not str(inference.get("status")).strip():
+        raise RequestValidationError("$.inference_step.status: must be non-empty string")
+
+
+def _validate_filtering_report_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    _validate_required_and_additional(instance, schema, path="$")
+    for key in ("schema_version", "generated_at", "task_id", "status"):
+        if not isinstance(instance.get(key), str) or not str(instance.get(key)).strip():
+            raise RequestValidationError(f"$.{key}: must be non-empty string")
+    if instance.get("status") not in ("success", "failed"):
+        raise RequestValidationError("$.status: must be one of: ['success', 'failed']")
+
+    filter_step = instance.get("filter_step")
+    if not isinstance(filter_step, dict):
+        raise RequestValidationError("$.filter_step: must be object")
+    if not isinstance(filter_step.get("status"), str) or not str(filter_step.get("status")).strip():
+        raise RequestValidationError("$.filter_step.status: must be non-empty string")
+    if not isinstance(filter_step.get("topn"), int) or filter_step.get("topn", 0) < 0:
+        raise RequestValidationError("$.filter_step.topn: must be integer >= 0")
+
+    report_step = instance.get("report_step")
+    if not isinstance(report_step, dict):
+        raise RequestValidationError("$.report_step: must be object")
+    if not isinstance(report_step.get("status"), str) or not str(report_step.get("status")).strip():
+        raise RequestValidationError("$.report_step.status: must be non-empty string")
+
+
 def load_and_validate_request_json(payload_path: Path, workspace_root: Path) -> Dict[str, Any]:
     payload = _load_json(payload_path)
     validate_request_payload(payload=payload, workspace_root=workspace_root)
@@ -222,4 +397,32 @@ def validate_plan_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict
     contract = default_contract_paths(workspace_root)
     schema = _load_json(contract.plan_schema)
     _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="plan")
+    return payload
+
+
+def validate_task_state_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    contract = default_contract_paths(workspace_root)
+    schema = _load_json(contract.task_state_schema)
+    _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="task_state")
+    return payload
+
+
+def validate_data_report_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    contract = default_contract_paths(workspace_root)
+    schema = _load_json(contract.data_report_schema)
+    _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="data_report")
+    return payload
+
+
+def validate_model_report_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    contract = default_contract_paths(workspace_root)
+    schema = _load_json(contract.model_report_schema)
+    _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="model_report")
+    return payload
+
+
+def validate_filtering_report_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    contract = default_contract_paths(workspace_root)
+    schema = _load_json(contract.filtering_report_schema)
+    _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="filtering_report")
     return payload

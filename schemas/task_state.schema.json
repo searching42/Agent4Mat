@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/task_state.schema.json",
+  "title": "OLED Agent Task State",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "task_id",
+    "status",
+    "current_state",
+    "history"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "task_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["success", "failed"] },
+    "current_state": {
+      "type": "string",
+      "enum": [
+        "INIT",
+        "REQUIREMENT_COLLECTION",
+        "VALIDATION",
+        "PLAN_GENERATION",
+        "USER_CONFIRMATION",
+        "DATA_ACQUISITION",
+        "PREPROCESSING",
+        "ROUTING",
+        "TRAINING_OPTIONAL",
+        "INFERENCE",
+        "FILTERING",
+        "SAVING",
+        "REPORTING",
+        "QA",
+        "DONE",
+        "FAILED"
+      ]
+    },
+    "history": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["state", "status"],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "INIT",
+              "REQUIREMENT_COLLECTION",
+              "VALIDATION",
+              "PLAN_GENERATION",
+              "USER_CONFIRMATION",
+              "DATA_ACQUISITION",
+              "PREPROCESSING",
+              "ROUTING",
+              "TRAINING_OPTIONAL",
+              "INFERENCE",
+              "FILTERING",
+              "SAVING",
+              "REPORTING",
+              "QA",
+              "DONE",
+              "FAILED"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "success", "failed", "unknown"]
+          },
+          "tool": { "type": "string" },
+          "at": { "type": "string" },
+          "started_at": { "type": "string" },
+          "ended_at": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -88,11 +88,16 @@ def _run_json_tool_command(
     payload: Dict[str, Any],
     cwd: Path,
     timeout_sec: int = 900,
+    env_overrides: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
+    env = os.environ.copy()
+    if env_overrides:
+        env.update(env_overrides)
     cp = subprocess.run(
         shlex.split(cmd),
         input=json.dumps(payload, ensure_ascii=False),
         cwd=str(cwd),
+        env=env,
         text=True,
         capture_output=True,
         check=True,
@@ -137,6 +142,112 @@ def _resolve_tool_adapter_cmd(ctx: ToolContext, *, env_prefix: str, model_id: st
     if model is None:
         return ""
     return model.adapter_cmd(tool_name)
+
+
+def _resolve_bundled_unimol_score_adapter_cmd(ctx: ToolContext, *, predictor_id: str) -> str:
+    """Return bundled Uni-Mol score adapter command when catalog does not provide one."""
+    if os.environ.get("OLED_AGENT_DISABLE_BUNDLED_UNIMOL_SCORE_ADAPTER", "0").strip() == "1":
+        return ""
+
+    try:
+        catalog = ModelCatalog.load(ctx.catalog_path)
+    except Exception:
+        return ""
+
+    model = catalog.get(predictor_id)
+    if model is None or model.backend != "unimol_tools":
+        return ""
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "adapters" / "score_candidates_unimol_adapter.py"
+    if not script.exists():
+        return ""
+
+    return f"python3 {script}"
+
+
+def _resolve_bundled_reinvent4_generate_adapter_cmd(ctx: ToolContext, *, generator_id: str) -> str:
+    """Return bundled REINVENT4 generate adapter command when catalog does not provide one."""
+    if os.environ.get("OLED_AGENT_DISABLE_BUNDLED_REINVENT4_GENERATE_ADAPTER", "0").strip() == "1":
+        return ""
+
+    try:
+        catalog = ModelCatalog.load(ctx.catalog_path)
+    except Exception:
+        return ""
+
+    model = catalog.get(generator_id)
+    if model is None or model.backend != "reinvent4":
+        return ""
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "adapters" / "generate_candidates_reinvent4_adapter.py"
+    if not script.exists():
+        return ""
+
+    return f"python3 {script}"
+
+
+def _default_adapter_mode_overrides(*, cmd: str, mode_env: str, default_mode: str) -> Dict[str, str]:
+    """Return env override for adapter mode only when user has not set it explicitly."""
+    if not cmd:
+        return {}
+    if os.environ.get(mode_env, "").strip():
+        return {}
+    return {mode_env: default_mode}
+
+
+def _generate_candidates_local_fallback(
+    *,
+    ctx: ToolContext,
+    generator_id: str,
+    max_candidates: int,
+    input_csv: str,
+    constraints: Optional[Dict[str, Any]],
+    out_csv: Path,
+) -> Dict[str, Any]:
+    if input_csv:
+        explicit = Path(input_csv)
+        if not explicit.is_absolute():
+            explicit = (ctx.workspace_root / explicit).resolve()
+        if not explicit.exists():
+            raise ToolError(f"input_csv does not exist: {explicit}")
+        n = _copy_head_rows(explicit, out_csv, max_candidates)
+        ctx.state["candidate_csv"] = str(out_csv)
+        return {
+            "generator_id": generator_id,
+            "status": "success",
+            "adapter": "explicit_input_csv",
+            "input_csv": str(explicit),
+            "output": str(out_csv),
+            "rows": n,
+            "constraints": constraints or {},
+        }
+
+    ext_root = _resolve_external_workspace_root(ctx)
+    if ext_root is not None:
+        latest = _pick_latest_reinvent_csv(ext_root)
+        if latest is not None:
+            n = _copy_head_rows(latest, out_csv, max_candidates)
+            ctx.state["candidate_csv"] = str(out_csv)
+            return {
+                "generator_id": generator_id,
+                "status": "success",
+                "adapter": "reuse_latest_reinvent_artifact",
+                "source_csv": str(latest),
+                "output": str(out_csv),
+                "rows": n,
+                "constraints": constraints or {},
+            }
+
+    n = _write_stub_candidates(out_csv, max_candidates)
+    ctx.state["candidate_csv"] = str(out_csv)
+    return {
+        "generator_id": generator_id,
+        "status": "success",
+        "adapter": "stub_generator",
+        "output": str(out_csv),
+        "rows": n,
+        "constraints": constraints or {},
+    }
 
 
 def _resolve_external_workspace_root(ctx: ToolContext) -> Optional[Path]:
@@ -540,6 +651,7 @@ def generate_candidates(
     max_candidates: int = 500,
     input_csv: str = "",
     constraints: Optional[Dict[str, Any]] = None,
+    **generation_inputs: Any,
 ) -> Dict[str, Any]:
     artifact_dir = _agent_artifact_dir(ctx)
     out_csv = artifact_dir / "generated_candidates.csv"
@@ -550,7 +662,27 @@ def generate_candidates(
         model_id=generator_id,
         tool_name="generate_candidates",
     )
+    explicit_env_cmd = bool(os.environ.get("OLED_AGENT_GENERATE_CMD", "").strip())
+    bundled_reinvent4 = False
+    default_reinvent4_adapter = False
+    if not adapter_cmd:
+        adapter_cmd = _resolve_bundled_reinvent4_generate_adapter_cmd(ctx, generator_id=generator_id)
+    if adapter_cmd and not explicit_env_cmd:
+        bundled_reinvent4 = "generate_candidates_reinvent4_adapter.py" in adapter_cmd
+        if bundled_reinvent4:
+            default_reinvent4_adapter = True
+    adapter_error: Optional[Exception] = None
     if adapter_cmd:
+        env_overrides: Dict[str, str] = {}
+        # Keep default path runnable on machines without real REINVENT4 runtime.
+        if bundled_reinvent4:
+            env_overrides.update(
+                _default_adapter_mode_overrides(
+                    cmd=adapter_cmd,
+                    mode_env="OLED_AGENT_REINVENT4_ADAPTER_MODE",
+                    default_mode="smoke",
+                )
+            )
         timeout_sec = _tool_timeout("OLED_AGENT_GENERATE_TIMEOUT_SEC", default=3600)
         payload = {
             "workspace_root": str(ctx.workspace_root),
@@ -562,71 +694,51 @@ def generate_candidates(
             "output_csv": str(out_csv),
             "state": dict(ctx.state),
         }
-        result = _run_json_tool_command(
-            cmd=adapter_cmd,
-            payload=payload,
-            cwd=ctx.workspace_root,
-            timeout_sec=timeout_sec,
-        )
-        result_out = dict(result)
-        produced = str(result_out.get("output_csv") or result_out.get("output") or out_csv)
-        produced_path = Path(produced)
-        if not produced_path.is_absolute():
-            produced_path = (ctx.workspace_root / produced_path).resolve()
-        if not produced_path.exists():
-            raise ToolError(f"generate command output csv not found: {produced_path}")
-        count = _normalize_candidate_csv(produced_path, require_smiles=False)
-        ctx.state["candidate_csv"] = str(produced_path)
-        result_out.setdefault("status", "success")
-        result_out.setdefault("adapter", "external_generate_cmd")
-        result_out.setdefault("rows", count)
-        result_out.setdefault("output", str(produced_path))
-        return result_out
-
-    if input_csv:
-        explicit = Path(input_csv)
-        if not explicit.is_absolute():
-            explicit = (ctx.workspace_root / explicit).resolve()
-        if not explicit.exists():
-            raise ToolError(f"input_csv does not exist: {explicit}")
-        n = _copy_head_rows(explicit, out_csv, max_candidates)
-        ctx.state["candidate_csv"] = str(out_csv)
-        return {
-            "generator_id": generator_id,
-            "status": "success",
-            "adapter": "explicit_input_csv",
-            "input_csv": str(explicit),
-            "output": str(out_csv),
-            "rows": n,
-            "constraints": constraints or {},
+        if generation_inputs:
+            payload.update(generation_inputs)
+        try:
+            result = _run_json_tool_command(
+                cmd=adapter_cmd,
+                payload=payload,
+                cwd=ctx.workspace_root,
+                timeout_sec=timeout_sec,
+                env_overrides=env_overrides,
+            )
+            result_out = dict(result)
+            produced = str(result_out.get("output_csv") or result_out.get("output") or out_csv)
+            produced_path = Path(produced)
+            if not produced_path.is_absolute():
+                produced_path = (ctx.workspace_root / produced_path).resolve()
+            if not produced_path.exists():
+                raise ToolError(f"generate command output csv not found: {produced_path}")
+            count = _normalize_candidate_csv(produced_path, require_smiles=False)
+            ctx.state["candidate_csv"] = str(produced_path)
+            result_out.setdefault("status", "success")
+            result_out.setdefault("adapter", "external_generate_cmd")
+            result_out.setdefault("rows", count)
+            result_out.setdefault("output", str(produced_path))
+            return result_out
+        except Exception as exc:
+            if not default_reinvent4_adapter:
+                raise
+            adapter_error = exc
+    local = _generate_candidates_local_fallback(
+        ctx=ctx,
+        generator_id=generator_id,
+        max_candidates=max_candidates,
+        input_csv=input_csv,
+        constraints=constraints,
+        out_csv=out_csv,
+    )
+    if adapter_error is not None:
+        local["fallback_reason"] = "REINVENT4 adapter failed; fell back to local generator path"
+        local["fallback_error"] = {
+            "code": "reinvent4_generate_cmd_failed",
+            "message": "REINVENT4 adapter failed; fell back to local generator path",
+            "details": {"error": str(adapter_error)},
+            "retryable": True,
         }
-
-    ext_root = _resolve_external_workspace_root(ctx)
-    if ext_root is not None:
-        latest = _pick_latest_reinvent_csv(ext_root)
-        if latest is not None:
-            n = _copy_head_rows(latest, out_csv, max_candidates)
-            ctx.state["candidate_csv"] = str(out_csv)
-            return {
-                "generator_id": generator_id,
-                "status": "success",
-                "adapter": "reuse_latest_reinvent_artifact",
-                "source_csv": str(latest),
-                "output": str(out_csv),
-                "rows": n,
-                "constraints": constraints or {},
-            }
-
-    n = _write_stub_candidates(out_csv, max_candidates)
-    ctx.state["candidate_csv"] = str(out_csv)
-    return {
-        "generator_id": generator_id,
-        "status": "success",
-        "adapter": "stub_generator",
-        "output": str(out_csv),
-        "rows": n,
-        "constraints": constraints or {},
-    }
+    return local
 
 
 def _try_external_unimol_scoring(
@@ -811,7 +923,22 @@ def score_candidates(
         model_id=predictor_id,
         tool_name="score_candidates",
     )
+    if not adapter_cmd:
+        adapter_cmd = _resolve_bundled_unimol_score_adapter_cmd(
+            ctx,
+            predictor_id=predictor_id,
+        )
     if adapter_cmd:
+        env_overrides: Dict[str, str] = {}
+        # Keep default path runnable on machines without real Uni-Mol runtime.
+        if "score_candidates_unimol_adapter.py" in adapter_cmd:
+            env_overrides.update(
+                _default_adapter_mode_overrides(
+                    cmd=adapter_cmd,
+                    mode_env="OLED_AGENT_UNIMOL_SCORE_MODE",
+                    default_mode="smoke",
+                )
+            )
         timeout_sec = _tool_timeout("OLED_AGENT_SCORE_TIMEOUT_SEC", default=3600)
         payload = {
             "workspace_root": str(ctx.workspace_root),
@@ -829,6 +956,7 @@ def score_candidates(
                 payload=payload,
                 cwd=ctx.workspace_root,
                 timeout_sec=timeout_sec,
+                env_overrides=env_overrides,
             )
             result_out = dict(result)
             produced = str(result_out.get("output_csv") or result_out.get("output") or scored_csv)

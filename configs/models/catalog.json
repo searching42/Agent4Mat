@@ -11,8 +11,8 @@
         "objective_default": "target_window",
         "supports_training": true,
         "adapters": {
-          "train_predictor_cmd": "",
-          "score_candidates_cmd": ""
+          "train_predictor_cmd": "python3 scripts/adapters/train_predictor_unimol_adapter.py",
+          "score_candidates_cmd": "python3 scripts/adapters/score_candidates_unimol_adapter.py"
         }
       }
     },
@@ -37,7 +37,7 @@
       "params": {
         "supports_conditioning": true,
         "adapters": {
-          "generate_candidates_cmd": ""
+          "generate_candidates_cmd": "python3 scripts/adapters/generate_candidates_reinvent4_adapter.py"
         }
       }
     },

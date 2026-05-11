@@ -24,14 +24,24 @@
   - deterministic release gate using `make release-check TASK_ID=ci_accept_cpu_mock`
 - `acceptance-llm-mock`:
   - LLM integration gate without credentials using `make llm-smoke`
+- `acceptance real-chain-minimal (manual)`:
+  - manual `workflow_dispatch` gate with `run_real_chain_acceptance=true`
+  - runs `make real-chain-acceptance TASK_ID=ci_real_chain_manual`
+  - uploads minimal real-chain artifacts under `runs/ci/`
 - `acceptance external-adapter (optional)`:
   - manual `workflow_dispatch` gate with `run_external_acceptance=true`
   - runs `./scripts/run_external_chain_acceptance_with_debug.sh`
 
 ## Real adapter contract smoke
-- `make real-adapter-validate` exercises adapter shells in smoke mode only.
-- It validates contract shape and deterministic outputs, but does not prove a real remote Uni-Mol or MinerU deployment is reachable.
-- Treat `stub_host` / `stub_py` values in CI as placeholders for contract validation only.
+- `make real-adapter-validate` exercises adapter shells in smoke mode, plus:
+  - REINVENT4 real-mode logic through a local stub pipeline
+  - Uni-Mol score real-mode logic through a local stub scorer
+- It validates contract shape and deterministic outputs, but does not prove a real remote Uni-Mol, MinerU, or REINVENT4 deployment is reachable.
+- Treat `stub_host` / `stub_py` and local stub scripts as placeholders for contract validation only.
+
+## Release boundary and script map
+- `make release-boundary` checks git status hygiene for release commits.
+- `make script-map` generates `docs/script_migration_map.json` from `workspace/scripts`.
 
 ## Why this gate
 - catches lock drift before runtime failures

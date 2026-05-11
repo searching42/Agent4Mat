@@ -42,11 +42,15 @@ PYTHONPATH=src python3 -m oled_agent.cli smoke --workspace-root .
 
 Make targets:
 - `make release-check`
+- `make release-boundary`
+- `make script-map`
 - `make quickstart`
 - `make doctor`
 - `make llm-connectivity`
 - `make adapter-validate`
 - `make real-adapter-validate`
+- `make real-chain-acceptance`
+- `make ui-smoke`
 - `make test-regressions`
 - `make test-adapters`
 
@@ -70,7 +74,23 @@ Expected outcomes:
 - `make adapter-validate` prints JSON success for train/generate/score adapter templates.
 - `make quickstart` ends with `[PASS] quickstart chain completed`.
 - `make doctor` reports environment diagnostics without fatal error for cpu profile.
-- `make real-adapter-validate` is contract smoke with stub env placeholders (not a proof of real remote runtime availability).
+- `make real-adapter-validate` validates adapter contracts with deterministic smoke outputs plus REINVENT4 `real` mode through a local stub pipeline script (still not a proof of real remote runtime availability).
+
+Release boundary + migration map:
+```bash
+make release-boundary
+make script-map
+```
+
+Real-chain minimal acceptance (stub-backed real-mode logic):
+```bash
+make real-chain-acceptance TASK_ID=real_chain_demo
+```
+
+Lightweight UI smoke check:
+```bash
+make ui-smoke
+```
 
 ## CLI commands
 - `run`: run pipeline from config
@@ -166,8 +186,8 @@ Tool adapter script hooks (optional, for real train/generate/score integration):
       "kind": "predictor",
       "params": {
         "adapters": {
-          "train_predictor_cmd": "python3 scripts/train_predictor_adapter.py",
-          "score_candidates_cmd": "python3 scripts/score_candidates_adapter.py"
+          "train_predictor_cmd": "python3 scripts/adapters/train_predictor_unimol_adapter.py",
+          "score_candidates_cmd": "python3 scripts/adapters/score_candidates_unimol_adapter.py"
         }
       }
     },
@@ -176,7 +196,7 @@ Tool adapter script hooks (optional, for real train/generate/score integration):
       "kind": "generator",
       "params": {
         "adapters": {
-          "generate_candidates_cmd": "python3 scripts/generate_candidates_adapter.py"
+          "generate_candidates_cmd": "python3 scripts/adapters/generate_candidates_reinvent4_adapter.py"
         }
       }
     }
@@ -185,11 +205,19 @@ Tool adapter script hooks (optional, for real train/generate/score integration):
 ```
 - failure semantics:
   - `score_candidates` adapter failure -> falls back to `local_deterministic_fallback` and records `fallback_error.code=external_score_cmd_failed`
-  - `generate_candidates` adapter failure -> step fails directly (no local generation fallback in adapter branch)
+  - `generate_candidates` default bundled REINVENT4 adapter failure -> falls back to local generation and records `fallback_error.code=reinvent4_generate_cmd_failed`
+  - explicitly configured `OLED_AGENT_GENERATE_CMD` failures still fail the step directly
 - optional timeouts:
   - `OLED_AGENT_TRAIN_TIMEOUT_SEC` (default `3600`)
   - `OLED_AGENT_GENERATE_TIMEOUT_SEC` (default `3600`)
   - `OLED_AGENT_SCORE_TIMEOUT_SEC` (default `3600`)
+
+Real adapter mode controls:
+- `OLED_AGENT_UNIMOL_TRAIN_MODE=preflight|smoke|real`
+- `OLED_AGENT_UNIMOL_SCORE_MODE=preflight|smoke|real`
+- `OLED_AGENT_MINERU_ADAPTER_MODE=preflight|smoke`
+- `OLED_AGENT_REINVENT4_ADAPTER_MODE=preflight|smoke|real`
+- `OLED_AGENT_MOLSCRIBE_ADAPTER_MODE=preflight|smoke|real`
 
 Built-in mock planner for local/CI checks:
 ```bash
@@ -214,6 +242,52 @@ PYTHONPATH=src python3 -m oled_agent.cli agent-run --workspace-root . --task-id 
 PYTHONPATH=src python3 -m oled_agent.cli agent-plan-json --workspace-root . --catalog configs/models/catalog.json --request-json /path/to/request.json
 PYTHONPATH=src python3 -m oled_agent.cli agent-run-json --workspace-root . --catalog configs/models/catalog.json --request-json /path/to/request.json
 PYTHONPATH=src python3 -m oled_agent.cli agent-plan --workspace-root . --task-id task_llm --request "设计470nm附近且高PLQY分子" --planner-provider llm_v1
+```
+
+MolScribe structured input example (`request.json`):
+```json
+{
+  "task_id": "task_molscribe_input",
+  "request_text": "从论文图像提取分子并筛选高PLQY",
+  "mode": "fast_screen",
+  "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+  "budget": {"max_candidates": 20},
+  "model_preferences": {
+    "predictor_id": "unimol_lambda_plqy_real_v1",
+    "generator_id": "molscribe_generator_real_v1"
+  },
+  "generation_input": {
+    "source_image": "/abs/path/to/figure.png"
+  }
+}
+```
+
+MolScribe PDF input example (`request_pdf.json`):
+```json
+{
+  "task_id": "task_molscribe_pdf",
+  "request_text": "从论文PDF提取分子并筛选高PLQY",
+  "mode": "fast_screen",
+  "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+  "budget": {"max_candidates": 20},
+  "model_preferences": {
+    "predictor_id": "unimol_lambda_plqy_real_v1",
+    "generator_id": "molscribe_generator_real_v1"
+  },
+  "generation_input": {
+    "source_pdf": "/abs/path/to/paper.pdf"
+  }
+}
+```
+
+Optional PDF pre-extract hook:
+```bash
+export OLED_AGENT_MOLSCRIBE_PDF_EXTRACT_CMD="python3 your_pdf_extract_script.py"
+PYTHONPATH=src python3 -m oled_agent.cli agent-run-json \
+  --workspace-root . \
+  --catalog configs/models/catalog.json \
+  --request-json /abs/path/to/request_pdf.json \
+  --planner-provider llm_v1
 ```
 
 ## Agent layer
@@ -257,17 +331,45 @@ PYTHONPATH=src python3 -m oled_agent.cli agent-plan --workspace-root . --task-id
 - optional external-chain acceptance:
   - only runs on `workflow_dispatch` with input `run_external_acceptance=true`
   - default push/pull_request CI does not run this job
+- optional real-chain minimal acceptance:
+  - only runs on `workflow_dispatch` with input `run_real_chain_acceptance=true`
+  - runs `make real-chain-acceptance` and uploads run artifacts
 
 ## Agent artifacts
 `agent-run` writes:
 - `plan.json`
 - `execution.json`
 - `tool_state.json`
+- `task_state.json` (explicit task-state-machine history)
 - `decision_summary.json` (machine-readable fallback decision fields)
+
+Additional mirrored layout (for external-user readability):
+- `logging/<task_id>-<timestamp>/`
+  - `task.json`
+  - `plan.md`
+  - `execution.log`
+  - `data_report.json`
+  - `model_report.json`
+  - `filtering_report.json`
+  - `plan.json`, `execution.json`, `tool_state.json`, `decision_summary.json`, `task_state.json`
+- `result/<task_id>-<timestamp>/`
+  - `target_structures.csv` (from scored/candidate artifacts when available)
+  - `metadata.json`
+  - optional `report.md`
 
 Decision summary validator:
 - `python3 scripts/validate_decision_summary.py <path>`
 - validator reuses `schemas/decision_summary.schema.json` via `request_contract` module.
+
+Task-state validator:
+- `python3 scripts/validate_task_state.py <path>`
+- validator reuses `schemas/task_state.schema.json` via `request_contract` module.
+
+Structured report validators:
+- `python3 scripts/validate_data_report.py <path>`
+- `python3 scripts/validate_model_report.py <path>`
+- `python3 scripts/validate_filtering_report.py <path>`
+- validators reuse `schemas/data_report.schema.json`, `schemas/model_report.schema.json`, and `schemas/filtering_report.schema.json` via `request_contract`.
 
 ## External scorer preflight and acceptance
 - preflight command:
@@ -289,6 +391,23 @@ Required env vars for remote Uni-Mol scorer:
 
 Optional (legacy fallback defaults in scorer script):
 - `ALLOW_DEFAULT_UNIMOL_REMOTE=1`
+
+Real generator adapters:
+- REINVENT4 adapter:
+  - command: `scripts/adapters/generate_candidates_reinvent4_adapter.py`
+  - runtime knobs:
+    - `OLED_AGENT_REINVENT4_SOURCE_CSV` (optional explicit source sampling CSV)
+    - `OLED_AGENT_REINVENT4_PIPELINE_SCRIPT` (optional override; default uses workspace pipeline script)
+    - `OLED_AGENT_REINVENT4_RANKREADY_CSV` (optional explicit rankready path)
+    - `OLED_AGENT_REINVENT4_ADAPTER_TIMEOUT_SEC`
+- MolScribe adapter:
+  - command: `scripts/adapters/generate_candidates_molscribe_adapter.py`
+  - input comes from request payload/constraints fields such as `source_image`, `source_pdf`, `image_paths`
+  - runtime knobs:
+    - command mode: `OLED_AGENT_MOLSCRIBE_CMD`
+    - native mode: `OLED_AGENT_MOLSCRIBE_CHECKPOINT` (+ optional `OLED_AGENT_MOLSCRIBE_DEVICE`)
+    - optional PDF pre-extract hook: `OLED_AGENT_MOLSCRIBE_PDF_EXTRACT_CMD`
+    - `OLED_AGENT_MOLSCRIBE_ADAPTER_TIMEOUT_SEC`
 
 Template:
 - `scripts/env_external.example`

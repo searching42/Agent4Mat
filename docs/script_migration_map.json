@@ -1,0 +1,678 @@
+{
+  "workspace_scripts_root": "workspace/scripts",
+  "total": 96,
+  "rows": [
+    {
+      "script": "workspace/scripts/analyze_cross_batch_sampling_distribution.py",
+      "script_name": "analyze_cross_batch_sampling_distribution.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/analyze_cross_batch_weak_lambda_score_decomposition.py",
+      "script_name": "analyze_cross_batch_weak_lambda_score_decomposition.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/analyze_plqy_v2_structural_preferences.py",
+      "script_name": "analyze_plqy_v2_structural_preferences.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/analyze_validation_h_family_enrichment.py",
+      "script_name": "analyze_validation_h_family_enrichment.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/analyze_validation_h_final_selection_sensitivity.py",
+      "script_name": "analyze_validation_h_final_selection_sensitivity.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/analyze_validation_h_penalty_sensitivity.py",
+      "script_name": "analyze_validation_h_penalty_sensitivity.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/analyze_validation_h_score_penalty.py",
+      "script_name": "analyze_validation_h_score_penalty.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/analyze_validation_h_type1_gate.py",
+      "script_name": "analyze_validation_h_type1_gate.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/analyze_validation_i_to_n_exploratory_regime.py",
+      "script_name": "analyze_validation_i_to_n_exploratory_regime.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/backfill_validation_batch_metadata.py",
+      "script_name": "backfill_validation_batch_metadata.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/batch_extract_unimol_embeddings.py",
+      "script_name": "batch_extract_unimol_embeddings.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/bootstrap_baseline_config.py",
+      "script_name": "bootstrap_baseline_config.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_b1_viability_replay.py",
+      "script_name": "check_b1_viability_replay.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_future_replay_minimum_evidence_pack.py",
+      "script_name": "check_future_replay_minimum_evidence_pack.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_future_replay_minimum_evidence_pack_regression.py",
+      "script_name": "check_future_replay_minimum_evidence_pack_regression.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_generalized_workflow_acceptance.py",
+      "script_name": "check_generalized_workflow_acceptance.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_generalized_workflow_acceptance_replay_regression.py",
+      "script_name": "check_generalized_workflow_acceptance_replay_regression.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_generalized_workflow_regression_suite.py",
+      "script_name": "check_generalized_workflow_regression_suite.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_generalized_workflow_two_batch_gate.py",
+      "script_name": "check_generalized_workflow_two_batch_gate.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_legacy_intake_audit_regression.py",
+      "script_name": "check_legacy_intake_audit_regression.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_legacy_intake_usage.py",
+      "script_name": "check_legacy_intake_usage.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_markdown_path_leaks.py",
+      "script_name": "check_markdown_path_leaks.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_plqy_v2_triage_warnings.py",
+      "script_name": "check_plqy_v2_triage_warnings.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_prelaunch_intake_regression.py",
+      "script_name": "check_prelaunch_intake_regression.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_prelaunch_live_trigger_gate.py",
+      "script_name": "check_prelaunch_live_trigger_gate.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_run_manifest_consistency.py",
+      "script_name": "check_run_manifest_consistency.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_source_sampling_recharacterization_tables.py",
+      "script_name": "check_source_sampling_recharacterization_tables.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_tail_retention_offline.py",
+      "script_name": "check_tail_retention_offline.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_targeted_hold_decision_regression.py",
+      "script_name": "check_targeted_hold_decision_regression.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_targeted_hold_family_classification_regression.py",
+      "script_name": "check_targeted_hold_family_classification_regression.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_targeted_hold_family_enum_regression.py",
+      "script_name": "check_targeted_hold_family_enum_regression.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_targeted_reopen_eligibility.py",
+      "script_name": "check_targeted_reopen_eligibility.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/check_targeted_reopen_eligibility_regression.py",
+      "script_name": "check_targeted_reopen_eligibility_regression.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/classify_targeted_hold_replay_family.py",
+      "script_name": "classify_targeted_hold_replay_family.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/cleanup_workspace.py",
+      "script_name": "cleanup_workspace.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/compose_multi_objective_scores.py",
+      "script_name": "compose_multi_objective_scores.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/create_reference_stubs.py",
+      "script_name": "create_reference_stubs.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/create_reinvent4_validation_batch.py",
+      "script_name": "create_reinvent4_validation_batch.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/ensure_guardrail_required_check.py",
+      "script_name": "ensure_guardrail_required_check.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/evaluate_targeted_hold_decision.py",
+      "script_name": "evaluate_targeted_hold_decision.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/export_training_ready_subset_v1.py",
+      "script_name": "export_training_ready_subset_v1.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/export_unimol_end2end_plqy_dataset_v1.py",
+      "script_name": "export_unimol_end2end_plqy_dataset_v1.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/export_unimol_lambda_em_dataset_v1.py",
+      "script_name": "export_unimol_lambda_em_dataset_v1.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/export_unimol_multitask_molecule_dataset_v1.py",
+      "script_name": "export_unimol_multitask_molecule_dataset_v1.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/extract_explained_shortlist_observation.py",
+      "script_name": "extract_explained_shortlist_observation.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/filter_common_control_candidates.py",
+      "script_name": "filter_common_control_candidates.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/filter_multi_objective_candidates.py",
+      "script_name": "filter_multi_objective_candidates.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/filter_multi_objective_prefilter.py",
+      "script_name": "filter_multi_objective_prefilter.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/filter_reinvent4_lambda_em_candidates_enhanced.py",
+      "script_name": "filter_reinvent4_lambda_em_candidates_enhanced.py",
+      "module": "generate_candidates",
+      "adapter": "scripts/adapters/generate_candidates_reinvent4_adapter.py",
+      "integration_status": "partially_integrated"
+    },
+    {
+      "script": "workspace/scripts/filter_reinvent4_lambda_em_candidates_v2.py",
+      "script_name": "filter_reinvent4_lambda_em_candidates_v2.py",
+      "module": "generate_candidates",
+      "adapter": "scripts/adapters/generate_candidates_reinvent4_adapter.py",
+      "integration_status": "partially_integrated"
+    },
+    {
+      "script": "workspace/scripts/filter_unimol_property_candidates_generic.py",
+      "script_name": "filter_unimol_property_candidates_generic.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/fix_intake_metadata_fields.py",
+      "script_name": "fix_intake_metadata_fields.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_explained_shortlist.py",
+      "script_name": "generate_explained_shortlist.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_generic_property_framework_design.py",
+      "script_name": "generate_generic_property_framework_design.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_minimal_closed_loop_design.py",
+      "script_name": "generate_minimal_closed_loop_design.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_multi_objective_template.py",
+      "script_name": "generate_multi_objective_template.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_plqy_v2_family_motif_note.py",
+      "script_name": "generate_plqy_v2_family_motif_note.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_priority4_training_space_report.py",
+      "script_name": "generate_priority4_training_space_report.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_priority6_shortlist_report.py",
+      "script_name": "generate_priority6_shortlist_report.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_reinvent4_v2_design_report.py",
+      "script_name": "generate_reinvent4_v2_design_report.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_review_actions.py",
+      "script_name": "generate_review_actions.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_source_sampling_recharacterization_tables.py",
+      "script_name": "generate_source_sampling_recharacterization_tables.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_top20_analysis_report.py",
+      "script_name": "generate_top20_analysis_report.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_v2_next_round_playbook.py",
+      "script_name": "generate_v2_next_round_playbook.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/generate_v2_shortlist_report.py",
+      "script_name": "generate_v2_shortlist_report.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/init_schema.py",
+      "script_name": "init_schema.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/intake_schema.py",
+      "script_name": "intake_schema.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/prepare_unimol_demo_dataset.py",
+      "script_name": "prepare_unimol_demo_dataset.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/prioritize_curation_lists.py",
+      "script_name": "prioritize_curation_lists.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/rank_reinvent4_lambda_em_candidates.py",
+      "script_name": "rank_reinvent4_lambda_em_candidates.py",
+      "module": "generate_candidates",
+      "adapter": "scripts/adapters/generate_candidates_reinvent4_adapter.py",
+      "integration_status": "partially_integrated"
+    },
+    {
+      "script": "workspace/scripts/rank_reinvent4_lambda_em_candidates_v2.py",
+      "script_name": "rank_reinvent4_lambda_em_candidates_v2.py",
+      "module": "generate_candidates",
+      "adapter": "scripts/adapters/generate_candidates_reinvent4_adapter.py",
+      "integration_status": "partially_integrated"
+    },
+    {
+      "script": "workspace/scripts/rdkit_priority4_nn_analysis.py",
+      "script_name": "rdkit_priority4_nn_analysis.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/replay_baseline_what_if_candidates.py",
+      "script_name": "replay_baseline_what_if_candidates.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/replay_conditional_second_stage_v1.py",
+      "script_name": "replay_conditional_second_stage_v1.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/replay_conditional_second_stage_v2.py",
+      "script_name": "replay_conditional_second_stage_v2.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/replay_cross_batch_type1_gate.py",
+      "script_name": "replay_cross_batch_type1_gate.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/replay_type1_discount_escalation.py",
+      "script_name": "replay_type1_discount_escalation.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/replay_type1_discount_sweep.py",
+      "script_name": "replay_type1_discount_sweep.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_b1_type1_discount_branch.py",
+      "script_name": "run_b1_type1_discount_branch.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_conditional_second_stage_branch.py",
+      "script_name": "run_conditional_second_stage_branch.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_conditional_second_stage_branch_v2.py",
+      "script_name": "run_conditional_second_stage_branch_v2.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_current_default_shortlist_policy.py",
+      "script_name": "run_current_default_shortlist_policy.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_explained_shortlist_observation.py",
+      "script_name": "run_explained_shortlist_observation.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_generalized_workflow.py",
+      "script_name": "run_generalized_workflow.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_max1_type1_pilot.py",
+      "script_name": "run_max1_type1_pilot.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_multi_objective_task.py",
+      "script_name": "run_multi_objective_task.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_single_property_task.py",
+      "script_name": "run_single_property_task.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_type1_discount_pilot.py",
+      "script_name": "run_type1_discount_pilot.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/run_unimol_dpdispatcher_demo.py",
+      "script_name": "run_unimol_dpdispatcher_demo.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/score_reinvent4_lambda_em_candidates_unimol.py",
+      "script_name": "score_reinvent4_lambda_em_candidates_unimol.py",
+      "module": "research_or_analysis",
+      "adapter": "",
+      "integration_status": "not_in_scope"
+    },
+    {
+      "script": "workspace/scripts/score_unimol_property_candidates.py",
+      "script_name": "score_unimol_property_candidates.py",
+      "module": "score_candidates",
+      "adapter": "scripts/adapters/score_candidates_unimol_adapter.py",
+      "integration_status": "integrated"
+    },
+    {
+      "script": "workspace/scripts/train_unimol_embedding_baseline_remote.py",
+      "script_name": "train_unimol_embedding_baseline_remote.py",
+      "module": "train_predictor",
+      "adapter": "scripts/adapters/train_predictor_unimol_adapter.py",
+      "integration_status": "integrated"
+    },
+    {
+      "script": "workspace/scripts/train_unimol_embedding_baseline_v2_remote.py",
+      "script_name": "train_unimol_embedding_baseline_v2_remote.py",
+      "module": "train_predictor",
+      "adapter": "scripts/adapters/train_predictor_unimol_adapter.py",
+      "integration_status": "integrated"
+    },
+    {
+      "script": "workspace/scripts/train_unimol_end2end_plqy_v1_remote.py",
+      "script_name": "train_unimol_end2end_plqy_v1_remote.py",
+      "module": "train_predictor",
+      "adapter": "scripts/adapters/train_predictor_unimol_adapter.py",
+      "integration_status": "integrated"
+    },
+    {
+      "script": "workspace/scripts/train_unimol_end2end_plqy_v2_candidate_remote.py",
+      "script_name": "train_unimol_end2end_plqy_v2_candidate_remote.py",
+      "module": "train_predictor",
+      "adapter": "scripts/adapters/train_predictor_unimol_adapter.py",
+      "integration_status": "integrated"
+    },
+    {
+      "script": "workspace/scripts/train_unimol_end2end_v1_remote.py",
+      "script_name": "train_unimol_end2end_v1_remote.py",
+      "module": "train_predictor",
+      "adapter": "scripts/adapters/train_predictor_unimol_adapter.py",
+      "integration_status": "integrated"
+    }
+  ]
+}

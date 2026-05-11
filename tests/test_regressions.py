@@ -4760,6 +4760,17 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("run_external_chain_acceptance_with_debug.sh", content)
         self.assertNotIn("run_external_chain_acceptance.py", content)
 
+    def test_oled_agent_ci_has_manual_real_chain_acceptance_job(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("run_real_chain_acceptance:", content)
+        self.assertIn("real-chain-minimal-acceptance:", content)
+        self.assertIn("acceptance real-chain-minimal (manual)", content)
+        self.assertIn("github.event.inputs.run_real_chain_acceptance == 'true'", content)
+        self.assertIn("make real-chain-acceptance TASK_ID=ci_real_chain_manual", content)
+        self.assertIn("real-chain-minimal-artifacts", content)
+
     def test_oled_agent_ci_validates_structured_reports_schema(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)
@@ -4796,6 +4807,53 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("$(MAKE) llm-smoke", content)
         self.assertIn("$(MAKE) doctor", content)
         self.assertIn("oled_agent.cli doctor", content)
+
+    def test_makefile_contains_release_boundary_and_plan_targets(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        makefile = repo_root / "Makefile"
+        content = makefile.read_text(encoding="utf-8")
+        self.assertIn("release-boundary:", content)
+        self.assertIn("script-map:", content)
+        self.assertIn("real-chain-acceptance:", content)
+        self.assertIn("ui-smoke:", content)
+        self.assertIn("scripts/check_release_boundary.py", content)
+        self.assertIn("scripts/build_script_migration_map.py", content)
+        self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
+        self.assertIn("ui/app.py", content)
+
+
+class PlanProgressAssetsTests(unittest.TestCase):
+    def test_plan_progress_scripts_exist_and_are_executable(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        expected_scripts = [
+            repo_root / "scripts" / "check_release_boundary.py",
+            repo_root / "scripts" / "build_script_migration_map.py",
+            repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
+        ]
+        for script in expected_scripts:
+            self.assertTrue(script.exists(), msg=f"missing script: {script}")
+            self.assertTrue(os.access(script, os.X_OK), msg=f"script is not executable: {script}")
+
+    def test_plan_progress_docs_exist(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        expected_docs = [
+            repo_root / "docs" / "release_boundary.md",
+            repo_root / "docs" / "script_migration_whitelist.md",
+            repo_root / "docs" / "real_chain_minimal_acceptance.md",
+            repo_root / "docs" / "ui_prototype.md",
+            repo_root / "docs" / "script_migration_map.json",
+        ]
+        for doc in expected_docs:
+            self.assertTrue(doc.exists(), msg=f"missing doc: {doc}")
+
+    def test_real_chain_acceptance_script_uses_runtime_task_id_substitution(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh"
+        content = script.read_text(encoding="utf-8")
+        self.assertIn('python3 - "$REQ" "$TASK_ID" <<\'PY\'', content)
+        self.assertIn("task_id = sys.argv[2]", content)
+        self.assertIn('python3 - "$TASK_ID" <<\'PY\'', content)
+        self.assertIn("task_id = sys.argv[1]", content)
 
 
 class ModelCatalogTests(unittest.TestCase):

@@ -34,11 +34,15 @@ Implemented stages:
 - `agent-plan-json`:
   - validates `request.json` against `schemas/request.schema.json`
   - builds plan directly from structured request payload
+  - supports `generation_input` (e.g. `source_image`, `source_pdf`, `image_paths`) and propagates to `generate_candidates.args`
 - `agent-run`:
   - executes tool calls in sequence
-  - saves `plan.json`, `execution.json`, `tool_state.json`
+  - saves `plan.json`, `execution.json`, `tool_state.json`, `task_state.json`
   - saves machine-readable `decision_summary.json` (fallback usage/error code/retryability)
   - supports planner-provider routing and persists provider metadata in `design_spec.metadata`
+  - mirrors normalized artifacts into:
+    - `logging/<task_id>-<timestamp>/` (`task.json`, `plan.md`, `execution.log`, `data_report.json`, `model_report.json`, `filtering_report.json`, structured JSON artifacts)
+    - `result/<task_id>-<timestamp>/` (`target_structures.csv`, `metadata.json`, optional `report.md`)
 - `agent-run-json`:
   - validates `request.json` against schema
   - executes from structured request payload
@@ -46,6 +50,14 @@ Implemented stages:
 - decision summary validation script:
   - `scripts/validate_decision_summary.py` now reuses `validate_decision_summary_payload()`
   - single source of truth is `schemas/decision_summary.schema.json`
+- task-state validation script:
+  - `scripts/validate_task_state.py` now reuses `validate_task_state_payload()`
+  - single source of truth is `schemas/task_state.schema.json`
+- structured logging report validation scripts:
+  - `scripts/validate_data_report.py` -> `validate_data_report_payload()`
+  - `scripts/validate_model_report.py` -> `validate_model_report_payload()`
+  - `scripts/validate_filtering_report.py` -> `validate_filtering_report_payload()`
+  - single source of truth is `schemas/data_report.schema.json`, `schemas/model_report.schema.json`, `schemas/filtering_report.schema.json`
 - built-in mock LLM planner script:
   - `scripts/mock_llm_planner.py` can be used with `OLED_AGENT_LLM_PLANNER_CMD` for local/CI verification of `llm_v1` path
   - `MOCK_LLM_MODE` supports deterministic scenario simulation: `active|bad_json|bad_tools|bad_model|exit_nonzero`
@@ -62,6 +74,11 @@ Implemented stages:
 - explicit input CSV (if provided)
 - else reuse latest REINVENT4 artifact from external workspace
 - else deterministic local stub generation
+- supports image/PDF-conditioned generation args for adapters (MolScribe path):
+  - `source_image`, `source_images`
+  - `source_pdf`, `source_pdfs`
+  - `input_image`, `input_pdf`
+  - `paper_path`, `image_paths`, `pdf_paths`
 
 ### score_candidates
 - tries external Uni-Mol scorer only if explicitly enabled (`OLED_AGENT_USE_EXTERNAL_SCORER=1`)
@@ -102,3 +119,19 @@ Implemented stages:
 - real Uni-Mol and REINVENT4 execution is partially adapterized, but still guarded/fallback-first
 - `llm_v1` requires user-provided external command (`OLED_AGENT_LLM_PLANNER_CMD`) for real planning; invalid output/command failures auto-fallback to `rule_based_v1` with structured reason
 - no async queue/job scheduler yet for long-running training/generation tasks
+
+## J. Release and acceptance controls
+- release boundary check:
+  - `scripts/check_release_boundary.py`
+  - `make release-boundary`
+- workspace script migration mapping:
+  - `scripts/build_script_migration_map.py`
+  - `make script-map`
+  - output: `docs/script_migration_map.json`
+- real-chain minimal acceptance:
+  - `scripts/run_real_chain_acceptance_minimal.sh`
+  - `make real-chain-acceptance`
+  - verifies real-mode adapter wiring with local deterministic stubs
+- lightweight UI prototype smoke:
+  - `ui/app.py`
+  - `make ui-smoke`

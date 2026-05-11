@@ -4,13 +4,17 @@ WORKSPACE_ROOT ?= .
 TASK_ID ?= make_quickstart
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
-.PHONY: doctor llm-smoke llm-connectivity release-check
+.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map real-chain-acceptance ui-smoke
 
 help:
 	@echo "Available targets:"
 	@echo "  make llm-smoke           - verify LLM integration path with mock planner"
 	@echo "  make llm-connectivity    - run LLM connectivity diagnostic (command/backend)"
 	@echo "  make release-check       - run adapter-validate + quickstart + llm-smoke + doctor"
+	@echo "  make release-boundary    - check repo hygiene for release boundary"
+	@echo "  make script-map          - generate workspace script migration map"
+	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"
+	@echo "  make ui-smoke            - run lightweight UI smoke check"
 	@echo "  make quickstart          - run quickstart chain self-check"
 	@echo "  make adapter-validate    - validate adapter templates contract"
 	@echo "  make real-adapter-validate - validate real adapter shells (preflight/smoke)"
@@ -37,7 +41,16 @@ real-adapter-validate:
 		$(PYTHON) scripts/adapters/validate_adapter_contract.py --tool train_predictor --cmd "$(PYTHON) scripts/adapters/train_predictor_unimol_adapter.py" --workspace-root "$(WORKSPACE_ROOT)" --json
 	@OLED_AGENT_MINERU_ADAPTER_MODE=smoke \
 		$(PYTHON) scripts/adapters/validate_adapter_contract.py --tool generate_candidates --cmd "$(PYTHON) scripts/adapters/generate_candidates_mineru_adapter.py" --workspace-root "$(WORKSPACE_ROOT)" --json
-	@OLED_AGENT_UNIMOL_SCORE_MODE=smoke UNIMOL_REMOTE_HOST=stub_host UNIMOL_REMOTE_PY=stub_py UNIMOL_REMOTE_TMP_BASE=/tmp \
+	@OLED_AGENT_REINVENT4_ADAPTER_MODE=smoke \
+		$(PYTHON) scripts/adapters/validate_adapter_contract.py --tool generate_candidates --cmd "$(PYTHON) scripts/adapters/generate_candidates_reinvent4_adapter.py" --workspace-root "$(WORKSPACE_ROOT)" --json
+	@OLED_AGENT_REINVENT4_ADAPTER_MODE=real OLED_AGENT_REINVENT4_SOURCE_CSV="$(CURDIR)/configs/pipelines/demo_input.csv" \
+		OLED_AGENT_REINVENT4_PIPELINE_SCRIPT="$(CURDIR)/scripts/adapters/stub_reinvent4_pipeline.sh" \
+		OLED_AGENT_REINVENT4_RANKREADY_CSV="$(CURDIR)/runs/contract/reinvent4_real_stub_rankready.csv" \
+		$(PYTHON) scripts/adapters/validate_adapter_contract.py --tool generate_candidates --cmd "$(PYTHON) scripts/adapters/generate_candidates_reinvent4_adapter.py" --workspace-root "$(WORKSPACE_ROOT)" --json
+	@OLED_AGENT_MOLSCRIBE_ADAPTER_MODE=smoke \
+		$(PYTHON) scripts/adapters/validate_adapter_contract.py --tool generate_candidates --cmd "$(PYTHON) scripts/adapters/generate_candidates_molscribe_adapter.py" --workspace-root "$(WORKSPACE_ROOT)" --json
+	@OLED_AGENT_UNIMOL_SCORE_MODE=real OLED_AGENT_UNIMOL_SCORE_SCRIPT="$(CURDIR)/scripts/adapters/stub_unimol_score.py" \
+		UNIMOL_REMOTE_HOST=stub_host UNIMOL_REMOTE_PY=stub_py UNIMOL_REMOTE_TMP_BASE=/tmp \
 		$(PYTHON) scripts/adapters/validate_adapter_contract.py --tool score_candidates --cmd "$(PYTHON) scripts/adapters/score_candidates_unimol_adapter.py" --workspace-root "$(WORKSPACE_ROOT)" --json
 
 test-regressions:
@@ -55,6 +68,18 @@ llm-smoke:
 
 llm-connectivity:
 	@$(PYTHONPATH_ENV) $(PYTHON) -m oled_agent.cli llm-connectivity --workspace-root "$(WORKSPACE_ROOT)" --catalog "$(WORKSPACE_ROOT)/configs/models/catalog.json"
+
+release-boundary:
+	@$(PYTHON) scripts/check_release_boundary.py --workspace-root "$(WORKSPACE_ROOT)" --json
+
+script-map:
+	@$(PYTHON) scripts/build_script_migration_map.py --workspace-scripts-root "$(WORKSPACE_ROOT)/../scripts" --out "$(WORKSPACE_ROOT)/docs/script_migration_map.json"
+
+real-chain-acceptance:
+	@./scripts/run_real_chain_acceptance_minimal.sh "$(WORKSPACE_ROOT)" "$(TASK_ID)"
+
+ui-smoke:
+	@PYTHONPYCACHEPREFIX="$${TMPDIR:-/tmp}/agent4mat_pycache" $(PYTHON) -m py_compile ui/app.py
 
 release-check:
 	@$(MAKE) adapter-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"

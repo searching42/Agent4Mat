@@ -9,6 +9,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      run_real_chain_acceptance:
+        description: "Run real-chain minimal acceptance job"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
   push:
   pull_request:
 
@@ -180,10 +186,18 @@ jobs:
         run: PYTHONPATH=src python3 -m oled_agent.cli smoke --workspace-root .
 
       - name: Run agent end-to-end
-        run: PYTHONPATH=src python3 -m oled_agent.cli agent-run --workspace-root . --task-id ci_smoke_task --request "设计470nm附近且高PLQY分子"
+        run: |
+          mkdir -p runs/ci
+          PYTHONPATH=src python3 -m oled_agent.cli agent-run \
+            --workspace-root . \
+            --task-id ci_smoke_task \
+            --request "设计470nm附近且高PLQY分子" > runs/ci/agent_run_ci_smoke.json
 
-      - name: Validate decision summary schema
-        run: python3 scripts/validate_decision_summary.py runs/agent/ci_smoke_task/decision_summary.json
+      - name: Validate structured artifacts schema
+        run: |
+          python3 scripts/validate_run_artifacts.py \
+            --workspace-root . \
+            --result-json runs/ci/agent_run_ci_smoke.json
 
   external-chain-acceptance:
     name: acceptance external-adapter (optional)
@@ -217,4 +231,33 @@ jobs:
         with:
           name: external-chain-debug-artifacts
           path: runs/external_chain_debug
+          if-no-files-found: ignore
+
+  real-chain-minimal-acceptance:
+    name: acceptance real-chain-minimal (manual)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_real_chain_acceptance == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install CPU profile
+        run: ./scripts/install_profile.sh cpu
+
+      - name: Run minimal real-chain acceptance
+        run: make real-chain-acceptance TASK_ID=ci_real_chain_manual
+
+      - name: Upload real-chain acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-chain-minimal-artifacts
+          path: |
+            runs/ci/agent_run_real_chain_ci_real_chain_manual.json
+            runs/ci/request_real_chain_minimal_ci_real_chain_manual.json
           if-no-files-found: ignore

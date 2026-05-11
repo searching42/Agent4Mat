@@ -56,3 +56,7 @@ If publishing a GitHub release:
 1. Confirm tag points to intended commit.
 2. Confirm CI jobs all green on tag.
 3. Validate README quickstart on a fresh environment.
+
+## Successor release candidate
+- next baseline candidate doc:
+  - `docs/release_v0.1.0-rc1.md`

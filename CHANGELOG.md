@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Release Candidate
+- `v0.1.0-rc1` baseline prepared on `2026-05-11`.
+- baseline scope is anchored by:
+  - `815122e` (`release-boundary`/`script-map`/manual `real-chain` acceptance gate/UI smoke scaffold)
+  - `5e5ef35` (real adapter shells + structured artifact schemas + contract validators)
+- GitHub Actions status for `main`: all required jobs passed before RC tagging.
+
 ### Added
 - LLM connectivity diagnostics:
   - new CLI command `llm-connectivity`

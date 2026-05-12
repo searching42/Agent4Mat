@@ -4815,10 +4815,12 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("release-boundary:", content)
         self.assertIn("script-map:", content)
         self.assertIn("real-chain-acceptance:", content)
+        self.assertIn("real-chain-acceptance-real:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
+        self.assertIn("scripts/run_real_chain_acceptance_real.sh", content)
         self.assertIn("ui/app.py", content)
 
 
@@ -4829,6 +4831,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "check_release_boundary.py",
             repo_root / "scripts" / "build_script_migration_map.py",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
+            repo_root / "scripts" / "run_real_chain_acceptance_real.sh",
         ]
         for script in expected_scripts:
             self.assertTrue(script.exists(), msg=f"missing script: {script}")
@@ -4840,11 +4843,20 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "docs" / "release_boundary.md",
             repo_root / "docs" / "script_migration_whitelist.md",
             repo_root / "docs" / "real_chain_minimal_acceptance.md",
+            repo_root / "docs" / "real_chain_acceptance_real.md",
             repo_root / "docs" / "ui_prototype.md",
             repo_root / "docs" / "script_migration_map.json",
         ]
         for doc in expected_docs:
             self.assertTrue(doc.exists(), msg=f"missing doc: {doc}")
+
+    def test_real_chain_real_acceptance_script_forbids_stub_values(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "run_real_chain_acceptance_real.sh"
+        content = script.read_text(encoding="utf-8")
+        self.assertIn("stub_unimol_score.py", content)
+        self.assertIn("stub_reinvent4_pipeline.sh", content)
+        self.assertIn("stub-like value", content)
 
     def test_real_chain_acceptance_script_uses_runtime_task_id_substitution(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

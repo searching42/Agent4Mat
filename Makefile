@@ -4,7 +4,7 @@ WORKSPACE_ROOT ?= .
 TASK_ID ?= make_quickstart
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
-.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map real-chain-acceptance ui-smoke
+.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map real-chain-acceptance real-chain-acceptance-real ui-smoke
 
 help:
 	@echo "Available targets:"
@@ -14,6 +14,7 @@ help:
 	@echo "  make release-boundary    - check repo hygiene for release boundary"
 	@echo "  make script-map          - generate workspace script migration map"
 	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"
+	@echo "  make real-chain-acceptance-real - run non-stub real-chain acceptance (requires real env)"
 	@echo "  make ui-smoke            - run lightweight UI smoke check"
 	@echo "  make quickstart          - run quickstart chain self-check"
 	@echo "  make adapter-validate    - validate adapter templates contract"
@@ -77,6 +78,9 @@ script-map:
 
 real-chain-acceptance:
 	@./scripts/run_real_chain_acceptance_minimal.sh "$(WORKSPACE_ROOT)" "$(TASK_ID)"
+
+real-chain-acceptance-real:
+	@./scripts/run_real_chain_acceptance_real.sh "$(TASK_ID)" "设计470nm附近且高PLQY分子" "scripts/adapters/real_adapters_catalog.json" "runs/agent/$(TASK_ID)/external_debug.json"
 
 ui-smoke:
 	@PYTHONPYCACHEPREFIX="$${TMPDIR:-/tmp}/agent4mat_pycache" $(PYTHON) -m py_compile ui/app.py

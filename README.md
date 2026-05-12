@@ -75,6 +75,8 @@ Expected outcomes:
 - `make quickstart` ends with `[PASS] quickstart chain completed`.
 - `make doctor` reports environment diagnostics without fatal error for cpu profile.
 - `make real-adapter-validate` validates adapter contracts with deterministic smoke outputs plus REINVENT4 `real` mode through a local stub pipeline script (still not a proof of real remote runtime availability).
+ - real non-stub acceptance runbook:
+   - `docs/real_chain_acceptance_real.md`
 
 Release boundary + migration map:
 ```bash
@@ -85,6 +87,15 @@ make script-map
 Real-chain minimal acceptance (stub-backed real-mode logic):
 ```bash
 make real-chain-acceptance TASK_ID=real_chain_demo
+```
+
+Real-chain production acceptance (non-stub):
+```bash
+./scripts/run_real_chain_acceptance_real.sh \
+  accept_real_chain_001 \
+  "设计470nm附近且高PLQY分子" \
+  scripts/adapters/real_adapters_catalog.json \
+  runs/agent/accept_real_chain_001/external_debug.json
 ```
 
 Lightweight UI smoke check:
@@ -334,6 +345,8 @@ PYTHONPATH=src python3 -m oled_agent.cli agent-run-json \
 - optional real-chain minimal acceptance:
   - only runs on `workflow_dispatch` with input `run_real_chain_acceptance=true`
   - runs `make real-chain-acceptance` and uploads run artifacts
+- production non-stub acceptance:
+  - see `docs/real_chain_acceptance_real.md` and run manually in real runtime environment
 
 ## Agent artifacts
 `agent-run` writes:

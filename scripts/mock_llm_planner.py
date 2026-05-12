@@ -130,6 +130,32 @@ def main() -> int:
             {"name": "filter_and_rank", "args": {"topn": 10}},
             {"name": "make_report", "args": {}},
         ]
+    if mock_mode == "active_with_extra_args":
+        tool_calls = [
+            {"name": "list_models", "args": {"kind": "predictor", "unexpected": True}},
+            {"name": "list_models", "args": {"kind": "generator", "note": "extra"}},
+            {"name": "search_dataset", "args": {"preferences": ["master_database", "subsidiary_database"]}},
+            {
+                "name": "generate_candidates",
+                "args": {
+                    "generator_id": generator_id,
+                    "max_candidates": max_candidates,
+                    "constraints": request_payload.get("constraints") if isinstance(request_payload.get("constraints"), dict) else {},
+                    "mode": mode,
+                    "design_bias": "keep-diversity",
+                },
+            },
+            {
+                "name": "score_candidates",
+                "args": {
+                    "predictor_id": predictor_id,
+                    "targets": [str(t.get("property") or "") for t in targets],
+                    "extra_tag": "x",
+                },
+            },
+            {"name": "filter_and_rank", "args": {"topn": 10, "unused": 1}},
+            {"name": "make_report", "args": {"verbose": True}},
+        ]
     if mock_mode == "bad_model":
         predictor_id = "not_exists_predictor"
         generator_id = "not_exists_generator"

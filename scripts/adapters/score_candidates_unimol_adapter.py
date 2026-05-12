@@ -61,6 +61,17 @@ def _write_rows(path: Path, rows: List[Dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def _model_dir_for_property(prop: str, explicit_model_dir: str) -> str:
+    if explicit_model_dir:
+        return explicit_model_dir
+    env_key = f"UNIMOL_REMOTE_MODEL_DIR_{str(prop or '').strip().upper()}"
+    prop_model_dir = (os.environ.get(env_key) or "").strip()
+    if prop_model_dir:
+        return prop_model_dir
+    fallback = (os.environ.get("UNIMOL_REMOTE_MODEL_DIR") or "").strip()
+    return fallback
+
+
 def _merge_csvs(base_csv: Path, addon_csv: Path, key: str = "candidate_id") -> None:
     base_rows = _load_rows(base_csv)
     addon_rows = _load_rows(addon_csv)
@@ -213,7 +224,7 @@ def main() -> int:
             objective = str(spec.get("objective") or "target_window")
             target_center = float(spec.get("target_center") or (470.0 if prop == "lambda_em" else 0.5))
             sigma = float(spec.get("sigma") or (12.0 if prop == "lambda_em" else 0.2))
-            model_dir = str(spec.get("model_dir") or "").strip()
+            model_dir = _model_dir_for_property(prop, str(spec.get("model_dir") or "").strip())
 
             per_output = output_csv.with_name(f"{output_csv.stem}_{prop}.csv")
             cmd_parts = [

@@ -2843,6 +2843,75 @@ class RegressionTests(unittest.TestCase):
             kinds = sorted(c["args"].get("kind") for c in list_model_calls)
             self.assertEqual(kinds, ["generator", "predictor"])
 
+    def test_agent_plan_json_llm_provider_active_with_extra_tool_args(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            request_json = td_path / "request_llm_provider_extra_args.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_llm_provider_extra_args",
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 6},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            llm_script = repo_root / "scripts" / "mock_llm_planner.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-plan-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                    "--planner-provider",
+                    "llm_v1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(repo_root / "src"),
+                    "OLED_AGENT_LLM_PLANNER_CMD": f"{sys.executable} {llm_script}",
+                    "MOCK_LLM_MODE": "active_with_extra_args",
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            md = payload["design_spec"]["metadata"]
+            self.assertEqual(md["planner"], "llm_v1")
+            self.assertEqual(md["planner_provider_requested"], "llm_v1")
+            self.assertEqual(md["planner_provider_effective"], "llm_v1")
+            self.assertEqual(md["planner_provider_status"], "active")
+            self.assertNotIn("planner_provider_reason", md)
+            list_models_calls = [c for c in payload["tool_calls"] if c["name"] == "list_models"]
+            self.assertEqual(len(list_models_calls), 2)
+            self.assertEqual(sorted(c["args"].get("kind") for c in list_models_calls), ["generator", "predictor"])
+            by_name = {c["name"]: c for c in payload["tool_calls"]}
+            self.assertEqual(
+                by_name["generate_candidates"]["args"],
+                {"generator_id": "reinvent4_lambda_em_v2", "max_candidates": 6, "constraints": {}},
+            )
+            self.assertEqual(
+                by_name["score_candidates"]["args"],
+                {"predictor_id": "unimol_lambda_plqy_v1", "targets": ["plqy"]},
+            )
+            self.assertEqual(by_name["filter_and_rank"]["args"], {"topn": 10})
+            self.assertEqual(by_name["make_report"]["args"], {})
+
     def test_agent_plan_json_llm_provider_bad_model_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -5113,6 +5182,71 @@ class AdapterContractValidatorTests(unittest.TestCase):
         self.assertEqual(payload.get("tool"), "score_candidates")
         preview = payload.get("result_preview", {})
         self.assertEqual(preview.get("adapter"), "unimol_score_adapter_v1")
+
+    def test_validate_adapter_contract_real_unimol_score_prefers_property_model_dir_env(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "adapters" / "score_candidates_unimol_adapter.py"
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            scorer = td_path / "stub_score_expect_plqy_model.py"
+            expected_model_dir = "/remote/model/plqy_v2"
+            scorer.write_text(
+                (
+                    "import argparse, csv, json\n"
+                    "from pathlib import Path\n"
+                    "ap = argparse.ArgumentParser()\n"
+                    "ap.add_argument('input_csv')\n"
+                    "ap.add_argument('output_csv')\n"
+                    "ap.add_argument('--model-dir', default='')\n"
+                    "ap.add_argument('--property-name', default='plqy')\n"
+                    "ap.add_argument('--objective-type', default='maximize')\n"
+                    "ap.add_argument('--target-center', default='0.6')\n"
+                    "ap.add_argument('--sigma', default='0.2')\n"
+                    "args = ap.parse_args()\n"
+                    f"assert args.model_dir == {expected_model_dir!r}, f'bad model-dir: {{args.model_dir}}'\n"
+                    "rows = list(csv.DictReader(open(args.input_csv, 'r', encoding='utf-8')))\n"
+                    "for r in rows:\n"
+                    "  r[f\"{args.property_name}_pred\"] = '0.6600'\n"
+                    "  r[f\"{args.property_name}_score\"] = '0.660000'\n"
+                    "Path(args.output_csv).parent.mkdir(parents=True, exist_ok=True)\n"
+                    "with open(args.output_csv, 'w', encoding='utf-8', newline='') as f:\n"
+                    "  w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))\n"
+                    "  w.writeheader(); w.writerows(rows)\n"
+                    "print('ok')\n"
+                ),
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/adapters/validate_adapter_contract.py",
+                    "--tool",
+                    "score_candidates",
+                    "--cmd",
+                    f"{sys.executable} {script}",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--json",
+                ],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "OLED_AGENT_UNIMOL_SCORE_MODE": "real",
+                    "OLED_AGENT_UNIMOL_SCORE_SCRIPT": str(scorer),
+                    "UNIMOL_REMOTE_HOST": "stub_host",
+                    "UNIMOL_REMOTE_PY": "stub_py",
+                    "UNIMOL_REMOTE_TMP_BASE": "/tmp",
+                    "UNIMOL_REMOTE_MODEL_DIR": "/remote/model/default_lambda",
+                    "UNIMOL_REMOTE_MODEL_DIR_PLQY": expected_model_dir,
+                },
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("tool"), "score_candidates")
 
     def test_validate_adapter_contract_real_mineru_generate_smoke(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

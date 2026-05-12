@@ -22,7 +22,7 @@ from oled_agent.agent.specs import (
     PropertyTarget,
     ToolCall,
 )
-from oled_agent.agent.tool_contracts import supported_tool_names
+from oled_agent.agent.tool_contracts import supported_tool_names, tool_arg_contracts
 
 DEFAULT_PLANNER_PROVIDER = "rule_based_v1"
 LLM_PLANNER_PROVIDER = "llm_v1"
@@ -875,6 +875,18 @@ def _expand_load_model_catalog_alias(args: Dict[str, Any]) -> List[Dict[str, Any
 
 
 def _canonicalize_tool_call_name_and_args(name: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
+    contracts = tool_arg_contracts()
+
+    def _sanitize(tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+        spec = contracts.get(tool_name)
+        if not isinstance(spec, dict):
+            return dict(tool_args)
+        properties = spec.get("properties")
+        if not isinstance(properties, dict):
+            return dict(tool_args)
+        allowed = set(properties.keys())
+        return {k: v for k, v in tool_args.items() if k in allowed}
+
     normalized_name = str(name or "").strip()
     alias = normalized_name.lower()
     if alias in {
@@ -884,8 +896,9 @@ def _canonicalize_tool_call_name_and_args(name: str, args: Dict[str, Any]) -> Li
         "get_model_catalog",
         "load_models",
     }:
-        return _expand_load_model_catalog_alias(args)
-    return [{"name": normalized_name, "args": args}]
+        expanded = _expand_load_model_catalog_alias(args)
+        return [{"name": item["name"], "args": _sanitize(item["name"], item["args"])} for item in expanded]
+    return [{"name": normalized_name, "args": _sanitize(normalized_name, args)}]
 
 
 def _normalize_tool_call_items(raw_tool_calls: Any) -> List[Dict[str, Any]]:

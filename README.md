@@ -97,6 +97,7 @@ Real-chain production acceptance (non-stub):
   scripts/adapters/real_adapters_catalog.json \
   runs/agent/accept_real_chain_001/external_debug.json
 ```
+This acceptance path also enforces PLQY target semantics in percent scale (`0-100`).
 
 Lightweight UI smoke check:
 ```bash

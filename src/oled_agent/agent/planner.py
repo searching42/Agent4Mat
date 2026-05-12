@@ -66,9 +66,9 @@ def _infer_targets_from_text(request: str) -> List[PropertyTarget]:
                 name="plqy",
                 objective="maximize",
                 weight=0.25,
-                min_value=0.30,
-                target_center=0.60,
-                sigma=0.20,
+                min_value=30.0,
+                target_center=60.0,
+                sigma=20.0,
             )
         )
     if "lambda" in text or "发射" in request or "emission" in text:
@@ -89,10 +89,36 @@ def _infer_targets_from_text(request: str) -> List[PropertyTarget]:
     if not targets:
         targets = [
             PropertyTarget(name="lambda_em", objective="target_window", target_center=470.0, sigma=12.0, weight=0.7),
-            PropertyTarget(name="plqy", objective="maximize", target_center=0.60, sigma=0.20, weight=0.2, min_value=0.25),
+            PropertyTarget(name="plqy", objective="maximize", target_center=60.0, sigma=20.0, weight=0.2, min_value=25.0),
         ]
 
     return targets
+
+
+def _normalize_plqy_targets_in_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    normalized = dict(payload)
+    raw_targets = payload.get("targets")
+    if not isinstance(raw_targets, list):
+        return normalized, []
+
+    converted_fields: List[str] = []
+    out_targets: List[Dict[str, Any]] = []
+    for idx, target in enumerate(raw_targets):
+        if not isinstance(target, dict):
+            out_targets.append(target)  # keep original shape; schema validation handles type errors.
+            continue
+        item = dict(target)
+        prop = str(item.get("property") or "").strip().lower()
+        if prop == "plqy":
+            for field in ("target_value", "target_min", "target_max"):
+                value = item.get(field)
+                if isinstance(value, (int, float)) and 0.0 <= float(value) <= 1.0:
+                    item[field] = float(value) * 100.0
+                    converted_fields.append(f"targets[{idx}].{field}")
+        out_targets.append(item)
+
+    normalized["targets"] = out_targets
+    return normalized, converted_fields
 
 
 def _infer_constraints_from_text(request: str) -> ConstraintSpec:
@@ -392,6 +418,7 @@ def _build_rule_based_plan_from_request_payload(
     request_payload: Dict[str, Any],
     catalog_path: Path,
 ) -> AgentPlan:
+    request_payload, plqy_converted_fields = _normalize_plqy_targets_in_payload(request_payload)
     catalog = ModelCatalog.load(catalog_path)
 
     default_choice = _pick_default_model_ids(catalog)
@@ -424,6 +451,9 @@ def _build_rule_based_plan_from_request_payload(
         dataset_preferences=["master_database", "subsidiary_database"],
         metadata={"planner": "request_contract_v1"},
     )
+    if plqy_converted_fields:
+        design.metadata["plqy_scale"] = "percent_0_100"
+        design.metadata["plqy_scale_converted_fields"] = plqy_converted_fields
 
     calls = [
         ToolCall(name="list_models", args={"kind": "predictor"}),
@@ -1064,7 +1094,7 @@ def _build_plan_from_normalized_payload(
     summary: str,
     catalog_path: Path,
 ) -> AgentPlan:
-    payload = normalized_payload
+    payload, plqy_converted_fields = _normalize_plqy_targets_in_payload(normalized_payload)
     catalog = ModelCatalog.load(catalog_path)
 
     prefs = payload.get("model_preferences") or {}
@@ -1087,6 +1117,9 @@ def _build_plan_from_normalized_payload(
         dataset_preferences=["master_database", "subsidiary_database"],
         metadata={"planner": metadata_planner},
     )
+    if plqy_converted_fields:
+        design.metadata["plqy_scale"] = "percent_0_100"
+        design.metadata["plqy_scale_converted_fields"] = plqy_converted_fields
     calls = _tool_calls_from_payload(tool_calls_payload)
     # Merge request-level generation inputs into generate_candidates args for
     # image/pdf-conditioned generators (e.g., MolScribe) without requiring

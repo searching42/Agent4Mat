@@ -68,7 +68,7 @@ cat > "${REQUEST_JSON}" <<JSON
   "request_text": "${REQUEST_TEXT}",
   "mode": "fast_screen",
   "targets": [
-    {"property": "plqy", "objective": "maximize", "target_value": 0.6}
+    {"property": "plqy", "objective": "maximize", "target_value": 60.0}
   ],
   "budget": {"max_candidates": 8},
   "model_preferences": {
@@ -134,8 +134,10 @@ debug_path = pathlib.Path(sys.argv[2])
 result = json.loads(result_path.read_text(encoding="utf-8"))
 execution_path = pathlib.Path(result["execution_path"])
 decision_path = pathlib.Path(result["decision_summary_path"])
+plan_path = pathlib.Path(result["plan_path"])
 execution = json.loads(execution_path.read_text(encoding="utf-8"))
 decision = json.loads(decision_path.read_text(encoding="utf-8"))
+plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
 records = {r.get("name"): r.get("result", {}) for r in execution.get("records", []) if isinstance(r, dict)}
 gen = records.get("generate_candidates", {})
@@ -156,14 +158,31 @@ score_step = decision.get("score_step", {})
 if bool(score_step.get("used_fallback")):
     raise SystemExit("[FAIL] decision_summary reports used_fallback=true")
 
+targets = plan.get("design_spec", {}).get("targets", [])
+plqy_target = None
+if isinstance(targets, list):
+    for item in targets:
+        if isinstance(item, dict) and item.get("name") == "plqy":
+            plqy_target = item
+            break
+if not isinstance(plqy_target, dict):
+    raise SystemExit("[FAIL] plan missing plqy target in design_spec.targets")
+center = plqy_target.get("target_center")
+if not isinstance(center, (int, float)):
+    raise SystemExit(f"[FAIL] plqy target_center is not numeric: {center}")
+if not (1.0 < float(center) <= 100.0):
+    raise SystemExit(f"[FAIL] plqy target_center is not percent-scale (0-100 semantics): {center}")
+
 print(json.dumps({
     "status": "pass",
     "task_id": result.get("task_id"),
     "result_json": str(result_path),
+    "plan_path": str(plan_path),
     "execution_path": str(execution_path),
     "decision_summary_path": str(decision_path),
     "generate_adapter": gen_adapter,
     "score_adapter": score_adapter,
+    "plqy_target_center": float(center),
     "external_debug_json": str(debug_path),
 }, ensure_ascii=False))
 PY

@@ -2328,6 +2328,105 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(cp.returncode, 2)
             self.assertIn("[FAIL] invalid request json", cp.stdout)
 
+    def test_agent_plan_json_plqy_target_value_ratio_is_normalized_to_percent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            request_json = td_path / "request_plqy_ratio.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_plqy_ratio",
+                        "request_text": "design molecule",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 10},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_v1",
+                            "generator_id": "reinvent4_lambda_em_v2",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-plan-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            plqy_target = next(t for t in payload["design_spec"]["targets"] if t["name"] == "plqy")
+            self.assertEqual(plqy_target["target_center"], 60.0)
+            md = payload["design_spec"]["metadata"]
+            self.assertEqual(md.get("plqy_scale"), "percent_0_100")
+            self.assertIn("targets[0].target_value", md.get("plqy_scale_converted_fields", []))
+
+    def test_agent_plan_json_plqy_target_value_percent_kept_as_is(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            request_json = td_path / "request_plqy_percent.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_json_plqy_percent",
+                        "request_text": "design molecule",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
+                        "budget": {"max_candidates": 10},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_v1",
+                            "generator_id": "reinvent4_lambda_em_v2",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-plan-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            plqy_target = next(t for t in payload["design_spec"]["targets"] if t["name"] == "plqy")
+            self.assertEqual(plqy_target["target_center"], 60.0)
+            md = payload["design_spec"]["metadata"]
+            self.assertNotIn("plqy_scale_converted_fields", md)
+
     def test_agent_plan_json_llm_provider_preserves_generation_input_into_generate_candidates_args(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -4926,6 +5025,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("stub_unimol_score.py", content)
         self.assertIn("stub_reinvent4_pipeline.sh", content)
         self.assertIn("stub-like value", content)
+        self.assertIn('"target_value": 60.0', content)
+        self.assertIn("plqy target_center is not percent-scale", content)
 
     def test_real_chain_acceptance_script_uses_runtime_task_id_substitution(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -4935,6 +5036,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("task_id = sys.argv[2]", content)
         self.assertIn('python3 - "$TASK_ID" <<\'PY\'', content)
         self.assertIn("task_id = sys.argv[1]", content)
+        self.assertIn('"target_value": 60.0', content)
+        self.assertIn("plqy target_center is not percent-scale", content)
 
 
 class ModelCatalogTests(unittest.TestCase):

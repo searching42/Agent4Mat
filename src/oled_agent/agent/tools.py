@@ -523,7 +523,7 @@ def _deterministic_target_pred(smiles: str, target_name: str) -> float:
     if target_name == "lambda_em":
         return 360.0 + 260.0 * r
     if target_name == "plqy":
-        return max(0.0, min(1.0, 0.15 + 0.75 * r))
+        return max(0.0, min(100.0, 15.0 + 75.0 * r))
     return r
 
 
@@ -806,8 +806,8 @@ def _try_external_unimol_scoring(
 
         out_csv = scored_csv.parent / f"score_external_{prop}.csv"
         objective = str(spec.get("objective") or "target_window")
-        target_center = float(spec.get("target_center") or (470.0 if prop == "lambda_em" else 0.5))
-        sigma = float(spec.get("sigma") or (12.0 if prop == "lambda_em" else 0.2))
+        target_center = float(spec.get("target_center") or (470.0 if prop == "lambda_em" else 50.0))
+        sigma = float(spec.get("sigma") or (12.0 if prop == "lambda_em" else 20.0))
         model_dir = str(model_dirs.get(prop) or model_dirs.get("default") or "")
 
         cmd = [
@@ -882,8 +882,8 @@ def _local_fallback_scoring(
             if not name:
                 continue
             objective = str(spec.get("objective") or "target_window")
-            center = float(spec.get("target_center") or (470.0 if name == "lambda_em" else 0.5))
-            sigma = float(spec.get("sigma") or (12.0 if name == "lambda_em" else 0.2))
+            center = float(spec.get("target_center") or (470.0 if name == "lambda_em" else 50.0))
+            sigma = float(spec.get("sigma") or (12.0 if name == "lambda_em" else 20.0))
             pred = _deterministic_target_pred(smiles, name)
             score = _objective_score(pred, objective, center, sigma)
             row[f"{name}_pred"] = f"{pred:.6f}"

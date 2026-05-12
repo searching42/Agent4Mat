@@ -214,7 +214,7 @@ def main() -> int:
         if not specs:
             specs = [{"name": str(t), "objective": "target_window", "target_center": 470.0, "sigma": 12.0} for t in targets]
         if not specs:
-            specs = [{"name": "plqy", "objective": "maximize", "target_center": 0.6, "sigma": 0.2}]
+            specs = [{"name": "plqy", "objective": "maximize", "target_center": 60.0, "sigma": 20.0}]
 
         # Keep normalized working CSV as merge base.
         for spec in specs:
@@ -222,8 +222,8 @@ def main() -> int:
             if not prop:
                 continue
             objective = str(spec.get("objective") or "target_window")
-            target_center = float(spec.get("target_center") or (470.0 if prop == "lambda_em" else 0.5))
-            sigma = float(spec.get("sigma") or (12.0 if prop == "lambda_em" else 0.2))
+            target_center = float(spec.get("target_center") or (470.0 if prop == "lambda_em" else 50.0))
+            sigma = float(spec.get("sigma") or (12.0 if prop == "lambda_em" else 20.0))
             model_dir = _model_dir_for_property(prop, str(spec.get("model_dir") or "").strip())
 
             per_output = output_csv.with_name(f"{output_csv.stem}_{prop}.csv")

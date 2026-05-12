@@ -15,7 +15,7 @@ cat > "$REQ" <<'JSON'
   "request_text": "设计470nm附近且高PLQY分子",
   "mode": "fast_screen",
   "targets": [
-    {"property": "plqy", "objective": "maximize", "target_value": 0.6}
+    {"property": "plqy", "objective": "maximize", "target_value": 60.0}
   ],
   "budget": {"max_candidates": 8},
   "model_preferences": {
@@ -66,17 +66,27 @@ result_json = Path(f"runs/ci/agent_run_real_chain_{task_id}.json")
 result = json.loads(result_json.read_text(encoding="utf-8"))
 exec_path = Path(result["execution_path"])
 execution = json.loads(exec_path.read_text(encoding="utf-8"))
+plan_path = Path(result["plan_path"])
+plan = json.loads(plan_path.read_text(encoding="utf-8"))
 records = {r.get("name"): r.get("result", {}) for r in execution.get("records", [])}
 gen = records.get("generate_candidates", {})
 score = records.get("score_candidates", {})
 assert gen.get("adapter") == "reinvent4_generate_adapter_v1", gen
 assert score.get("adapter") == "unimol_score_adapter_v1", score
 assert "fallback_error" not in gen, gen
+targets = plan.get("design_spec", {}).get("targets", [])
+plqy_target = next((t for t in targets if isinstance(t, dict) and t.get("name") == "plqy"), None)
+assert isinstance(plqy_target, dict), "plan missing plqy target"
+center = plqy_target.get("target_center")
+assert isinstance(center, (int, float)), f"plqy target_center is not numeric: {center}"
+assert 1.0 < float(center) <= 100.0, f"plqy target_center is not percent-scale: {center}"
 print(json.dumps({
     "status": "pass",
     "task_id": task_id,
     "generate_adapter": gen.get("adapter"),
     "score_adapter": score.get("adapter"),
+    "plqy_target_center": float(center),
+    "plan_path": str(plan_path),
     "execution_path": str(exec_path),
 }, ensure_ascii=False))
 PY

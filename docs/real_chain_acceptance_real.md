@@ -7,6 +7,7 @@ Goal:
   - `generate_candidates`: `reinvent4_generate_adapter_v1`
   - `score_candidates`: `unimol_score_adapter_v1`
 - require non-fallback result in both execution and decision summary.
+- enforce PLQY target semantics in percent scale (`0-100`).
 
 ## Step 1. Real runtime precheck (detailed)
 
@@ -78,6 +79,7 @@ What this script does:
   - `score_candidates.adapter == unimol_score_adapter_v1`
   - no fallback in tool results
   - `decision_summary.score_step.used_fallback != true`
+  - `plan.design_spec.targets[name=plqy].target_center` is numeric and in percent-scale range (`1 < center <= 100`)
 
 ## Step 3. Evidence package (required for release gate)
 

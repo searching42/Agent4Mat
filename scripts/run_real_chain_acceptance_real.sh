@@ -187,4 +187,9 @@ print(json.dumps({
 }, ensure_ascii=False))
 PY
 
+info "[6b/6] collect release evidence package"
+python3 scripts/collect_real_chain_evidence.py \
+  --workspace-root . \
+  --result-json "${RESULT_JSON}"
+
 echo "[PASS] real chain acceptance succeeded: task_id=${TASK_ID}"

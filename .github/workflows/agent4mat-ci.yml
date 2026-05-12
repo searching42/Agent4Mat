@@ -252,6 +252,12 @@ jobs:
       - name: Run minimal real-chain acceptance
         run: make real-chain-acceptance TASK_ID=ci_real_chain_manual
 
+      - name: Collect real-chain release evidence
+        run: |
+          make real-chain-evidence \
+            TASK_ID=ci_real_chain_manual \
+            RESULT_JSON=runs/ci/agent_run_real_chain_ci_real_chain_manual.json
+
       - name: Upload real-chain acceptance artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -260,4 +266,16 @@ jobs:
           path: |
             runs/ci/agent_run_real_chain_ci_real_chain_manual.json
             runs/ci/request_real_chain_minimal_ci_real_chain_manual.json
+          if-no-files-found: ignore
+
+      - name: Upload real-chain evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-chain-evidence-artifacts
+          path: |
+            runs/agent/ci_real_chain_manual/release_evidence.json
+            runs/agent/ci_real_chain_manual/release_evidence.md
+            runs/agent/ci_real_chain_manual/acceptance_result.json
+            runs/agent/ci_real_chain_manual/external_debug.json
           if-no-files-found: ignore

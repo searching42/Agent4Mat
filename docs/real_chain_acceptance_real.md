@@ -80,12 +80,17 @@ What this script does:
   - no fallback in tool results
   - `decision_summary.score_step.used_fallback != true`
   - `plan.design_spec.targets[name=plqy].target_center` is numeric and in percent-scale range (`1 < center <= 100`)
+- collects release evidence package:
+  - `runs/agent/<task_id>/release_evidence.json`
+  - `runs/agent/<task_id>/release_evidence.md`
 
 ## Step 3. Evidence package (required for release gate)
 
 Collect and archive:
 - `runs/agent/<task_id>/acceptance_result.json`
 - `runs/agent/<task_id>/external_debug.json`
+- `runs/agent/<task_id>/release_evidence.json`
+- `runs/agent/<task_id>/release_evidence.md`
 - `runs/agent/<task_id>/decision_summary.json`
 - `runs/agent/<task_id>/task_state.json`
 - `runs/agent/<task_id>/execution.json`

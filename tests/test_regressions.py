@@ -4937,7 +4937,13 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("acceptance real-chain-minimal (manual)", content)
         self.assertIn("github.event.inputs.run_real_chain_acceptance == 'true'", content)
         self.assertIn("make real-chain-acceptance TASK_ID=ci_real_chain_manual", content)
+        self.assertIn("Collect real-chain release evidence", content)
+        self.assertIn("make real-chain-evidence", content)
+        self.assertIn("RESULT_JSON=runs/ci/agent_run_real_chain_ci_real_chain_manual.json", content)
         self.assertIn("real-chain-minimal-artifacts", content)
+        self.assertIn("real-chain-evidence-artifacts", content)
+        self.assertIn("release_evidence.json", content)
+        self.assertIn("release_evidence.md", content)
 
     def test_oled_agent_ci_validates_structured_reports_schema(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -4984,9 +4990,11 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("script-map:", content)
         self.assertIn("real-chain-acceptance:", content)
         self.assertIn("real-chain-acceptance-real:", content)
+        self.assertIn("real-chain-evidence:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
+        self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
         self.assertIn("scripts/run_real_chain_acceptance_real.sh", content)
         self.assertIn("ui/app.py", content)
@@ -4998,6 +5006,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
         expected_scripts = [
             repo_root / "scripts" / "check_release_boundary.py",
             repo_root / "scripts" / "build_script_migration_map.py",
+            repo_root / "scripts" / "collect_real_chain_evidence.py",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_real.sh",
         ]
@@ -5027,6 +5036,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("stub-like value", content)
         self.assertIn('"target_value": 60.0', content)
         self.assertIn("plqy target_center is not percent-scale", content)
+        self.assertIn("collect_real_chain_evidence.py", content)
 
     def test_real_chain_acceptance_script_uses_runtime_task_id_substitution(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -5038,6 +5048,102 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("task_id = sys.argv[1]", content)
         self.assertIn('"target_value": 60.0', content)
         self.assertIn("plqy target_center is not percent-scale", content)
+
+    def test_collect_real_chain_evidence_script_writes_release_evidence(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            run_dir = td_path / "runs" / "agent" / "demo_task"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            plan_path = run_dir / "plan.json"
+            execution_path = run_dir / "execution.json"
+            decision_path = run_dir / "decision_summary.json"
+            task_state_path = run_dir / "task_state.json"
+            result_path = run_dir / "acceptance_result.json"
+
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "summary": "demo",
+                        "design_spec": {
+                            "task_id": "demo_task",
+                            "request_text": "demo",
+                            "mode": "fast_screen",
+                            "targets": [{"name": "plqy", "objective": "maximize", "target_center": 60.0, "sigma": 20.0}],
+                            "budget": {"max_candidates": 8},
+                            "model_choice": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                            "metadata": {"planner": "request_contract_v1"},
+                        },
+                        "tool_calls": [
+                            {"name": "generate_candidates", "args": {"generator_id": "reinvent4_lambda_em_v2"}},
+                            {"name": "score_candidates", "args": {"predictor_id": "unimol_lambda_plqy_v1"}},
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            execution_path.write_text(
+                json.dumps(
+                    {
+                        "records": [
+                            {"name": "generate_candidates", "result": {"adapter": "reinvent4_generate_adapter_v1"}},
+                            {"name": "score_candidates", "result": {"adapter": "unimol_score_adapter_v1"}},
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            decision_path.write_text(
+                json.dumps({"score_step": {"used_fallback": False}}, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            task_state_path.write_text(json.dumps({"status": "success"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "task_id": "demo_task",
+                        "status": "success",
+                        "plan_path": str(plan_path),
+                        "execution_path": str(execution_path),
+                        "decision_summary_path": str(decision_path),
+                        "task_state_path": str(task_state_path),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            script = repo_root / "scripts" / "collect_real_chain_evidence.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(repo_root),
+                    "--result-json",
+                    str(result_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            evidence_json = run_dir / "release_evidence.json"
+            evidence_md = run_dir / "release_evidence.md"
+            self.assertTrue(evidence_json.exists())
+            self.assertTrue(evidence_md.exists())
+            evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["overall"], "pass")
+            self.assertTrue(evidence["checks"]["plqy_center_percent_scale"])
 
 
 class ModelCatalogTests(unittest.TestCase):

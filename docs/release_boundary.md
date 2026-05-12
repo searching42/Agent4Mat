@@ -27,3 +27,6 @@ Pass criteria:
 3. stage by topic (`contract`, `adapter`, `docs`, `ci`)
 4. run `make release-check`
 5. create tagged release commit
+6. for real-chain release evidence, run:
+   - `make real-chain-acceptance-real TASK_ID=<task_id>`
+   - or `make real-chain-evidence TASK_ID=<task_id>` on an existing acceptance run

@@ -98,6 +98,14 @@ Real-chain production acceptance (non-stub):
   runs/agent/accept_real_chain_001/external_debug.json
 ```
 This acceptance path also enforces PLQY target semantics in percent scale (`0-100`).
+It also writes release evidence files:
+- `runs/agent/<task_id>/release_evidence.json`
+- `runs/agent/<task_id>/release_evidence.md`
+
+Collect evidence later from an existing acceptance run:
+```bash
+make real-chain-evidence TASK_ID=accept_real_chain_001
+```
 
 Lightweight UI smoke check:
 ```bash

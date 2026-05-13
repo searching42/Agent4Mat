@@ -8,6 +8,7 @@ Goal:
   - `score_candidates`: `unimol_score_adapter_v1`
 - require non-fallback result in both execution and decision summary.
 - enforce PLQY target semantics in percent scale (`0-100`).
+- enforce strict CLI guard via `--require-real-adapters`.
 
 ## Step 1. Real runtime precheck (detailed)
 
@@ -73,6 +74,7 @@ What this script does:
 - runs `doctor` + `external-preflight`
 - runs `external-connectivity-debug` for evidence
 - executes `agent-run-json` with real adapter catalog
+  - includes `--require-real-adapters` (fail-fast on any fallback/local adapter)
 - validates structured artifacts (`decision_summary/task_state/data_report/model_report/filtering_report`)
 - enforces:
   - `generate_candidates.adapter == reinvent4_generate_adapter_v1`
@@ -83,6 +85,7 @@ What this script does:
 - collects release evidence package:
   - `runs/agent/<task_id>/release_evidence.json`
   - `runs/agent/<task_id>/release_evidence.md`
+  - `runs/agent/<task_id>/strict_acceptance_summary.json`
 
 ## Step 3. Evidence package (required for release gate)
 
@@ -91,6 +94,7 @@ Collect and archive:
 - `runs/agent/<task_id>/external_debug.json`
 - `runs/agent/<task_id>/release_evidence.json`
 - `runs/agent/<task_id>/release_evidence.md`
+- `runs/agent/<task_id>/strict_acceptance_summary.json`
 - `runs/agent/<task_id>/decision_summary.json`
 - `runs/agent/<task_id>/task_state.json`
 - `runs/agent/<task_id>/execution.json`

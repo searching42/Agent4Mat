@@ -116,7 +116,8 @@ info "[4/6] run agent real-chain task"
 PYTHONPATH=src python3 -m oled_agent.cli agent-run-json \
   --workspace-root . \
   --catalog "${CATALOG}" \
-  --request-json "${REQUEST_JSON}" > "${RESULT_JSON}"
+  --request-json "${REQUEST_JSON}" \
+  --require-real-adapters > "${RESULT_JSON}"
 
 info "[5/6] validate structured artifacts"
 python3 scripts/validate_run_artifacts.py \
@@ -173,7 +174,7 @@ if not isinstance(center, (int, float)):
 if not (1.0 < float(center) <= 100.0):
     raise SystemExit(f"[FAIL] plqy target_center is not percent-scale (0-100 semantics): {center}")
 
-print(json.dumps({
+evidence = {
     "status": "pass",
     "task_id": result.get("task_id"),
     "result_json": str(result_path),
@@ -184,12 +185,35 @@ print(json.dumps({
     "score_adapter": score_adapter,
     "plqy_target_center": float(center),
     "external_debug_json": str(debug_path),
-}, ensure_ascii=False))
+}
+strict_path = result_path.parent / "strict_acceptance_summary.json"
+strict_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(json.dumps(evidence, ensure_ascii=False))
 PY
 
 info "[6b/6] collect release evidence package"
 python3 scripts/collect_real_chain_evidence.py \
   --workspace-root . \
   --result-json "${RESULT_JSON}"
+
+info "[6c/6] summarize strict no-fallback acceptance evidence"
+python3 - "${RESULT_JSON}" <<'PY'
+import json
+import pathlib
+import sys
+
+result_path = pathlib.Path(sys.argv[1])
+summary_path = result_path.parent / "strict_acceptance_summary.json"
+if not summary_path.exists():
+    raise SystemExit(f"[FAIL] strict acceptance summary not found: {summary_path}")
+summary = json.loads(summary_path.read_text(encoding="utf-8"))
+print(json.dumps({
+    "status": "pass",
+    "task_id": summary.get("task_id"),
+    "strict_summary": str(summary_path),
+    "release_evidence_json": str(result_path.parent / "release_evidence.json"),
+    "release_evidence_md": str(result_path.parent / "release_evidence.md"),
+}, ensure_ascii=False))
+PY
 
 echo "[PASS] real chain acceptance succeeded: task_id=${TASK_ID}"

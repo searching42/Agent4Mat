@@ -132,6 +132,10 @@ Implemented stages:
   - `scripts/run_real_chain_acceptance_minimal.sh`
   - `make real-chain-acceptance`
   - verifies real-mode adapter wiring with local deterministic stubs
+- real-chain strict no-fallback acceptance:
+  - `scripts/run_real_chain_acceptance_real.sh`
+  - `make real-chain-acceptance-real`
+  - enforces `--require-real-adapters` and persists `strict_acceptance_summary.json`
 - lightweight UI prototype smoke:
   - `ui/app.py`
   - `make ui-smoke`

@@ -5611,6 +5611,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "docs" / "script_migration_whitelist.md",
             repo_root / "docs" / "real_chain_minimal_acceptance.md",
             repo_root / "docs" / "real_chain_acceptance_real.md",
+            repo_root / "docs" / "real_chain_no_fallback_quickstart.md",
             repo_root / "docs" / "ui_prototype.md",
             repo_root / "docs" / "script_migration_map.json",
         ]
@@ -5627,6 +5628,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn('"target_value": 60.0', content)
         self.assertIn("plqy target_center is not percent-scale", content)
         self.assertIn("collect_real_chain_evidence.py", content)
+        self.assertIn("--require-real-adapters", content)
+        self.assertIn("strict_acceptance_summary.json", content)
 
     def test_real_chain_acceptance_script_uses_runtime_task_id_substitution(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

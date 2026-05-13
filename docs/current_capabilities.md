@@ -136,6 +136,10 @@ Implemented stages:
   - `scripts/run_real_chain_acceptance_real.sh`
   - `make real-chain-acceptance-real`
   - enforces `--require-real-adapters` and persists `strict_acceptance_summary.json`
+- real-chain reproducibility baseline (3 consecutive strict runs):
+  - `scripts/run_real_chain_baseline.sh`
+  - `make real-chain-baseline`
+  - persists aggregate `runs/agent/<task_id>/baseline_summary.json`
 - lightweight UI prototype smoke:
   - `ui/app.py`
   - `make ui-smoke`

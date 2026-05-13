@@ -104,6 +104,29 @@ Also record:
 - env snapshot (redacted keys/tokens)
 - commit SHA
 
+## Step 4. Baseline reproducibility (3 consecutive runs)
+
+For release-level baseline stability, run:
+
+```bash
+make real-chain-baseline TASK_ID=real_chain_baseline_001
+```
+
+This command executes strict real acceptance 3 times:
+- `real_chain_baseline_001_r1`
+- `real_chain_baseline_001_r2`
+- `real_chain_baseline_001_r3`
+
+And aggregates into:
+- `runs/agent/real_chain_baseline_001/baseline_summary.json`
+
+Pass criteria:
+- all three runs succeed
+- each run contains:
+  - `strict_acceptance_summary.json`
+  - `release_evidence.json`
+- aggregate `baseline_summary.json` has `status=pass`
+
 ## Common failure mapping
 
 - `missing required env`

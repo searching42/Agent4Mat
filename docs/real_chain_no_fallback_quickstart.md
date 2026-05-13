@@ -52,3 +52,18 @@ This command already enforces:
 - `runs/agent/<task_id>/strict_acceptance_summary.json`
 - `runs/agent/<task_id>/release_evidence.json`
 - `runs/agent/<task_id>/release_evidence.md`
+
+## 5) Baseline reproducibility (x3)
+
+For release baseline, run strict acceptance 3 times continuously:
+
+```bash
+make real-chain-baseline TASK_ID=real_chain_baseline_001
+```
+
+Expected:
+- command exits `0`
+- each run `runs/agent/<task_id>_r1|r2|r3/` has strict and release evidence artifacts
+- aggregate summary exists:
+  - `runs/agent/<task_id>/baseline_summary.json`
+  - status is `pass`

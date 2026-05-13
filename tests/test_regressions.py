@@ -5584,6 +5584,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("script-map:", content)
         self.assertIn("real-chain-acceptance:", content)
         self.assertIn("real-chain-acceptance-real:", content)
+        self.assertIn("real-chain-baseline:", content)
         self.assertIn("real-chain-evidence:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
@@ -5591,6 +5592,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
         self.assertIn("scripts/run_real_chain_acceptance_real.sh", content)
+        self.assertIn("scripts/run_real_chain_baseline.sh", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
         self.assertIn("scripts/run_molscribe_input_smoke.sh", content)
@@ -5610,6 +5612,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_real.sh",
+            repo_root / "scripts" / "run_real_chain_baseline.sh",
         ]
         for script in expected_scripts:
             self.assertTrue(script.exists(), msg=f"missing script: {script}")
@@ -5641,6 +5644,16 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("collect_real_chain_evidence.py", content)
         self.assertIn("--require-real-adapters", content)
         self.assertIn("strict_acceptance_summary.json", content)
+
+    def test_real_chain_baseline_script_runs_three_strict_acceptance_rounds(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "run_real_chain_baseline.sh"
+        content = script.read_text(encoding="utf-8")
+        self.assertIn('RUN_COUNT="${4:-3}"', content)
+        self.assertIn("./scripts/run_real_chain_acceptance_real.sh", content)
+        self.assertIn("strict_acceptance_summary.json", content)
+        self.assertIn("release_evidence.json", content)
+        self.assertIn("baseline_summary.json", content)
 
     def test_real_chain_acceptance_script_uses_runtime_task_id_substitution(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

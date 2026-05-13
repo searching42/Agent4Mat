@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import builtins
+import re
 import socket
 import subprocess
 import sys
@@ -5417,6 +5418,18 @@ class WorkflowPolicyTests(unittest.TestCase):
             return local
         return repo_root.parent / ".github" / "workflows" / "oled-agent-ci.yml"
 
+    @staticmethod
+    def _extract_job_block(content: str, job_name: str) -> str:
+        marker = f"\n  {job_name}:\n"
+        start = content.find(marker)
+        if start < 0:
+            raise AssertionError(f"job not found: {job_name}")
+        start += 1  # keep two-space indentation for regex anchor
+        pattern = re.compile(r"^  [a-zA-Z0-9_-]+:\n", flags=re.MULTILINE)
+        m = pattern.search(content, pos=start + len(marker))
+        end = m.start() if m else len(content)
+        return content[start:end]
+
     def test_oled_agent_ci_external_acceptance_only_manual_trigger(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)
@@ -5479,9 +5492,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)
         content = workflow.read_text(encoding="utf-8")
-        section_start = content.index("make-entrypoint-guard:")
-        section_end = content.index("  acceptance-cpu-mock:", section_start)
-        section = content[section_start:section_end]
+        section = self._extract_job_block(content, "make-entrypoint-guard")
         self.assertIn("make-entrypoint-guard:", content)
         self.assertIn("Run make entrypoints", section)
         self.assertIn("make release-check TASK_ID=ci_release_check", section)

@@ -100,6 +100,6 @@ As of `2026-05-01`, external scoring reaches the remote transport stage but fail
 - `fallback_retryable`: `true`
 
 Action:
-- verify SSH trust/network reachability to `lbh@211.86.155.63`
+- verify SSH trust/network reachability to your configured `UNIMOL_REMOTE_HOST`
 - verify remote path permissions under `/home/lbh/work/wk1/openclaw_sync`
 - migrate to explicit `UNIMOL_REMOTE_*` env vars in deployment scripts

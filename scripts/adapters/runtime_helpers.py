@@ -5,17 +5,11 @@ import json
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
 
-@dataclass
 class AdapterFailure(Exception):
-    code: str
-    message: str
-    details: Dict[str, Any]
-
     def __init__(self, *, code: str, message: str, details: Dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code

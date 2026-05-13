@@ -14,9 +14,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DEFAULT_UNIMOL_REMOTE_HOST = "lbh@211.86.155.63"
-DEFAULT_UNIMOL_REMOTE_PY = "/home/lbh/miniconda3/envs/unimol/bin/python"
-DEFAULT_UNIMOL_REMOTE_TMP_BASE = "/home/lbh/work/wk1/openclaw_sync"
+# Legacy defaults are intentionally non-sensitive placeholders and can be
+# overridden explicitly via env for local compatibility.
+DEFAULT_UNIMOL_REMOTE_HOST = os.environ.get("OLED_AGENT_DEFAULT_UNIMOL_REMOTE_HOST", "<user@host>")
+DEFAULT_UNIMOL_REMOTE_PY = os.environ.get("OLED_AGENT_DEFAULT_UNIMOL_REMOTE_PY", "<remote_python_path>")
+DEFAULT_UNIMOL_REMOTE_TMP_BASE = os.environ.get(
+    "OLED_AGENT_DEFAULT_UNIMOL_REMOTE_TMP_BASE",
+    "<remote_writable_tmp_dir>",
+)
 
 
 def _now_iso() -> str:
@@ -660,8 +665,6 @@ def _redact_sensitive_text(text: str) -> str:
     api_key = str(os.environ.get("OLED_AGENT_LLM_API_KEY", "") or "")
     if api_key:
         out = out.replace(api_key, "***")
-    # Redact common bearer token patterns if upstream echoes headers.
-    out = out.replace("Bearer ", "Bearer ")
     # Lightweight token masking after Bearer prefix.
     marker = "Bearer "
     pos = out.find(marker)

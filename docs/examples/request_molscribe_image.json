@@ -6,7 +6,7 @@
     {
       "property": "plqy",
       "objective": "maximize",
-      "target_value": 0.6
+      "target_value": 60.0
     }
   ],
   "budget": {

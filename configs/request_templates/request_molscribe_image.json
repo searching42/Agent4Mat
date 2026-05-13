@@ -1,6 +1,6 @@
 {
-  "task_id": "task_molscribe_pdf_example",
-  "request_text": "从论文PDF提取候选分子并筛选高PLQY",
+  "task_id": "task_molscribe_image_template",
+  "request_text": "从论文图片提取候选分子并筛选高PLQY",
   "mode": "fast_screen",
   "targets": [
     {
@@ -17,6 +17,6 @@
     "generator_id": "molscribe_generator_real_v1"
   },
   "generation_input": {
-    "source_pdf": "/abs/path/to/paper.pdf"
+    "source_image": "/abs/path/to/figure.png"
   }
 }

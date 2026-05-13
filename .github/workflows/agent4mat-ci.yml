@@ -108,6 +108,9 @@ jobs:
       - name: Install CPU profile
         run: ./scripts/install_profile.sh cpu
 
+      - name: Validate request templates
+        run: make request-templates-validate
+
       - name: Run acceptance (cpu-mock)
         run: make release-check TASK_ID=ci_accept_cpu_mock
 

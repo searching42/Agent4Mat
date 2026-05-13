@@ -928,6 +928,12 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("--filtering-report", content)
         self.assertIn("[PASS] quickstart chain completed", content)
 
+    def test_makefile_release_check_includes_request_template_validation(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("request-templates-validate", makefile)
+        self.assertIn("@$(MAKE) request-templates-validate WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", makefile)
+
     def test_env_example_uses_tmp_base_name(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         env_example = repo_root / ".env.example"
@@ -963,6 +969,8 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("external-preflight", troubleshoot)
         self.assertIn("external-connectivity-debug", troubleshoot)
         self.assertIn("mineru_not_configured", troubleshoot)
+        self.assertIn("molscribe_input_missing", troubleshoot)
+        self.assertIn("make request-templates-validate", troubleshoot)
 
     def test_gitattributes_enforces_lf_for_cross_platform_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1005,6 +1013,54 @@ class RegressionTests(unittest.TestCase):
         pdf_payload = json.loads(pdf_json.read_text(encoding="utf-8"))
         validate_request_payload(payload=image_payload, workspace_root=repo_root)
         validate_request_payload(payload=pdf_payload, workspace_root=repo_root)
+
+        image_target = image_payload.get("targets", [{}])[0]
+        pdf_target = pdf_payload.get("targets", [{}])[0]
+        self.assertEqual(image_target.get("target_value"), 60.0)
+        self.assertEqual(pdf_target.get("target_value"), 60.0)
+
+    def test_configs_request_templates_are_contract_valid(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        templates_dir = repo_root / "configs" / "request_templates"
+        image_json = templates_dir / "request_molscribe_image.json"
+        pdf_json = templates_dir / "request_molscribe_pdf.json"
+        templates_readme = templates_dir / "README.md"
+        self.assertTrue(image_json.exists(), msg=f"Missing request template: {image_json}")
+        self.assertTrue(pdf_json.exists(), msg=f"Missing request template: {pdf_json}")
+        self.assertTrue(templates_readme.exists(), msg=f"Missing request template readme: {templates_readme}")
+
+        image_payload = json.loads(image_json.read_text(encoding="utf-8"))
+        pdf_payload = json.loads(pdf_json.read_text(encoding="utf-8"))
+        validate_request_payload(payload=image_payload, workspace_root=repo_root)
+        validate_request_payload(payload=pdf_payload, workspace_root=repo_root)
+
+        image_target = image_payload.get("targets", [{}])[0]
+        pdf_target = pdf_payload.get("targets", [{}])[0]
+        self.assertEqual(image_target.get("target_value"), 60.0)
+        self.assertEqual(pdf_target.get("target_value"), 60.0)
+
+    def test_request_templates_validate_script_reports_pass(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        cp = subprocess.run(
+            [
+                sys.executable,
+                "scripts/validate_request_examples.py",
+                "--workspace-root",
+                str(repo_root),
+                "--examples-dir",
+                "configs/request_templates",
+                "--json",
+            ],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+        )
+        self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+        payload = json.loads(cp.stdout)
+        self.assertEqual(payload.get("failed"), 0)
+        self.assertGreaterEqual(int(payload.get("checked", 0)), 2)
 
     def test_request_schema_rejects_invalid_mode(self) -> None:
         with tempfile.TemporaryDirectory() as td:

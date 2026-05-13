@@ -60,6 +60,9 @@ Fix:
 
 Symptoms:
 - `mineru_not_configured`
+- `molscribe_input_missing`
+- `molscribe_input_not_found`
+- `molscribe_runtime_missing` / `molscribe_checkpoint_missing`
 - preflight/smoke returns but no real execution
 
 Meaning:
@@ -67,12 +70,36 @@ Meaning:
   - `OLED_AGENT_UNIMOL_TRAIN_MODE=preflight`
   - `OLED_AGENT_UNIMOL_SCORE_MODE=preflight`
   - `OLED_AGENT_MINERU_ADAPTER_MODE=preflight`
+  - `OLED_AGENT_MOLSCRIBE_ADAPTER_MODE=preflight`
 
 Fix:
 - for contract smoke: set `smoke`
-- for real infra execution: set `real` (Uni-Mol adapters only) with full env/runtime ready
+- for real infra execution:
+  - Uni-Mol: set `OLED_AGENT_UNIMOL_*_MODE=real` and complete remote env
+  - MolScribe: set `OLED_AGENT_MOLSCRIBE_ADAPTER_MODE=real`, provide `generation_input` and runtime
+    - command mode: `OLED_AGENT_MOLSCRIBE_CMD`
+    - native mode: `OLED_AGENT_MOLSCRIBE_CHECKPOINT` (optional `OLED_AGENT_MOLSCRIBE_DEVICE`)
 
-## 5) Request/plan schema errors
+## 5) MolScribe/MinerU input path issues
+
+Symptoms:
+- `RequestValidationError` on `$.generation_input.*`
+- `molscribe_input_missing` / `molscribe_input_not_found`
+- MinerU remains in preflight and does not generate real candidates
+
+Checks:
+```bash
+make request-templates-validate
+cat configs/request_templates/request_molscribe_image.json
+```
+
+Fix:
+- prefer canonical request templates under `configs/request_templates/`
+- ensure `generation_input` paths exist on local filesystem
+- keep PLQY target value in percent scale (`0-100`, e.g. `60.0`)
+- remember current MinerU adapter is contract/preflight+smoke only (no bundled real path)
+
+## 6) Request/plan schema errors
 
 Symptoms:
 - `RequestValidationError` with JSON path
@@ -81,7 +108,7 @@ Fix:
 - validate request payload fields against `schemas/request.schema.json`
 - validate tool calls against `schemas/plan.schema.json`
 
-## 6) Fast reset checklist
+## 7) Fast reset checklist
 1. `./scripts/install_profile.sh cpu`
 2. `make release-check`
 3. `make real-adapter-validate`

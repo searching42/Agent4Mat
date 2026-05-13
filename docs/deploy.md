@@ -106,7 +106,7 @@ Minimal request examples:
   "task_id": "task_molscribe_image",
   "request_text": "从分子结构图像提取并筛选",
   "mode": "fast_screen",
-  "targets": [{"property": "plqy", "objective": "maximize"}],
+  "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
   "budget": {"max_candidates": 10},
   "model_preferences": {
     "predictor_id": "unimol_lambda_plqy_real_v1",
@@ -123,7 +123,7 @@ Minimal request examples:
   "task_id": "task_molscribe_pdf",
   "request_text": "从论文PDF提取并筛选",
   "mode": "fast_screen",
-  "targets": [{"property": "plqy", "objective": "maximize"}],
+  "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
   "budget": {"max_candidates": 10},
   "model_preferences": {
     "predictor_id": "unimol_lambda_plqy_real_v1",
@@ -137,6 +137,11 @@ Minimal request examples:
 ```bash
 export OLED_AGENT_MOLSCRIBE_PDF_EXTRACT_CMD="python3 your_pdf_extract_script.py"
 ```
+
+Recommended request templates:
+- `configs/request_templates/request_molscribe_image.json`
+- `configs/request_templates/request_molscribe_pdf.json`
+- schema guard: `make request-templates-validate`
 
 Modes:
 - `OLED_AGENT_UNIMOL_TRAIN_MODE=preflight|smoke|real`

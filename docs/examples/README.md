@@ -1,10 +1,14 @@
 # Example Requests (MolScribe)
 
 This folder contains contract-valid request payload examples for image/PDF-conditioned generation via MolScribe.
+For repository-level template entrypoint, prefer `configs/request_templates/`.
 
 ## Files
 - `request_molscribe_image.json`: image input via `generation_input.source_image`
 - `request_molscribe_pdf.json`: PDF input via `generation_input.source_pdf`
+
+PLQY semantic note:
+- `target_value` uses percent scale (`0-100`), e.g. `60.0` for high-PLQY target.
 
 ## How to run (smoke)
 ```bash

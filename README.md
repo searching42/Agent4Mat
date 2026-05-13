@@ -44,6 +44,7 @@ Make targets:
 - `make release-check`
 - `make release-boundary`
 - `make script-map`
+- `make request-templates-validate`
 - `make quickstart`
 - `make doctor`
 - `make llm-connectivity`
@@ -270,7 +271,7 @@ MolScribe structured input example (`request.json`):
   "task_id": "task_molscribe_input",
   "request_text": "从论文图像提取分子并筛选高PLQY",
   "mode": "fast_screen",
-  "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+  "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
   "budget": {"max_candidates": 20},
   "model_preferences": {
     "predictor_id": "unimol_lambda_plqy_real_v1",
@@ -288,7 +289,7 @@ MolScribe PDF input example (`request_pdf.json`):
   "task_id": "task_molscribe_pdf",
   "request_text": "从论文PDF提取分子并筛选高PLQY",
   "mode": "fast_screen",
-  "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+  "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
   "budget": {"max_candidates": 20},
   "model_preferences": {
     "predictor_id": "unimol_lambda_plqy_real_v1",
@@ -308,6 +309,15 @@ PYTHONPATH=src python3 -m oled_agent.cli agent-run-json \
   --catalog configs/models/catalog.json \
   --request-json /abs/path/to/request_pdf.json \
   --planner-provider llm_v1
+```
+
+Canonical request templates:
+- `configs/request_templates/request_molscribe_image.json`
+- `configs/request_templates/request_molscribe_pdf.json`
+
+Validate templates against request schema:
+```bash
+make request-templates-validate
 ```
 
 ## Agent layer

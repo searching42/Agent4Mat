@@ -1,5 +1,5 @@
 {
-  "task_id": "task_molscribe_pdf_example",
+  "task_id": "task_molscribe_pdf_template",
   "request_text": "从论文PDF提取候选分子并筛选高PLQY",
   "mode": "fast_screen",
   "targets": [

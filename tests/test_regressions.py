@@ -1068,10 +1068,14 @@ class RegressionTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         script = repo_root / "scripts" / "check_step_mode.py"
         content = script.read_text(encoding="utf-8")
-        self.assertIn('run_step("clean_dataset"', content)
-        self.assertIn('run_step("score_candidates"', content)
-        self.assertIn('run_step("train_predictor"', content)
+        self.assertIn("run_step_success(", content)
+        self.assertIn('operation="clean_dataset"', content)
+        self.assertIn('operation="score_candidates"', content)
+        self.assertIn('operation="train_predictor"', content)
         self.assertIn("step_tool_state.json", content)
+        self.assertIn("score_without_candidates_unexpected_success", content)
+        self.assertIn("train_nonzero_unexpected_success", content)
+        self.assertIn("OLED_AGENT_TRAIN_CMD", content)
 
     def test_makefile_release_check_includes_request_template_validation(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

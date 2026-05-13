@@ -62,6 +62,8 @@
 ## Real baseline artifact template (manual archive)
 - for strict real-chain baseline runs, use:
   - `make real-chain-baseline TASK_ID=<base_task_id>`
+- to package all baseline evidence into one directory, use:
+  - `make real-chain-baseline-archive TASK_ID=<base_task_id>`
 - archive the following paths as one release evidence bundle:
   - `runs/agent/<base_task_id>/baseline_summary.json`
   - `runs/agent/<base_task_id>_r1/strict_acceptance_summary.json`
@@ -75,3 +77,6 @@
   - all three runs show:
     - `generate_adapter = reinvent4_generate_adapter_v1`
     - `score_adapter = unimol_score_adapter_v1`
+- packaged output:
+  - `runs/archive/<base_task_id>/archive_manifest.json`
+  - `runs/archive/<base_task_id>/archive_manifest.md`

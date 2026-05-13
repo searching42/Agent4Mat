@@ -1131,7 +1131,9 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(ci_doc.exists())
         ci = ci_doc.read_text(encoding="utf-8")
         self.assertIn("make real-chain-baseline TASK_ID=<base_task_id>", ci)
+        self.assertIn("make real-chain-baseline-archive TASK_ID=<base_task_id>", ci)
         self.assertIn("baseline_summary.json", ci)
+        self.assertIn("archive_manifest.json", ci)
         self.assertIn("strict_acceptance_summary.json", ci)
         self.assertIn("release_evidence.json", ci)
 
@@ -1166,6 +1168,7 @@ class RegressionTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         boundary = (repo_root / "docs" / "release_boundary.md").read_text(encoding="utf-8")
         self.assertIn("make real-chain-baseline TASK_ID=<base_task_id>", boundary)
+        self.assertIn("make real-chain-baseline-archive TASK_ID=<base_task_id>", boundary)
         self.assertIn("baseline_summary.json", boundary)
 
     def test_docs_examples_molscribe_requests_are_contract_valid(self) -> None:
@@ -5618,11 +5621,13 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("real-chain-acceptance:", content)
         self.assertIn("real-chain-acceptance-real:", content)
         self.assertIn("real-chain-baseline:", content)
+        self.assertIn("real-chain-baseline-archive:", content)
         self.assertIn("real-chain-evidence:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
+        self.assertIn("scripts/archive_real_chain_baseline.py", content)
         self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
         self.assertIn("scripts/run_real_chain_acceptance_real.sh", content)
         self.assertIn("scripts/run_real_chain_baseline.sh", content)
@@ -5642,6 +5647,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "check_release_boundary.py",
             repo_root / "scripts" / "build_script_migration_map.py",
             repo_root / "scripts" / "collect_real_chain_evidence.py",
+            repo_root / "scripts" / "archive_real_chain_baseline.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_real.sh",
@@ -5794,6 +5800,118 @@ class PlanProgressAssetsTests(unittest.TestCase):
             evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
             self.assertEqual(evidence["overall"], "pass")
             self.assertTrue(evidence["checks"]["plqy_center_percent_scale"])
+
+    def test_archive_real_chain_baseline_script_writes_archive_manifest(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            base_task_id = "demo_baseline"
+            base_dir = td_path / "runs" / "agent" / base_task_id
+            base_dir.mkdir(parents=True, exist_ok=True)
+
+            runs = []
+            for idx in (1, 2, 3):
+                run_task_id = f"{base_task_id}_r{idx}"
+                run_dir = td_path / "runs" / "agent" / run_task_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+
+                strict_path = run_dir / "strict_acceptance_summary.json"
+                result_path = run_dir / "acceptance_result.json"
+                release_json = run_dir / "release_evidence.json"
+                release_md = run_dir / "release_evidence.md"
+                plan_path = run_dir / "plan.json"
+                execution_path = run_dir / "execution.json"
+                decision_path = run_dir / "decision_summary.json"
+                task_state_path = run_dir / "task_state.json"
+                tool_state_path = run_dir / "tool_state.json"
+
+                strict_path.write_text(
+                    json.dumps(
+                        {
+                            "status": "pass",
+                            "task_id": run_task_id,
+                            "generate_adapter": "reinvent4_generate_adapter_v1",
+                            "score_adapter": "unimol_score_adapter_v1",
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                plan_path.write_text(json.dumps({"summary": "ok"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                execution_path.write_text(json.dumps({"records": []}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                decision_path.write_text(json.dumps({"score_step": {"used_fallback": False}}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                task_state_path.write_text(json.dumps({"status": "success"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                tool_state_path.write_text(json.dumps({"status": "ok"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                release_json.write_text(json.dumps({"overall": "pass"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                release_md.write_text("# evidence\n", encoding="utf-8")
+                result_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": run_task_id,
+                            "status": "success",
+                            "plan_path": str(plan_path),
+                            "execution_path": str(execution_path),
+                            "decision_summary_path": str(decision_path),
+                            "task_state_path": str(task_state_path),
+                            "tool_state_path": str(tool_state_path),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                runs.append(
+                    {
+                        "task_id": run_task_id,
+                        "strict_summary": str(strict_path.relative_to(td_path)),
+                        "result_json": str(result_path.relative_to(td_path)),
+                        "release_evidence_json": str(release_json.relative_to(td_path)),
+                    }
+                )
+
+            baseline_summary = base_dir / "baseline_summary.json"
+            baseline_summary.write_text(
+                json.dumps(
+                    {"status": "pass", "base_task_id": base_task_id, "run_count": 3, "runs": runs, "failures": []},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out_dir = td_path / "runs" / "archive" / base_task_id
+            script = repo_root / "scripts" / "archive_real_chain_baseline.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--base-task-id",
+                    base_task_id,
+                    "--out-dir",
+                    str(out_dir),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            manifest_json = out_dir / "archive_manifest.json"
+            manifest_md = out_dir / "archive_manifest.md"
+            self.assertTrue(manifest_json.exists())
+            self.assertTrue(manifest_md.exists())
+            manifest = json.loads(manifest_json.read_text(encoding="utf-8"))
+            self.assertEqual(manifest.get("status"), "pass")
+            self.assertEqual(int(manifest.get("missing_required_count", -1)), 0)
+            copied = manifest.get("copied", [])
+            self.assertTrue(isinstance(copied, list) and len(copied) >= 10)
+            self.assertTrue((out_dir / "files" / "runs" / "agent" / base_task_id / "baseline_summary.json").exists())
 
 
 class ModelCatalogTests(unittest.TestCase):

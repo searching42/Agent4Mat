@@ -7,7 +7,7 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate input-smoke
 .PHONY: intake-contract-guard step-mode-guard web-evidence-guard real-no-fallback-gate
-.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-evidence ui-smoke
+.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-evidence ui-smoke
 
 help:
 	@echo "Available targets:"
@@ -25,6 +25,7 @@ help:
 	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"
 	@echo "  make real-chain-acceptance-real - run non-stub real-chain acceptance (requires real env)"
 	@echo "  make real-chain-baseline   - run strict real-chain acceptance repeatedly (default x3)"
+	@echo "  make real-chain-baseline-archive - archive baseline artifacts into one bundle"
 	@echo "  make real-chain-evidence   - collect release evidence from acceptance_result.json"
 	@echo "  make ui-smoke            - run lightweight UI smoke check"
 	@echo "  make quickstart          - run quickstart chain self-check"
@@ -113,6 +114,9 @@ real-chain-acceptance-real:
 
 real-chain-baseline:
 	@./scripts/run_real_chain_baseline.sh "$(TASK_ID)" "设计470nm附近且高PLQY分子" "scripts/adapters/real_adapters_catalog.json" "3"
+
+real-chain-baseline-archive:
+	@$(PYTHON) scripts/archive_real_chain_baseline.py --workspace-root "$(WORKSPACE_ROOT)" --base-task-id "$(TASK_ID)"
 
 real-chain-evidence:
 	@$(PYTHON) scripts/collect_real_chain_evidence.py --workspace-root "$(WORKSPACE_ROOT)" --result-json "$(RESULT_JSON)"

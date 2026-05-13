@@ -45,13 +45,22 @@ Make targets:
 - `make release-boundary`
 - `make script-map`
 - `make request-templates-validate`
+- `make step-request-templates-validate`
 - `make input-smoke`
+- `make intake-contract-guard`
+- `make step-mode-guard`
+- `make web-evidence-guard`
+- `make real-no-fallback-gate`
 - `make quickstart`
 - `make doctor`
 - `make llm-connectivity`
 - `make adapter-validate`
 - `make real-adapter-validate`
 - `make real-chain-acceptance`
+- `make real-chain-baseline`
+- `make real-chain-baseline-archive`
+- `make real-chain-baseline-archive-tgz`
+- `make real-chain-release-bundle-check`
 - `make ui-smoke`
 - `make test-regressions`
 - `make test-adapters`
@@ -109,6 +118,65 @@ Collect evidence later from an existing acceptance run:
 make real-chain-evidence TASK_ID=accept_real_chain_001
 ```
 
+## Recommended execution paths (single source of truth)
+### Path A: strict request.json entry (fastest for CI and reproducibility)
+```bash
+PYTHONPATH=src python3 -m oled_agent.cli agent-run-json \
+  --workspace-root . \
+  --catalog configs/models/catalog.json \
+  --request-json /abs/path/to/request.json
+```
+
+### Path B: task.v2 intake -> approve -> run -> resume
+```bash
+# 1) intake draft + missing questions (+web evidence)
+PYTHONPATH=src python3 -m oled_agent.cli agent-intake \
+  --workspace-root . \
+  --task-id task_v2_demo \
+  --request "设计470nm附近且高PLQY分子"
+
+# 2) edit runs/agent/task_v2_demo/task.draft.json, then approve
+PYTHONPATH=src python3 -m oled_agent.cli agent-approve \
+  --workspace-root . \
+  --task-json runs/agent/task_v2_demo/task.draft.json
+
+# 3) execute from approved request
+PYTHONPATH=src python3 -m oled_agent.cli agent-run-json \
+  --workspace-root . \
+  --catalog configs/models/catalog.json \
+  --request-json runs/agent/task_v2_demo/request_from_task.json
+
+# 4) idempotent resume (skip completed steps, continue from first unfinished)
+PYTHONPATH=src python3 -m oled_agent.cli agent-resume \
+  --workspace-root . \
+  --task-id task_v2_demo \
+  --catalog configs/models/catalog.json
+```
+
+### Path C: single-step operation mode
+```bash
+PYTHONPATH=src python3 -m oled_agent.cli agent-run-step-json \
+  --workspace-root . \
+  --catalog configs/models/catalog.json \
+  --step-request-json configs/request_templates/step_request_clean_dataset.json
+```
+Supported `operation` values:
+- `retrieve_candidate_data`
+- `clean_dataset`
+- `prepare_train_data`
+- `train_predictor`
+- `generate_candidates`
+- `score_candidates`
+- `filter_and_rank`
+- `make_report`
+
+### Path D: strict real-chain release evidence bundle
+```bash
+make real-chain-baseline TASK_ID=<base_task_id>
+make real-chain-baseline-archive-tgz TASK_ID=<base_task_id>
+make real-chain-release-bundle-check TASK_ID=<base_task_id>
+```
+
 Lightweight UI smoke check:
 ```bash
 make ui-smoke
@@ -123,6 +191,11 @@ make ui-smoke
 - `agent-run`: plan + execute tools, save plan/execution/state artifacts
 - `agent-plan-json`: build plan from schema-validated request JSON
 - `agent-run-json`: plan + execute from schema-validated request JSON
+- `agent-intake`: build task.v2 draft + missing info questions + web evidence artifact
+- `agent-approve`: validate/approve task.v2 and emit `task.json` + `request_from_task.json` + `plan.md`
+- `agent-run-step`: execute one operation from `task.v2` payload
+- `agent-run-step-json`: execute one operation from `step_request` payload
+- `agent-resume`: idempotent resume from `runs/agent/<task_id>`, skipping already successful prefix steps
 
 Command split:
 - `agent-plan` / `agent-run`: natural language request entry

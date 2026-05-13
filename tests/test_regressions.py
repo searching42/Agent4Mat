@@ -1185,6 +1185,16 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("make real-chain-release-bundle-check TASK_ID=<base_task_id>", boundary)
         self.assertIn("baseline_summary.json", boundary)
 
+    def test_readme_includes_task_v2_and_step_mode_paths(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        readme = (repo_root / "README.md").read_text(encoding="utf-8")
+        self.assertIn("agent-intake", readme)
+        self.assertIn("agent-approve", readme)
+        self.assertIn("agent-run-step-json", readme)
+        self.assertIn("agent-resume", readme)
+        self.assertIn("single-step operation mode", readme)
+        self.assertIn("real-chain-release-bundle-check", readme)
+
     def test_docs_examples_molscribe_requests_are_contract_valid(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         examples_dir = repo_root / "docs" / "examples"

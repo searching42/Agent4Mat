@@ -142,4 +142,5 @@ Implemented stages:
   - persists aggregate `runs/agent/<task_id>/baseline_summary.json`
 - lightweight UI prototype smoke:
   - `ui/app.py`
+  - supports full pipeline / single-step / intake / task artifact summary panels
   - `make ui-smoke`

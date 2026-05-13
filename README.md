@@ -186,6 +186,19 @@ Lightweight UI smoke check:
 make ui-smoke
 ```
 
+Launch local UI prototype (requires `flask`):
+```bash
+pip install flask
+make ui-run
+```
+Open: `http://127.0.0.1:8787`
+
+UI prototype API coverage:
+- `POST /api/run` -> `agent-run-json` (full pipeline)
+- `POST /api/run-step` -> `agent-run-step-json` (single operation)
+- `POST /api/intake` -> `agent-intake` (task clarification + evidence)
+- `GET /api/task/<task_id>/summary` -> artifact/status preview
+
 ## CLI commands
 - `run`: run pipeline from config
 - `doctor`: check environment/dependencies/GPU tooling

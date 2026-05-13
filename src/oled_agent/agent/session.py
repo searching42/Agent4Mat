@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from oled_agent.agent.executor import execute_plan, save_execution_result
+from oled_agent.agent.executor import execute_plan, execute_plan_with_resume, save_execution_result
 from oled_agent.agent.planner import (
     DEFAULT_PLANNER_PROVIDER,
     build_plan,
@@ -63,6 +63,16 @@ def _build_run_label(task_id: str) -> str:
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _load_json_if_exists(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _copy_if_exists(src: Optional[Path], dst: Path) -> bool:
@@ -192,6 +202,45 @@ def _first_record(records: list[dict], name: str) -> Dict[str, Any]:
 def _safe_status(value: Any) -> str:
     text = str(value or "").strip()
     return text or "not_run"
+
+
+def _json_like_equal(left: Any, right: Any) -> bool:
+    return json.dumps(left, ensure_ascii=False, sort_keys=True) == json.dumps(right, ensure_ascii=False, sort_keys=True)
+
+
+def _is_resume_record_compatible(record: Dict[str, Any], planned_call: Dict[str, Any]) -> bool:
+    if str(record.get("name") or "") != str(planned_call.get("name") or ""):
+        return False
+    if str(record.get("status") or "") != "success":
+        return False
+    planned_args = planned_call.get("args")
+    if not isinstance(planned_args, dict):
+        planned_args = {}
+    record_args = record.get("args")
+    if not isinstance(record_args, dict):
+        return False
+    for key, value in planned_args.items():
+        if key not in record_args:
+            return False
+        if not _json_like_equal(record_args.get(key), value):
+            return False
+    return True
+
+
+def _resume_success_prefix(plan_dict: Dict[str, Any], execution_payload: Dict[str, Any]) -> int:
+    calls = plan_dict.get("tool_calls") if isinstance(plan_dict.get("tool_calls"), list) else []
+    records = execution_payload.get("records") if isinstance(execution_payload.get("records"), list) else []
+    matched = 0
+    limit = min(len(calls), len(records))
+    for idx in range(limit):
+        call = calls[idx]
+        rec = records[idx]
+        if not isinstance(call, dict) or not isinstance(rec, dict):
+            break
+        if not _is_resume_record_compatible(rec, call):
+            break
+        matched += 1
+    return matched
 
 
 def _build_structured_reports(
@@ -600,6 +649,7 @@ def execute_request_from_payload(
     request_payload: Dict[str, Any],
     planner_provider: str = DEFAULT_PLANNER_PROVIDER,
     catalog_path: Optional[Path] = None,
+    resume_existing: bool = False,
 ) -> Dict[str, Any]:
     validate_request_payload(payload=request_payload, workspace_root=workspace_root)
     catalog = (catalog_path or (workspace_root / DEFAULT_CATALOG)).resolve()
@@ -611,16 +661,39 @@ def execute_request_from_payload(
     plan_dict = plan.to_dict()
     task_id = str(plan.design_spec.task_id)
 
+    resume_from_index = 0
+    resume_records = None
+    existing_state: Dict[str, Any] = {}
+    if bool(resume_existing):
+        out_dir = (workspace_root / DEFAULT_AGENT_OUT / task_id).resolve()
+        existing_exec = _load_json_if_exists(out_dir / "execution.json")
+        existing_state_payload = _load_json_if_exists(out_dir / "tool_state.json")
+        if isinstance(existing_state_payload, dict):
+            existing_state = dict(existing_state_payload)
+        if isinstance(existing_exec, dict):
+            resume_from_index = _resume_success_prefix(plan_dict=plan_dict, execution_payload=existing_exec)
+            existing_records = existing_exec.get("records")
+            if isinstance(existing_records, list) and resume_from_index > 0:
+                resume_records = [r for r in existing_records[:resume_from_index] if isinstance(r, dict)]
+
     tool_ctx = ToolContext(
         workspace_root=workspace_root.resolve(),
         catalog_path=catalog,
         task_id=task_id,
-        state={},
+        state=existing_state if bool(resume_existing) else {},
     )
-    result = execute_plan(plan, tool_ctx)
+    if bool(resume_existing):
+        result = execute_plan_with_resume(
+            plan,
+            tool_ctx,
+            resume_records=resume_records,
+            resume_from_index=resume_from_index,
+        )
+    else:
+        result = execute_plan(plan, tool_ctx)
     result_dict = result.to_dict()
     tool_state = dict(tool_ctx.state)
-    return _persist_agent_artifacts(
+    out = _persist_agent_artifacts(
         workspace_root=workspace_root,
         task_id=task_id,
         plan_dict=plan_dict,
@@ -629,3 +702,8 @@ def execute_request_from_payload(
         tool_state=tool_state,
         request_payload=request_payload,
     )
+    if bool(resume_existing):
+        out["resumed"] = True
+        out["resume_skipped_steps"] = int(resume_from_index)
+        out["resume_total_steps"] = len(plan_dict.get("tool_calls", []) if isinstance(plan_dict, dict) else [])
+    return out

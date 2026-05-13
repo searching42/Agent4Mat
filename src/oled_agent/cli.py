@@ -478,6 +478,7 @@ def main() -> None:
                 request_payload=req_payload,
                 planner_provider=args.planner_provider,
                 catalog_path=catalog,
+                resume_existing=True,
             )
             print(json.dumps(result_exec, ensure_ascii=False, indent=2))
             if bool(getattr(args, "require_real_adapters", False)):
@@ -497,6 +498,7 @@ def main() -> None:
                 request_payload=req_payload,
                 planner_provider=args.planner_provider,
                 catalog_path=catalog,
+                resume_existing=True,
             )
             print(json.dumps(result_exec, ensure_ascii=False, indent=2))
             if bool(getattr(args, "require_real_adapters", False)):

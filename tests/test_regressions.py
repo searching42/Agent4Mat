@@ -1136,6 +1136,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("make real-chain-baseline TASK_ID=<base_task_id>", ci)
         self.assertIn("make real-chain-baseline-archive TASK_ID=<base_task_id>", ci)
         self.assertIn("make real-chain-baseline-archive-tgz TASK_ID=<base_task_id>", ci)
+        self.assertIn("make real-chain-release-bundle-check TASK_ID=<base_task_id>", ci)
         self.assertIn("baseline_summary.json", ci)
         self.assertIn("archive_manifest.json", ci)
         self.assertIn("runs/archive/<base_task_id>.tar.gz", ci)
@@ -1175,6 +1176,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("make real-chain-baseline TASK_ID=<base_task_id>", boundary)
         self.assertIn("make real-chain-baseline-archive TASK_ID=<base_task_id>", boundary)
         self.assertIn("make real-chain-baseline-archive-tgz TASK_ID=<base_task_id>", boundary)
+        self.assertIn("make real-chain-release-bundle-check TASK_ID=<base_task_id>", boundary)
         self.assertIn("baseline_summary.json", boundary)
 
     def test_docs_examples_molscribe_requests_are_contract_valid(self) -> None:
@@ -2097,6 +2099,240 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("questions", payload)
             self.assertTrue(Path(payload["task_draft_path"]).exists())
             self.assertTrue(Path(payload["web_evidence_path"]).exists())
+
+    def test_agent_resume_skips_all_steps_when_task_already_successful(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_id = f"task_resume_already_success_{td_path.name[-8:]}"
+            request_json = td_path / "request_resume_success.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
+                        "budget": {"max_candidates": 5},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_v1",
+                            "generator_id": "reinvent4_lambda_em_v2",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env = {**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"}
+            cp_run = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(cp_run.returncode, 0, msg=cp_run.stderr + cp_run.stdout)
+            run_payload = json.loads(cp_run.stdout)
+            exec1 = json.loads(Path(run_payload["execution_path"]).read_text(encoding="utf-8"))
+            records1 = exec1.get("records", [])
+            self.assertTrue(isinstance(records1, list) and len(records1) > 0)
+
+            cp_resume = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-resume",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--task-id",
+                    task_id,
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(cp_resume.returncode, 0, msg=cp_resume.stderr + cp_resume.stdout)
+            resume_payload = json.loads(cp_resume.stdout)
+            self.assertTrue(bool(resume_payload.get("resumed")))
+            self.assertEqual(int(resume_payload.get("resume_skipped_steps", -1)), len(records1))
+            exec2 = json.loads(Path(resume_payload["execution_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(exec2.get("records", []), records1)
+            self.assertEqual(exec2.get("status"), "success")
+
+    def test_agent_resume_continues_from_first_unfinished_step(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_id = f"task_resume_partial_{td_path.name[-8:]}"
+            counter_path = td_path / "gen_counter.txt"
+
+            generate_script = td_path / "gen_count.py"
+            generate_script.write_text(
+                (
+                    "import csv,json,os,sys\n"
+                    "from pathlib import Path\n"
+                    "payload=json.loads(sys.stdin.read())\n"
+                    "counter=Path(os.environ.get('OLED_AGENT_TEST_GEN_COUNTER',''))\n"
+                    "if str(counter):\n"
+                    "  prev=0\n"
+                    "  if counter.exists():\n"
+                    "    try:\n"
+                    "      prev=int(counter.read_text(encoding='utf-8').strip() or '0')\n"
+                    "    except Exception:\n"
+                    "      prev=0\n"
+                    "  counter.write_text(str(prev+1), encoding='utf-8')\n"
+                    "out=payload['output_csv']\n"
+                    "with open(out,'w',encoding='utf-8',newline='') as f:\n"
+                    "  w=csv.DictWriter(f,fieldnames=['candidate_id','smiles'])\n"
+                    "  w.writeheader(); w.writerow({'candidate_id':'cand_000001','smiles':'c1ccccc1'})\n"
+                    "print(json.dumps({'status':'success','adapter':'resume_test_generate','output_csv':out}))\n"
+                ),
+                encoding="utf-8",
+            )
+            score_ok_script = td_path / "score_ok.py"
+            score_ok_script.write_text(
+                (
+                    "import csv,json,sys\n"
+                    "payload=json.loads(sys.stdin.read())\n"
+                    "inp=payload['input_csv']; out=payload['output_csv']\n"
+                    "rows=list(csv.DictReader(open(inp,'r',encoding='utf-8')))\n"
+                    "for r in rows:\n"
+                    "  r['plqy_pred']='0.81'; r['plqy_score']='0.81'\n"
+                    "with open(out,'w',encoding='utf-8',newline='') as f:\n"
+                    "  w=csv.DictWriter(f,fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)\n"
+                    "print(json.dumps({'status':'success','adapter':'resume_test_score','output_csv':out}))\n"
+                ),
+                encoding="utf-8",
+            )
+
+            catalog_json = td_path / "catalog_resume.json"
+            catalog_payload = {
+                "models": [
+                    {
+                        "id": "pred_resume",
+                        "kind": "predictor",
+                        "backend": "mock_predictor",
+                        "task_types": ["plqy"],
+                        "runtime_profile": "cpu",
+                        "params": {"adapters": {"score_candidates_cmd": f"{sys.executable} {score_ok_script}"}},
+                    },
+                    {
+                        "id": "gen_resume",
+                        "kind": "generator",
+                        "backend": "mock_generator",
+                        "task_types": ["molecule_generation"],
+                        "runtime_profile": "cpu",
+                        "params": {"adapters": {"generate_candidates_cmd": f"{sys.executable} {generate_script}"}},
+                    },
+                ]
+            }
+            catalog_json.write_text(json.dumps(catalog_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            request_json = td_path / "request_resume_partial.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
+                        "budget": {"max_candidates": 6},
+                        "model_preferences": {
+                            "predictor_id": "pred_resume",
+                            "generator_id": "gen_resume",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env = {
+                **os.environ,
+                "PYTHONPATH": str(repo_root / "src"),
+                "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0",
+                "OLED_AGENT_TEST_GEN_COUNTER": str(counter_path),
+            }
+
+            cp_run = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(catalog_json),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(cp_run.returncode, 0, msg=cp_run.stderr + cp_run.stdout)
+            run_payload = json.loads(cp_run.stdout)
+            self.assertEqual(counter_path.read_text(encoding="utf-8").strip(), "1")
+
+            execution_path = Path(run_payload["execution_path"])
+            execution_payload = json.loads(execution_path.read_text(encoding="utf-8"))
+            records = execution_payload.get("records", [])
+            self.assertTrue(isinstance(records, list) and len(records) >= 3)
+            partial_records = records[:-2]
+            execution_payload["records"] = partial_records
+            execution_payload["status"] = "failed"
+            execution_path.write_text(json.dumps(execution_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            cp_resume = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-resume",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--task-id",
+                    task_id,
+                    "--catalog",
+                    str(catalog_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(cp_resume.returncode, 0, msg=cp_resume.stderr + cp_resume.stdout)
+            resume_payload = json.loads(cp_resume.stdout)
+            self.assertTrue(bool(resume_payload.get("resumed")))
+            self.assertEqual(int(resume_payload.get("resume_skipped_steps", -1)), len(partial_records))
+            self.assertEqual(counter_path.read_text(encoding="utf-8").strip(), "1")
+
+            execution = json.loads(Path(resume_payload["execution_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(execution.get("status"), "success")
+            final_records = execution.get("records", [])
+            self.assertEqual(len(final_records), len(records))
+            self.assertEqual(final_records[: len(partial_records)], partial_records)
+            self.assertTrue(all(isinstance(r, dict) and r.get("status") == "success" for r in final_records))
 
     def test_agent_run_step_happy_path_clean_dataset_writes_standard_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -5668,17 +5904,20 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("real-chain-baseline:", content)
         self.assertIn("real-chain-baseline-archive:", content)
         self.assertIn("real-chain-baseline-archive-tgz:", content)
+        self.assertIn("real-chain-release-bundle-check:", content)
         self.assertIn("real-chain-evidence:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/archive_real_chain_baseline.py", content)
+        self.assertIn("scripts/check_real_chain_release_bundle.py", content)
         self.assertIn("step-request-templates-validate:", content)
         self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
         self.assertIn("scripts/run_real_chain_acceptance_real.sh", content)
         self.assertIn("scripts/run_real_chain_baseline.sh", content)
         self.assertIn("archive_real_chain_baseline.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --tar-gz", content)
+        self.assertIn("check_real_chain_release_bundle.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --require-tar-gz", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
         self.assertIn("scripts/run_molscribe_input_smoke.sh", content)
@@ -5693,6 +5932,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         expected_scripts = [
             repo_root / "scripts" / "check_release_boundary.py",
+            repo_root / "scripts" / "check_real_chain_release_bundle.py",
             repo_root / "scripts" / "build_script_migration_map.py",
             repo_root / "scripts" / "collect_real_chain_evidence.py",
             repo_root / "scripts" / "archive_real_chain_baseline.py",
@@ -6062,6 +6302,74 @@ class PlanProgressAssetsTests(unittest.TestCase):
                 names = tf.getnames()
             self.assertIn(f"{base_task_id}/archive_manifest.json", names)
             self.assertIn(f"{base_task_id}/archive_manifest.md", names)
+
+    def test_check_real_chain_release_bundle_script_passes_on_complete_bundle(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            base_task_id = "demo_bundle_check"
+
+            baseline_dir = td_path / "runs" / "agent" / base_task_id
+            baseline_dir.mkdir(parents=True, exist_ok=True)
+            baseline_summary = baseline_dir / "baseline_summary.json"
+            baseline_summary.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "base_task_id": base_task_id,
+                        "run_count": 3,
+                        "runs": [],
+                        "failures": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            archive_dir = td_path / "runs" / "archive" / base_task_id
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archive_manifest = archive_dir / "archive_manifest.json"
+            archive_manifest.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "base_task_id": base_task_id,
+                        "missing_required_count": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (archive_dir / "archive_manifest.md").write_text("# manifest\n", encoding="utf-8")
+            tar_path = (td_path / "runs" / "archive" / f"{base_task_id}.tar.gz").resolve()
+            with tarfile.open(tar_path, mode="w:gz") as tf:
+                tf.add(archive_dir, arcname=archive_dir.name)
+
+            script = repo_root / "scripts" / "check_real_chain_release_bundle.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--base-task-id",
+                    base_task_id,
+                    "--require-tar-gz",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("baseline_status"), "pass")
+            self.assertEqual(payload.get("archive_status"), "pass")
 
 
 class ModelCatalogTests(unittest.TestCase):

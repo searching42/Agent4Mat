@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from oled_agent.agent.specs import AgentPlan
 from oled_agent.agent.tools import ToolContext, execute_tool
@@ -43,12 +43,40 @@ class AgentExecutionResult:
 
 
 def execute_plan(plan: AgentPlan, ctx: ToolContext) -> AgentExecutionResult:
+    return execute_plan_with_resume(plan, ctx, resume_records=None, resume_from_index=0)
+
+
+def _record_from_dict(item: Dict[str, Any]) -> ToolExecutionRecord:
+    return ToolExecutionRecord(
+        name=str(item.get("name") or ""),
+        args=item.get("args") if isinstance(item.get("args"), dict) else {},
+        started_at=str(item.get("started_at") or ""),
+        ended_at=str(item.get("ended_at") or ""),
+        status=str(item.get("status") or "unknown"),
+        result=item.get("result") if isinstance(item.get("result"), dict) else {},
+        error=str(item.get("error") or ""),
+    )
+
+
+def execute_plan_with_resume(
+    plan: AgentPlan,
+    ctx: ToolContext,
+    *,
+    resume_records: Optional[List[Dict[str, Any]]] = None,
+    resume_from_index: int = 0,
+) -> AgentExecutionResult:
     started = _now_iso()
     records: List[ToolExecutionRecord] = []
     status = "success"
+    if isinstance(resume_records, list):
+        for item in resume_records:
+            if isinstance(item, dict):
+                records.append(_record_from_dict(item))
 
     design = plan.design_spec
-    for call in plan.tool_calls:
+    for idx, call in enumerate(plan.tool_calls):
+        if idx < int(resume_from_index or 0):
+            continue
         call_started = _now_iso()
         call_args = dict(call.args)
 

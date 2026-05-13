@@ -1064,6 +1064,15 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("--filtering-report", content)
         self.assertIn("[PASS] quickstart chain completed", content)
 
+    def test_step_mode_guard_script_covers_clean_score_train_sequence(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "check_step_mode.py"
+        content = script.read_text(encoding="utf-8")
+        self.assertIn('run_step("clean_dataset"', content)
+        self.assertIn('run_step("score_candidates"', content)
+        self.assertIn('run_step("train_predictor"', content)
+        self.assertIn("step_tool_state.json", content)
+
     def test_makefile_release_check_includes_request_template_validation(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         makefile = (repo_root / "Makefile").read_text(encoding="utf-8")

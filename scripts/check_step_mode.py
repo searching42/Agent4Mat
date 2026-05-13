@@ -204,13 +204,26 @@ def main() -> int:
                 raise SystemExit(1)
             return payload
 
-        clean_out = run_step_success(
+        retrieve_out = run_step_success(
             task_json_path=happy_task_path,
-            operation="clean_dataset",
-            args_obj={"input_csv": str(in_csv)},
+            operation="retrieve_candidate_data",
+            args_obj={"candidate_data": str(in_csv)},
+        )
+        clean_out = run_step_success(task_json_path=happy_task_path, operation="clean_dataset")
+        prepare_out = run_step_success(
+            task_json_path=happy_task_path,
+            operation="prepare_train_data",
+            args_obj={"train_data": str(in_csv)},
+        )
+        train_out = run_step_success(task_json_path=happy_task_path, operation="train_predictor")
+        generate_out = run_step_success(
+            task_json_path=happy_task_path,
+            operation="generate_candidates",
+            args_obj={"max_candidates": 8},
         )
         score_out = run_step_success(task_json_path=happy_task_path, operation="score_candidates")
-        train_out = run_step_success(task_json_path=happy_task_path, operation="train_predictor")
+        filter_out = run_step_success(task_json_path=happy_task_path, operation="filter_and_rank")
+        report_out = run_step_success(task_json_path=happy_task_path, operation="make_report")
 
         score_adapter = str((score_out.get("result") or {}).get("adapter") or "")
         if not score_adapter:
@@ -227,6 +240,9 @@ def main() -> int:
             return 1
         if not str(step_state.get("scored_csv") or "").strip():
             print(json.dumps({"status": "failed", "reason": "scored_csv_missing_in_state"}, ensure_ascii=False))
+            return 1
+        if not str(step_state.get("final_output") or "").strip():
+            print(json.dumps({"status": "failed", "reason": "final_output_missing_in_state"}, ensure_ascii=False))
             return 1
 
         score_fail_cp, score_fail_payload = run_step_raw(
@@ -262,13 +278,26 @@ def main() -> int:
             )
             return 1
 
-        clean_json_out = run_step_json_success(
+        retrieve_json_out = run_step_json_success(
             task_json_path=happy_json_task_path,
-            operation="clean_dataset",
-            args_obj={"input_csv": str(in_csv)},
+            operation="retrieve_candidate_data",
+            args_obj={"candidate_data": str(in_csv)},
+        )
+        clean_json_out = run_step_json_success(task_json_path=happy_json_task_path, operation="clean_dataset")
+        prepare_json_out = run_step_json_success(
+            task_json_path=happy_json_task_path,
+            operation="prepare_train_data",
+            args_obj={"train_data": str(in_csv)},
+        )
+        train_json_out = run_step_json_success(task_json_path=happy_json_task_path, operation="train_predictor")
+        generate_json_out = run_step_json_success(
+            task_json_path=happy_json_task_path,
+            operation="generate_candidates",
+            args_obj={"max_candidates": 8},
         )
         score_json_out = run_step_json_success(task_json_path=happy_json_task_path, operation="score_candidates")
-        train_json_out = run_step_json_success(task_json_path=happy_json_task_path, operation="train_predictor")
+        filter_json_out = run_step_json_success(task_json_path=happy_json_task_path, operation="filter_and_rank")
+        report_json_out = run_step_json_success(task_json_path=happy_json_task_path, operation="make_report")
 
         score_json_adapter = str((score_json_out.get("result") or {}).get("adapter") or "")
         if not score_json_adapter:
@@ -278,6 +307,10 @@ def main() -> int:
         step_json_state_path = root / "runs" / "agent" / happy_json_task_id / "step_tool_state.json"
         if not step_json_state_path.exists():
             print(json.dumps({"status": "failed", "reason": "step_json_tool_state_missing"}, ensure_ascii=False))
+            return 1
+        step_json_state = json.loads(step_json_state_path.read_text(encoding="utf-8"))
+        if not str(step_json_state.get("final_output") or "").strip():
+            print(json.dumps({"status": "failed", "reason": "step_json_final_output_missing"}, ensure_ascii=False))
             return 1
 
         score_json_fail_cp, score_json_fail_payload = run_step_json_raw(
@@ -317,14 +350,24 @@ def main() -> int:
         json.dumps(
             {
                 "status": "pass",
-                "check": "agent-run-step + agent-run-step-json happy(clean+score+train)+failure(score_missing_input,train_nonzero)",
+                "check": "agent-run-step + agent-run-step-json happy(all_operations)+failure(score_missing_input,train_nonzero)",
+                "retrieve_status": retrieve_out.get("status"),
                 "clean_status": clean_out.get("status"),
+                "prepare_status": prepare_out.get("status"),
+                "generate_status": generate_out.get("status"),
                 "score_adapter": score_adapter,
+                "filter_status": filter_out.get("status"),
+                "report_status": report_out.get("status"),
                 "train_status": str((train_out.get("result") or {}).get("status") or ""),
                 "score_missing_input_exit_code": score_fail_cp.returncode,
                 "train_nonzero_exit_code": train_fail_cp.returncode,
+                "retrieve_json_status": retrieve_json_out.get("status"),
                 "clean_json_status": clean_json_out.get("status"),
+                "prepare_json_status": prepare_json_out.get("status"),
+                "generate_json_status": generate_json_out.get("status"),
                 "score_json_adapter": score_json_adapter,
+                "filter_json_status": filter_json_out.get("status"),
+                "report_json_status": report_json_out.get("status"),
                 "train_json_status": str((train_json_out.get("result") or {}).get("status") or ""),
                 "score_json_missing_input_exit_code": score_json_fail_cp.returncode,
                 "train_json_nonzero_exit_code": train_json_fail_cp.returncode,

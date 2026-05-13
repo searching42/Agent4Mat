@@ -1065,16 +1065,22 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("--filtering-report", content)
         self.assertIn("[PASS] quickstart chain completed", content)
 
-    def test_step_mode_guard_script_covers_clean_score_train_sequence(self) -> None:
+    def test_step_mode_guard_script_covers_all_operations_and_failures(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         script = repo_root / "scripts" / "check_step_mode.py"
         content = script.read_text(encoding="utf-8")
         self.assertIn("run_step_success(", content)
         self.assertIn("run_step_json_success(", content)
         self.assertIn("agent-run-step-json", content)
+        self.assertIn('operation="retrieve_candidate_data"', content)
         self.assertIn('operation="clean_dataset"', content)
+        self.assertIn('operation="prepare_train_data"', content)
+        self.assertIn('operation="generate_candidates"', content)
         self.assertIn('operation="score_candidates"', content)
+        self.assertIn('operation="filter_and_rank"', content)
+        self.assertIn('operation="make_report"', content)
         self.assertIn('operation="train_predictor"', content)
+        self.assertIn("happy(all_operations)", content)
         self.assertIn("step_tool_state.json", content)
         self.assertIn("score_without_candidates_unexpected_success", content)
         self.assertIn("train_nonzero_unexpected_success", content)

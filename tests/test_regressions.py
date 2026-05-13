@@ -21,9 +21,12 @@ from oled_agent.agent.request_contract import (
     validate_model_report_payload,
     validate_plan_payload,
     validate_request_payload,
+    validate_step_request_payload,
+    validate_task_v2_payload,
     validate_data_report_payload,
     validate_task_state_payload,
 )
+from oled_agent.agent.task_v2 import legacy_request_to_task_v2
 from oled_agent.agent.tool_contracts import build_plan_tool_call_item_schema
 from oled_agent.diagnostics import run_external_connectivity_debug, run_external_preflight, run_llm_connectivity
 from oled_agent.agent.tools import (
@@ -39,6 +42,7 @@ from oled_agent.agent.tools import (
     train_predictor,
     _try_external_unimol_scoring,
 )
+import oled_agent.agent.tools as tools_mod
 
 
 def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
@@ -50,6 +54,137 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) ->
 
 
 class RegressionTests(unittest.TestCase):
+    def test_clean_dataset_rejects_empty_input_path_instead_of_using_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="clean_empty_input",
+                state={},
+            )
+            with self.assertRaisesRegex(ToolError, "requires input_csv"):
+                tools_mod.clean_dataset(ctx, input_csv="")
+
+    def test_search_web_evidence_domain_filter_matches_hostname_only(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="web_domain_filter",
+                state={},
+            )
+            fake_results = [
+                {"title": "ok", "url": "https://sub.nature.com/a"},
+                {"title": "bad", "url": "https://notnature.com/x"},
+                {"title": "other", "url": "https://example.org/y"},
+            ]
+            with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=fake_results):
+                out = tools_mod.search_web_evidence(ctx, query="q", topk=5, domains=["nature.com"])
+            urls = [x.get("url") for x in out.get("results", [])]
+            self.assertEqual(urls, ["https://sub.nature.com/a"])
+
+    def test_search_web_evidence_returns_time_range_applied_false(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="web_time_range",
+                state={},
+            )
+            with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=[]):
+                out = tools_mod.search_web_evidence(ctx, query="q", topk=3, time_range="30d")
+            self.assertIn("time_range_applied", out)
+            self.assertFalse(out["time_range_applied"])
+            payload = json.loads(Path(out["web_evidence_json"]).read_text(encoding="utf-8"))
+            self.assertIn("time_range_applied", payload)
+            self.assertFalse(payload["time_range_applied"])
+
+    def test_search_dataset_use_web_search_refreshes_when_state_has_old_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="search_dataset_refresh",
+                state={"web_evidence": [{"title": "old", "url": "https://old.example"}]},
+            )
+            with mock.patch(
+                "oled_agent.agent.tools.search_web_evidence",
+                return_value={"results": [{"title": "new", "url": "https://new.example"}]},
+            ) as mocked:
+                out = tools_mod.search_dataset(ctx, preferences=["master_database"], use_web_search=True, web_topk=2)
+            self.assertEqual(mocked.call_count, 1)
+            self.assertEqual(out.get("web_evidence"), [{"title": "new", "url": "https://new.example"}])
+            self.assertTrue(out.get("web_evidence_refreshed"))
+
+    def test_clean_dataset_uses_soft_mw_when_only_approximation_available(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            input_csv = td_path / "in.csv"
+            _write_csv(
+                input_csv,
+                fieldnames=["candidate_id", "SMILES"],
+                rows=[{"candidate_id": "c1", "SMILES": "C"}],
+            )
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="clean_soft_mw",
+                state={},
+            )
+            with mock.patch("oled_agent.agent.tools._estimate_mw", return_value={"value": 1.0, "method": "approx_token_sum"}):
+                out = tools_mod.clean_dataset(
+                    ctx,
+                    input_csv=str(input_csv),
+                    constraints={"mw_min": 100.0, "mw_max": 1000.0},
+                )
+            self.assertEqual(out["status"], "success")
+            rep = json.loads(Path(out["cleaning_report_json"]).read_text(encoding="utf-8"))
+            self.assertEqual(rep.get("drop_mw_low"), 0)
+            self.assertGreaterEqual(rep.get("soft_mw_low", 0), 1)
+            self.assertFalse(rep.get("mw_filter_hard_applied"))
+            self.assertTrue(rep.get("warnings"))
+
+    def test_clean_dataset_can_force_approx_mw_hard_filter_via_env(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            input_csv = td_path / "in_hard.csv"
+            _write_csv(
+                input_csv,
+                fieldnames=["candidate_id", "SMILES"],
+                rows=[{"candidate_id": "c1", "SMILES": "C"}],
+            )
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="clean_hard_mw",
+                state={},
+            )
+            with mock.patch.dict(os.environ, {"OLED_AGENT_CLEAN_MW_APPROX_HARD_FILTER": "1"}, clear=False):
+                with mock.patch("oled_agent.agent.tools._estimate_mw", return_value={"value": 1.0, "method": "approx_token_sum"}):
+                    out = tools_mod.clean_dataset(
+                        ctx,
+                        input_csv=str(input_csv),
+                        constraints={"mw_min": 100.0, "mw_max": 1000.0},
+                    )
+            rep = json.loads(Path(out["cleaning_report_json"]).read_text(encoding="utf-8"))
+            self.assertEqual(rep.get("drop_mw_low"), 1)
+            self.assertTrue(rep.get("mw_filter_hard_applied"))
     def test_fallback_scoring_uses_real_smiles_when_source_is_uppercase_smiles(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -1055,7 +1190,7 @@ class RegressionTests(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
         )
         self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
         payload = json.loads(cp.stdout)
@@ -1101,6 +1236,139 @@ class RegressionTests(unittest.TestCase):
             }
             with self.assertRaises(RequestValidationError):
                 validate_request_payload(payload, workspace_root=td_path)
+
+    def test_task_v2_schema_rejects_invalid_execution_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "version": "2.0",
+                "task_id": "task_v2_bad_mode",
+                "request_text": "design molecule",
+                "execution_mode": "bad_mode",
+                "operation": "full_pipeline",
+                "property": "plqy",
+                "range": "60-100",
+                "n_structures": 20,
+                "constraints": {},
+                "prediction_model": "unimol_lambda_plqy_v1",
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_task_v2_payload(payload, workspace_root=td_path)
+
+    def test_task_v2_schema_rejects_extra_field(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "version": "2.0",
+                "task_id": "task_v2_extra",
+                "request_text": "design molecule",
+                "execution_mode": "full_pipeline",
+                "operation": "full_pipeline",
+                "property": "plqy",
+                "range": "60-100",
+                "n_structures": 20,
+                "constraints": {},
+                "prediction_model": "unimol_lambda_plqy_v1",
+                "unexpected": True,
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_task_v2_payload(payload, workspace_root=td_path)
+
+    def test_task_v2_schema_accepts_null_optional_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "version": "2.0",
+                "task_id": "task_v2_nulls",
+                "request_text": "design molecule",
+                "execution_mode": "single_step",
+                "operation": "clean_dataset",
+                "property": "plqy",
+                "range": "60-100",
+                "n_structures": 20,
+                "constraints": {"mw_min": 100, "mw_max": 800},
+                "train_data": None,
+                "candidate_data": None,
+                "prediction_model": "unimol_lambda_plqy_v1",
+                "model_preferences": {
+                    "predictor_id": "unimol_lambda_plqy_v1",
+                    "generator_id": "reinvent4_lambda_em_v2",
+                },
+                "generation_input": {},
+                "provenance": {},
+                "status": "approved",
+                "missing_fields": [],
+                "questions": [],
+                "compatibility_warnings": [],
+            }
+            validated = validate_task_v2_payload(payload, workspace_root=td_path)
+            self.assertIsNone(validated.get("train_data"))
+            self.assertIsNone(validated.get("candidate_data"))
+
+    def test_step_request_schema_rejects_invalid_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            step_payload = {
+                "task": {
+                    "version": "2.0",
+                    "task_id": "step_bad_op",
+                    "request_text": "design molecule",
+                    "execution_mode": "single_step",
+                    "operation": "clean_dataset",
+                    "property": "plqy",
+                    "range": "60-100",
+                    "n_structures": 20,
+                    "constraints": {},
+                    "prediction_model": "unimol_lambda_plqy_v1",
+                },
+                "operation": "unsupported_op",
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_step_request_payload(step_payload, workspace_root=td_path)
+
+    def test_step_request_schema_rejects_additional_field(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            step_payload = {
+                "task": {
+                    "version": "2.0",
+                    "task_id": "step_extra_field",
+                    "request_text": "design molecule",
+                    "execution_mode": "single_step",
+                    "operation": "clean_dataset",
+                    "property": "plqy",
+                    "range": "60-100",
+                    "n_structures": 20,
+                    "constraints": {},
+                    "prediction_model": "unimol_lambda_plqy_v1",
+                },
+                "operation": "clean_dataset",
+                "extra": "x",
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_step_request_payload(step_payload, workspace_root=td_path)
+
+    def test_legacy_request_to_task_v2_compatibility_mapping(self) -> None:
+        request_payload = {
+            "task_id": "legacy_compat_1",
+            "request_text": "design legacy",
+            "mode": "fast_screen",
+            "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+            "constraints": {"candidate_data": "candidates.csv"},
+            "budget": {"max_candidates": 77},
+            "model_preferences": {
+                "predictor_id": "unimol_lambda_plqy_v1",
+                "generator_id": "reinvent4_lambda_em_v2",
+            },
+        }
+        task_v2 = legacy_request_to_task_v2(request_payload)
+        self.assertEqual(task_v2["version"], "2.0")
+        self.assertEqual(task_v2["task_id"], "legacy_compat_1")
+        self.assertEqual(task_v2["execution_mode"], "full_pipeline")
+        self.assertEqual(task_v2["operation"], "full_pipeline")
+        self.assertEqual(task_v2["n_structures"], 77)
+        self.assertEqual(task_v2["candidate_data"], "candidates.csv")
+        self.assertIn("legacy request payload auto-mapped to task.v2", task_v2["compatibility_warnings"])
 
     def test_request_minimal_does_not_enforce_decision_only_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1355,7 +1623,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
@@ -1409,7 +1677,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
@@ -1458,7 +1726,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
@@ -1717,6 +1985,252 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(gen_rec["status"], "success")
             self.assertEqual(gen_rec["args"].get("source_image"), str(source_img))
             self.assertEqual(gen_rec["result"].get("adapter"), "molscribe_generate_adapter_v1")
+
+    def test_agent_intake_returns_need_user_input_when_missing_key_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            task_id = "task_intake_need_info"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-intake",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--task-id",
+                    task_id,
+                    "--request",
+                    "帮我设计分子",
+                    "--disable-web-search",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 2, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "need_user_input")
+            self.assertIn("missing_fields", payload)
+            self.assertIn("questions", payload)
+            self.assertTrue(Path(payload["task_draft_path"]).exists())
+            self.assertTrue(Path(payload["web_evidence_path"]).exists())
+
+    def test_agent_run_step_happy_path_clean_dataset_writes_standard_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            input_csv = td_path / "step_input.csv"
+            input_csv.write_text(
+                "candidate_id,SMILES\n"
+                "c1,c1ccccc1\n"
+                "c2,c1ccccc1\n",
+                encoding="utf-8",
+            )
+            task_json = td_path / "task_step.json"
+            task_json.write_text(
+                json.dumps(
+                    {
+                        "version": "2.0",
+                        "task_id": "task_step_happy",
+                        "request_text": "clean candidates",
+                        "execution_mode": "single_step",
+                        "operation": "clean_dataset",
+                        "property": "plqy",
+                        "range": "60-100",
+                        "n_structures": 10,
+                        "constraints": {"mw_min": 100, "mw_max": 900},
+                        "prediction_model": "unimol_lambda_plqy_v1",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-step",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--task-json",
+                    str(task_json),
+                    "--operation",
+                    "clean_dataset",
+                    "--args-json",
+                    json.dumps({"input_csv": str(input_csv)}),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "success")
+            for key in (
+                "execution_path",
+                "tool_state_path",
+                "decision_summary_path",
+                "task_state_path",
+                "logging_data_report_path",
+                "logging_model_report_path",
+                "logging_filtering_report_path",
+                "result_metadata_path",
+            ):
+                self.assertTrue(Path(payload[key]).exists(), msg=f"missing artifact: {key}")
+
+    def test_agent_run_step_failure_path_returns_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_json = td_path / "task_step_fail.json"
+            task_json.write_text(
+                json.dumps(
+                    {
+                        "version": "2.0",
+                        "task_id": "task_step_fail",
+                        "request_text": "clean candidates",
+                        "execution_mode": "single_step",
+                        "operation": "clean_dataset",
+                        "property": "plqy",
+                        "range": "60-100",
+                        "n_structures": 10,
+                        "constraints": {},
+                        "prediction_model": "unimol_lambda_plqy_v1",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-step",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--task-json",
+                    str(task_json),
+                    "--operation",
+                    "clean_dataset",
+                    "--args-json",
+                    json.dumps({"input_csv": str(td_path / "missing_input.csv")}),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "failed")
+            self.assertIn("not found", str(payload.get("error", "")))
+
+    def test_agent_run_json_require_real_adapters_fails_on_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            generate_script = td_path / "gen_ok.py"
+            generate_script.write_text(
+                (
+                    "import csv,json,sys\n"
+                    "payload=json.loads(sys.stdin.read())\n"
+                    "out=payload['output_csv']\n"
+                    "with open(out,'w',encoding='utf-8',newline='') as f:\n"
+                    "  w=csv.DictWriter(f,fieldnames=['candidate_id','smiles'])\n"
+                    "  w.writeheader(); w.writerow({'candidate_id':'cand_000001','smiles':'c1ccccc1'})\n"
+                    "print(json.dumps({'status':'success','adapter':'catalog_generate_cmd','output_csv':out}))\n"
+                ),
+                encoding="utf-8",
+            )
+            score_script = td_path / "score_fail.py"
+            score_script.write_text("import sys\nprint('boom', file=sys.stderr)\nsys.exit(2)\n", encoding="utf-8")
+            catalog_json = td_path / "catalog.json"
+            catalog_json.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "pred_bad_score",
+                                "kind": "predictor",
+                                "backend": "mock_predictor",
+                                "task_types": ["plqy"],
+                                "runtime_profile": "cpu",
+                                "params": {
+                                    "adapters": {
+                                        "score_candidates_cmd": f"{sys.executable} {score_script}",
+                                    }
+                                },
+                            },
+                            {
+                                "id": "gen_ok",
+                                "kind": "generator",
+                                "backend": "mock_generator",
+                                "task_types": ["molecule_generation"],
+                                "runtime_profile": "cpu",
+                                "params": {
+                                    "adapters": {
+                                        "generate_candidates_cmd": f"{sys.executable} {generate_script}",
+                                    }
+                                },
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            request_json = td_path / "request_real_required.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_require_real_fail",
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
+                        "budget": {"max_candidates": 6},
+                        "model_preferences": {
+                            "predictor_id": "pred_bad_score",
+                            "generator_id": "gen_ok",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(catalog_json),
+                    "--request-json",
+                    str(request_json),
+                    "--require-real-adapters",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 3, msg=cp.stderr + cp.stdout)
+            self.assertIn("require-real-adapters", cp.stdout)
 
     def test_agent_run_json_uses_catalog_generate_and_score_adapters_when_env_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2289,7 +2803,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 2)
             self.assertIn("[FAIL] invalid request json", cp.stdout)
@@ -2379,7 +2893,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 2)
             self.assertIn("[FAIL] invalid request json", cp.stdout)
@@ -2424,7 +2938,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
@@ -2474,7 +2988,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
@@ -2565,7 +3079,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
@@ -2598,7 +3112,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
@@ -2647,7 +3161,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
@@ -4098,7 +4612,7 @@ class RegressionTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 2)
             self.assertIn("[FAIL] invalid request args:", cp.stdout)
@@ -5009,6 +5523,19 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("scripts/validate_run_artifacts.py", content)
         self.assertIn("--result-json runs/ci/agent_run_ci_smoke.json", content)
 
+    def test_oled_agent_ci_has_new_intake_step_and_web_guard_jobs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("intake-contract-guard:", content)
+        self.assertIn("step-mode-guard:", content)
+        self.assertIn("web-evidence-guard:", content)
+        self.assertIn("real-no-fallback-gate:", content)
+        self.assertIn("make intake-contract-guard", content)
+        self.assertIn("make step-mode-guard", content)
+        self.assertIn("make web-evidence-guard", content)
+        self.assertIn("make real-no-fallback-gate", content)
+
 
 class BuildEntrypointTests(unittest.TestCase):
     def test_makefile_contains_adapter_and_quickstart_targets(self) -> None:
@@ -5056,6 +5583,10 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
         self.assertIn("scripts/run_molscribe_input_smoke.sh", content)
+        self.assertIn("intake-contract-guard:", content)
+        self.assertIn("step-mode-guard:", content)
+        self.assertIn("web-evidence-guard:", content)
+        self.assertIn("real-no-fallback-gate:", content)
 
 
 class PlanProgressAssetsTests(unittest.TestCase):
@@ -5193,7 +5724,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
             )
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             evidence_json = run_dir / "release_evidence.json"
@@ -5763,7 +6294,7 @@ class AdapterContractValidatorTests(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
         )
         self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
         self.assertIn("[PASS] quickstart chain completed", cp.stdout)

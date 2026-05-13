@@ -5,7 +5,9 @@ TASK_ID ?= make_quickstart
 RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
-.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate input-smoke real-chain-acceptance real-chain-acceptance-real real-chain-evidence ui-smoke
+.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate input-smoke
+.PHONY: intake-contract-guard step-mode-guard web-evidence-guard real-no-fallback-gate
+.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-evidence ui-smoke
 
 help:
 	@echo "Available targets:"
@@ -16,6 +18,10 @@ help:
 	@echo "  make script-map          - generate workspace script migration map"
 	@echo "  make request-templates-validate - validate request templates against request schema"
 	@echo "  make input-smoke         - run MolScribe image/pdf input smoke acceptance"
+	@echo "  make intake-contract-guard - validate task.v2 + step_request contracts"
+	@echo "  make step-mode-guard     - smoke check agent-run-step"
+	@echo "  make web-evidence-guard  - smoke check intake web evidence artifact"
+	@echo "  make real-no-fallback-gate - run require-real-adapters acceptance smoke"
 	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"
 	@echo "  make real-chain-acceptance-real - run non-stub real-chain acceptance (requires real env)"
 	@echo "  make real-chain-evidence   - collect release evidence from acceptance_result.json"
@@ -85,6 +91,18 @@ request-templates-validate:
 
 input-smoke:
 	@./scripts/run_molscribe_input_smoke.sh "input_smoke"
+
+intake-contract-guard:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_intake_contracts.py
+
+step-mode-guard:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_step_mode.py
+
+web-evidence-guard:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_web_evidence.py
+
+real-no-fallback-gate:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_real_no_fallback.py
 
 real-chain-acceptance:
 	@./scripts/run_real_chain_acceptance_minimal.sh "$(WORKSPACE_ROOT)" "$(TASK_ID)"

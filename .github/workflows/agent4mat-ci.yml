@@ -19,6 +19,79 @@ on:
   pull_request:
 
 jobs:
+  intake-contract-guard:
+    name: intake contract guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install CPU profile
+        run: ./scripts/install_profile.sh cpu
+
+      - name: Run intake contract guard
+        run: make intake-contract-guard
+
+  step-mode-guard:
+    name: step mode guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install CPU profile
+        run: ./scripts/install_profile.sh cpu
+
+      - name: Run step mode guard
+        run: make step-mode-guard
+
+  web-evidence-guard:
+    name: web evidence guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install CPU profile
+        run: ./scripts/install_profile.sh cpu
+
+      - name: Run web evidence guard
+        run: make web-evidence-guard
+
+  real-no-fallback-gate:
+    name: real no fallback gate (manual)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_real_chain_acceptance == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install CPU profile
+        run: ./scripts/install_profile.sh cpu
+
+      - name: Run require-real-adapters gate
+        run: make real-no-fallback-gate
+
   llm-backend-retry-guard:
     name: llm backend retry guard
     runs-on: ubuntu-latest

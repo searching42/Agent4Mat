@@ -1148,6 +1148,12 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("make release-check", release_text)
         self.assertIn("make real-adapter-validate", release_text)
 
+    def test_release_boundary_doc_mentions_real_chain_baseline_summary(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        boundary = (repo_root / "docs" / "release_boundary.md").read_text(encoding="utf-8")
+        self.assertIn("make real-chain-baseline TASK_ID=<base_task_id>", boundary)
+        self.assertIn("baseline_summary.json", boundary)
+
     def test_docs_examples_molscribe_requests_are_contract_valid(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         examples_dir = repo_root / "docs" / "examples"

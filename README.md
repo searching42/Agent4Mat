@@ -45,6 +45,7 @@ Make targets:
 - `make release-boundary`
 - `make script-map`
 - `make request-templates-validate`
+- `make input-smoke`
 - `make quickstart`
 - `make doctor`
 - `make llm-connectivity`
@@ -318,6 +319,11 @@ Canonical request templates:
 Validate templates against request schema:
 ```bash
 make request-templates-validate
+```
+
+Run input smoke acceptance (MolScribe image/pdf):
+```bash
+make input-smoke
 ```
 
 ## Agent layer

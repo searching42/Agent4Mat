@@ -142,6 +142,7 @@ Recommended request templates:
 - `configs/request_templates/request_molscribe_image.json`
 - `configs/request_templates/request_molscribe_pdf.json`
 - schema guard: `make request-templates-validate`
+- smoke acceptance: `make input-smoke`
 
 Modes:
 - `OLED_AGENT_UNIMOL_TRAIN_MODE=preflight|smoke|real`

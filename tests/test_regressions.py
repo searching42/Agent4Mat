@@ -5054,6 +5054,8 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
         self.assertIn("scripts/run_real_chain_acceptance_real.sh", content)
         self.assertIn("ui/app.py", content)
+        self.assertIn("input-smoke:", content)
+        self.assertIn("scripts/run_molscribe_input_smoke.sh", content)
 
 
 class PlanProgressAssetsTests(unittest.TestCase):
@@ -5063,6 +5065,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "check_release_boundary.py",
             repo_root / "scripts" / "build_script_migration_map.py",
             repo_root / "scripts" / "collect_real_chain_evidence.py",
+            repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_real.sh",
         ]

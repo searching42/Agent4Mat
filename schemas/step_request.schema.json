@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/step_request.schema.json",
+  "title": "Agent4Mat Step Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task", "operation"],
+  "properties": {
+    "task": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "retrieve_candidate_data",
+        "clean_dataset",
+        "prepare_train_data",
+        "train_predictor",
+        "generate_candidates",
+        "score_candidates",
+        "filter_and_rank",
+        "make_report"
+      ]
+    },
+    "args": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

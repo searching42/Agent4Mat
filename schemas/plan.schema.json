@@ -151,6 +151,10 @@
             "enum": [
               "list_models",
               "search_dataset",
+              "search_web_evidence",
+              "retrieve_candidate_data",
+              "clean_dataset",
+              "prepare_train_data",
               "train_predictor",
               "generate_candidates",
               "score_candidates",
@@ -216,6 +220,134 @@
                         "type": "string",
                         "minLength": 1
                       }
+                    },
+                    "use_web_search": {
+                      "type": "boolean"
+                    },
+                    "web_topk": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "search_web_evidence"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "query"
+                  ],
+                  "properties": {
+                    "query": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "topk": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "domains": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "time_range": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "retrieve_candidate_data"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [],
+                  "properties": {
+                    "candidate_data": {
+                      "type": "string"
+                    },
+                    "output_csv": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "clean_dataset"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [],
+                  "properties": {
+                    "input_csv": {
+                      "type": "string"
+                    },
+                    "output_csv": {
+                      "type": "string"
+                    },
+                    "constraints": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "prepare_train_data"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "args": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [],
+                  "properties": {
+                    "train_data": {
+                      "type": "string"
+                    },
+                    "output_csv": {
+                      "type": "string"
                     }
                   }
                 }

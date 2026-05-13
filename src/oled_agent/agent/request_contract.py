@@ -15,6 +15,8 @@ class RequestValidationError(ValueError):
 @dataclass(frozen=True)
 class RequestContractPaths:
     request_schema: Path
+    task_v2_schema: Path
+    step_request_schema: Path
     decision_summary_schema: Path
     plan_schema: Path
     task_state_schema: Path
@@ -30,6 +32,8 @@ def default_contract_paths(workspace_root: Path) -> RequestContractPaths:
         base = Path(__file__).resolve().parents[3] / "schemas"
     return RequestContractPaths(
         request_schema=base / "request.schema.json",
+        task_v2_schema=base / "task.schema.v2.json",
+        step_request_schema=base / "step_request.schema.json",
         decision_summary_schema=base / "decision_summary.schema.json",
         plan_schema=base / "plan.schema.json",
         task_state_schema=base / "task_state.schema.json",
@@ -59,6 +63,10 @@ def _validate_via_jsonschema(
     except Exception:
         if contract_kind == "request":
             _validate_request_minimal(instance, schema)
+        elif contract_kind == "task_v2":
+            _validate_task_v2_minimal(instance, schema)
+        elif contract_kind == "step_request":
+            _validate_step_request_minimal(instance, schema)
         elif contract_kind == "decision_summary":
             _validate_decision_summary_minimal(instance, schema)
         elif contract_kind == "plan":
@@ -164,6 +172,71 @@ def _validate_request_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) 
                         raise RequestValidationError(f"$.generation_input.{key}[{idx}]: must be string")
 
 
+def _validate_task_v2_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    properties = _validate_required_and_additional(instance, schema, path="$")
+
+    def _must_non_empty_str(key: str) -> None:
+        if not isinstance(instance.get(key), str) or not str(instance.get(key)).strip():
+            raise RequestValidationError(f"$.{key}: must be non-empty string")
+
+    for key in ("version", "task_id", "request_text", "execution_mode", "operation", "property", "range", "prediction_model"):
+        _must_non_empty_str(key)
+
+    if instance.get("version") != "2.0":
+        raise RequestValidationError("$.version: must be '2.0'")
+
+    em_enum = properties.get("execution_mode", {}).get("enum", []) if isinstance(properties.get("execution_mode"), dict) else []
+    if em_enum and instance.get("execution_mode") not in em_enum:
+        raise RequestValidationError(f"$.execution_mode: must be one of: {em_enum}")
+
+    op_enum = properties.get("operation", {}).get("enum", []) if isinstance(properties.get("operation"), dict) else []
+    if op_enum and instance.get("operation") not in op_enum:
+        raise RequestValidationError(f"$.operation: must be one of: {op_enum}")
+
+    prop_enum = properties.get("property", {}).get("enum", []) if isinstance(properties.get("property"), dict) else []
+    if prop_enum and instance.get("property") not in prop_enum:
+        raise RequestValidationError(f"$.property: must be one of: {prop_enum}")
+
+    n_structures = instance.get("n_structures")
+    if not isinstance(n_structures, int) or n_structures < 1:
+        raise RequestValidationError("$.n_structures: must be integer >= 1")
+
+    constraints = instance.get("constraints")
+    if not isinstance(constraints, dict):
+        raise RequestValidationError("$.constraints: must be object")
+
+    for key in ("train_data", "candidate_data"):
+        val = instance.get(key)
+        if val is not None and not isinstance(val, str):
+            raise RequestValidationError(f"$.{key}: must be string|null")
+
+    for key in ("model_preferences", "generation_input", "provenance"):
+        if key in instance and not isinstance(instance.get(key), dict):
+            raise RequestValidationError(f"$.{key}: must be object")
+
+    for key in ("missing_fields", "questions", "compatibility_warnings"):
+        if key in instance and not isinstance(instance.get(key), list):
+            raise RequestValidationError(f"$.{key}: must be array")
+
+
+def _validate_step_request_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    properties = _validate_required_and_additional(instance, schema, path="$")
+    task = instance.get("task")
+    if not isinstance(task, dict):
+        raise RequestValidationError("$.task: must be object")
+
+    operation = instance.get("operation")
+    if not isinstance(operation, str) or not operation.strip():
+        raise RequestValidationError("$.operation: must be non-empty string")
+    op_enum = properties.get("operation", {}).get("enum", []) if isinstance(properties.get("operation"), dict) else []
+    if op_enum and operation not in op_enum:
+        raise RequestValidationError(f"$.operation: must be one of: {op_enum}")
+
+    args = instance.get("args")
+    if args is not None and not isinstance(args, dict):
+        raise RequestValidationError("$.args: must be object")
+
+
 def _validate_decision_summary_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
     _validate_required_and_additional(instance, schema, path="$")
     score_step = instance.get("score_step")
@@ -251,6 +324,8 @@ def _validate_task_state_minimal(instance: Dict[str, Any], schema: Dict[str, Any
         "VALIDATION",
         "PLAN_GENERATION",
         "USER_CONFIRMATION",
+        "WAITING_APPROVAL",
+        "NEED_INFO",
         "DATA_ACQUISITION",
         "PREPROCESSING",
         "ROUTING",
@@ -259,6 +334,7 @@ def _validate_task_state_minimal(instance: Dict[str, Any], schema: Dict[str, Any
         "FILTERING",
         "SAVING",
         "REPORTING",
+        "PAUSED",
         "QA",
         "DONE",
         "FAILED",
@@ -425,4 +501,18 @@ def validate_filtering_report_payload(payload: Dict[str, Any], workspace_root: P
     contract = default_contract_paths(workspace_root)
     schema = _load_json(contract.filtering_report_schema)
     _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="filtering_report")
+    return payload
+
+
+def validate_task_v2_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    contract = default_contract_paths(workspace_root)
+    schema = _load_json(contract.task_v2_schema)
+    _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="task_v2")
+    return payload
+
+
+def validate_step_request_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    contract = default_contract_paths(workspace_root)
+    schema = _load_json(contract.step_request_schema)
+    _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="step_request")
     return payload

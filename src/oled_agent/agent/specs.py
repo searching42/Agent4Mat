@@ -74,3 +74,29 @@ class AgentPlan:
             "design_spec": self.design_spec.to_dict(),
             "tool_calls": [asdict(tc) for tc in self.tool_calls],
         }
+
+
+@dataclass
+class TaskV2:
+    version: str
+    task_id: str
+    request_text: str
+    execution_mode: str
+    operation: str
+    property: str
+    range: str
+    n_structures: int
+    constraints: Dict[str, Any]
+    train_data: Optional[str] = None
+    candidate_data: Optional[str] = None
+    prediction_model: str = ""
+    model_preferences: Dict[str, Any] = field(default_factory=dict)
+    generation_input: Dict[str, Any] = field(default_factory=dict)
+    provenance: Dict[str, Any] = field(default_factory=dict)
+    status: str = "draft"
+    missing_fields: List[str] = field(default_factory=list)
+    questions: List[str] = field(default_factory=list)
+    compatibility_warnings: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)

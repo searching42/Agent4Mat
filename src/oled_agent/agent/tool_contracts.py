@@ -22,6 +22,39 @@ _TOOL_ARG_CONTRACTS: Dict[str, Dict[str, Any]] = {
                 "minItems": 1,
                 "items": {"type": "string", "minLength": 1},
             },
+            "use_web_search": {"type": "boolean"},
+            "web_topk": {"type": "integer", "minimum": 1},
+        },
+    },
+    "search_web_evidence": {
+        "required": ["query"],
+        "properties": {
+            "query": {"type": "string", "minLength": 1},
+            "topk": {"type": "integer", "minimum": 1},
+            "domains": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "time_range": {"type": "string"},
+        },
+    },
+    "retrieve_candidate_data": {
+        "required": [],
+        "properties": {
+            "candidate_data": {"type": "string"},
+            "output_csv": {"type": "string"},
+        },
+    },
+    "clean_dataset": {
+        "required": [],
+        "properties": {
+            "input_csv": {"type": "string"},
+            "output_csv": {"type": "string"},
+            "constraints": {"type": "object"},
+        },
+    },
+    "prepare_train_data": {
+        "required": [],
+        "properties": {
+            "train_data": {"type": "string"},
+            "output_csv": {"type": "string"},
         },
     },
     "train_predictor": {

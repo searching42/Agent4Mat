@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/task.schema.v2.json",
+  "title": "Agent4Mat Task V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "task_id",
+    "request_text",
+    "execution_mode",
+    "operation",
+    "property",
+    "range",
+    "n_structures",
+    "constraints",
+    "prediction_model"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "2.0"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "execution_mode": {
+      "type": "string",
+      "enum": ["full_pipeline", "single_step"]
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "full_pipeline",
+        "retrieve_candidate_data",
+        "clean_dataset",
+        "prepare_train_data",
+        "train_predictor",
+        "generate_candidates",
+        "score_candidates",
+        "filter_and_rank",
+        "make_report"
+      ]
+    },
+    "property": {
+      "type": "string",
+      "enum": ["lambda_em", "plqy", "stability"]
+    },
+    "range": {
+      "type": "string",
+      "minLength": 1
+    },
+    "n_structures": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "train_data": {
+      "type": ["string", "null"]
+    },
+    "candidate_data": {
+      "type": ["string", "null"]
+    },
+    "prediction_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "predictor_id": {"type": "string"},
+        "generator_id": {"type": "string"}
+      }
+    },
+    "generation_input": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "intake_source": {"type": "string"},
+        "web_evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "url"],
+            "properties": {
+              "title": {"type": "string", "minLength": 1},
+              "url": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "web_evidence_json": {"type": "string"}
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "need_user_input", "approved", "running", "done", "failed", "paused"]
+    },
+    "missing_fields": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "questions": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "compatibility_warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

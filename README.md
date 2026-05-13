@@ -170,6 +170,10 @@ Supported `operation` values:
 - `filter_and_rank`
 - `make_report`
 
+Web evidence notes:
+- `search_web_evidence` supports `time_range` values like `7d`, `30d`, `12m`, `1y`, or `YYYY-MM-DD..YYYY-MM-DD`.
+- non-public sources (`file://`, localhost, private-IP URLs) are filtered before evidence is persisted.
+
 ### Path D: strict real-chain release evidence bundle
 ```bash
 make real-chain-baseline TASK_ID=<base_task_id>

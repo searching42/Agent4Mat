@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import time
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -603,6 +604,100 @@ def list_models(ctx: ToolContext, *, kind: str = "") -> Dict[str, Any]:
     }
 
 
+def _apply_time_range_to_query(query: str, time_range: str) -> Dict[str, Any]:
+    q = str(query or "").strip()
+    raw = str(time_range or "").strip()
+    if not raw:
+        return {"query": q, "applied": False, "kind": "none", "note": ""}
+
+    r = raw.lower().replace(" ", "")
+    now_utc = datetime.now(timezone.utc)
+
+    m_rel = re.fullmatch(r"(\d+)([dwmyh])", r)
+    if m_rel:
+        count = int(m_rel.group(1))
+        unit = m_rel.group(2)
+        if count < 1:
+            return {"query": q, "applied": False, "kind": "invalid", "note": "count must be >= 1"}
+        if unit == "h":
+            days = 1
+        elif unit == "d":
+            days = count
+        elif unit == "w":
+            days = count * 7
+        elif unit == "m":
+            days = count * 30
+        else:
+            days = count * 365
+        since = (now_utc - timedelta(days=days)).date().isoformat()
+        q2 = f"{q} after:{since}".strip()
+        return {"query": q2, "applied": True, "kind": "relative", "note": f"after:{since}"}
+
+    m_abs = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", r)
+    if m_abs:
+        left = m_abs.group(1)
+        right = m_abs.group(2)
+        q2 = f"{q} after:{left} before:{right}".strip()
+        return {"query": q2, "applied": True, "kind": "absolute_range", "note": f"after:{left} before:{right}"}
+
+    m_start = re.fullmatch(r"(>=|after:)?(\d{4}-\d{2}-\d{2})", r)
+    if m_start:
+        left = m_start.group(2)
+        q2 = f"{q} after:{left}".strip()
+        return {"query": q2, "applied": True, "kind": "absolute_start", "note": f"after:{left}"}
+
+    return {"query": q, "applied": False, "kind": "unsupported", "note": "unsupported time_range format"}
+
+
+def _is_private_or_local_host(host: str) -> bool:
+    h = str(host or "").strip().lower()
+    if not h:
+        return True
+    if h in {"localhost", "::1"} or h.endswith(".local"):
+        return True
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", h):
+        parts = [int(x) for x in h.split(".")]
+        if parts[0] == 10:
+            return True
+        if parts[0] == 127:
+            return True
+        if parts[0] == 192 and parts[1] == 168:
+            return True
+        if parts[0] == 169 and parts[1] == 254:
+            return True
+        if parts[0] == 172 and 16 <= parts[1] <= 31:
+            return True
+    return False
+
+
+def _filter_source_quality(results: List[Dict[str, str]]) -> Dict[str, Any]:
+    kept: List[Dict[str, str]] = []
+    dropped_non_http = 0
+    dropped_local_or_private = 0
+
+    for item in results:
+        url = str(item.get("url") or "").strip()
+        parsed = urlparse(url)
+        scheme = str(parsed.scheme or "").lower()
+        host = str(parsed.hostname or "").lower()
+        if scheme not in {"http", "https"}:
+            dropped_non_http += 1
+            continue
+        if _is_private_or_local_host(host):
+            dropped_local_or_private += 1
+            continue
+        kept.append(item)
+
+    return {
+        "results": kept,
+        "quality": {
+            "dropped_non_http": dropped_non_http,
+            "dropped_local_or_private": dropped_local_or_private,
+            "kept_count": len(kept),
+        },
+    }
+
+
 def search_web_evidence(
     ctx: ToolContext,
     *,
@@ -614,17 +709,23 @@ def search_web_evidence(
     q = str(query or "").strip()
     topk_n = max(1, int(topk or 1))
     out_path = _agent_artifact_dir(ctx) / "web_evidence.json"
-    time_range_applied = False
+    time_q = _apply_time_range_to_query(q, str(time_range or ""))
+    query_effective = str(time_q.get("query") or q).strip()
+    time_range_applied = bool(time_q.get("applied", False))
     if not q:
         payload = {
             "query": q,
+            "query_effective": query_effective,
             "topk": topk_n,
             "domains": domains or [],
             "time_range": str(time_range or ""),
             "time_range_applied": time_range_applied,
+            "time_range_kind": str(time_q.get("kind") or ""),
+            "time_range_note": str(time_q.get("note") or ""),
             "results": [],
             "status": "skipped",
             "error": "missing_query",
+            "source_quality": {"dropped_non_http": 0, "dropped_local_or_private": 0, "kept_count": 0},
         }
         dump_json(out_path, payload)
         ctx.state["web_evidence_json"] = str(out_path)
@@ -644,13 +745,19 @@ def search_web_evidence(
     results: List[Dict[str, str]] = []
     status = "success"
     error = ""
+    source_quality = {"dropped_non_http": 0, "dropped_local_or_private": 0, "kept_count": 0}
     try:
-        results = run_duckduckgo_search(query=q, topk=topk_n)
+        results = run_duckduckgo_search(query=query_effective, topk=topk_n)
     except Exception as exc:
         # Web evidence is additive. Network failures should not break main execution.
         status = "warning"
         error = f"{type(exc).__name__}: {exc}"
         results = []
+
+    quality_out = _filter_source_quality(results)
+    results = quality_out["results"]
+    if isinstance(quality_out.get("quality"), dict):
+        source_quality = quality_out["quality"]
     if domains:
         allow: List[str] = []
         for d in domains:
@@ -675,13 +782,17 @@ def search_web_evidence(
 
     payload = {
         "query": q,
+        "query_effective": query_effective,
         "topk": topk_n,
         "domains": domains or [],
         "time_range": str(time_range or ""),
         "time_range_applied": time_range_applied,
+        "time_range_kind": str(time_q.get("kind") or ""),
+        "time_range_note": str(time_q.get("note") or ""),
         "results": results,
         "status": status,
         "error": error,
+        "source_quality": source_quality,
     }
     dump_json(out_path, payload)
     ctx.state["web_evidence_json"] = str(out_path)
@@ -695,6 +806,10 @@ def search_web_evidence(
         "results": results,
         "error": error,
         "time_range_applied": time_range_applied,
+        "time_range_kind": str(time_q.get("kind") or ""),
+        "time_range_note": str(time_q.get("note") or ""),
+        "query_effective": query_effective,
+        "source_quality": source_quality,
         "web_evidence_json": str(out_path),
     }
 

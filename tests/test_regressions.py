@@ -91,7 +91,7 @@ class RegressionTests(unittest.TestCase):
             urls = [x.get("url") for x in out.get("results", [])]
             self.assertEqual(urls, ["https://sub.nature.com/a"])
 
-    def test_search_web_evidence_returns_time_range_applied_false(self) -> None:
+    def test_search_web_evidence_applies_time_range_to_effective_query(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
             catalog_path = td_path / "catalog.json"
@@ -102,13 +102,63 @@ class RegressionTests(unittest.TestCase):
                 task_id="web_time_range",
                 state={},
             )
-            with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=[]):
+            with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=[]) as mocked:
                 out = tools_mod.search_web_evidence(ctx, query="q", topk=3, time_range="30d")
             self.assertIn("time_range_applied", out)
-            self.assertFalse(out["time_range_applied"])
+            self.assertTrue(out["time_range_applied"])
+            self.assertEqual(out.get("time_range_kind"), "relative")
+            self.assertIn("after:", str(out.get("query_effective", "")))
+            self.assertEqual(mocked.call_count, 1)
+            called_query = mocked.call_args.kwargs.get("query")
+            self.assertIn("after:", str(called_query))
             payload = json.loads(Path(out["web_evidence_json"]).read_text(encoding="utf-8"))
             self.assertIn("time_range_applied", payload)
-            self.assertFalse(payload["time_range_applied"])
+            self.assertTrue(payload["time_range_applied"])
+            self.assertEqual(payload.get("time_range_kind"), "relative")
+            self.assertIn("after:", str(payload.get("query_effective", "")))
+
+    def test_search_web_evidence_time_range_invalid_keeps_original_query(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="web_time_range_invalid",
+                state={},
+            )
+            with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=[]) as mocked:
+                out = tools_mod.search_web_evidence(ctx, query="q", topk=3, time_range="norange")
+            self.assertFalse(out["time_range_applied"])
+            self.assertEqual(str(out.get("query_effective") or ""), "q")
+            called_query = mocked.call_args.kwargs.get("query")
+            self.assertEqual(str(called_query or ""), "q")
+
+    def test_search_web_evidence_filters_non_public_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="web_source_quality",
+                state={},
+            )
+            fake_results = [
+                {"title": "ok", "url": "https://nature.com/a"},
+                {"title": "bad_file", "url": "file:///tmp/a.txt"},
+                {"title": "bad_local", "url": "http://127.0.0.1:8000/a"},
+                {"title": "bad_private", "url": "http://10.0.0.5/a"},
+            ]
+            with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=fake_results):
+                out = tools_mod.search_web_evidence(ctx, query="q", topk=5)
+            urls = [x.get("url") for x in out.get("results", [])]
+            self.assertEqual(urls, ["https://nature.com/a"])
+            quality = out.get("source_quality") if isinstance(out.get("source_quality"), dict) else {}
+            self.assertEqual(int(quality.get("dropped_non_http", -1)), 1)
+            self.assertEqual(int(quality.get("dropped_local_or_private", -1)), 2)
 
     def test_search_dataset_use_web_search_refreshes_when_state_has_old_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from oled_agent.agent.model_catalog import ModelCatalog
 from oled_agent.agent.task_v2 import dump_json, run_duckduckgo_search
@@ -680,6 +680,36 @@ def _is_private_or_local_host(host: str) -> bool:
     )
 
 
+def _strip_url_userinfo(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return raw
+    parsed = urlparse(raw)
+    scheme = str(parsed.scheme or "").strip().lower()
+    host = str(parsed.hostname or "").strip()
+    if not scheme or not host:
+        return raw
+    netloc = host
+    if ":" in netloc and not netloc.startswith("["):
+        netloc = f"[{netloc}]"
+    try:
+        port = parsed.port
+    except ValueError:
+        return raw
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    return urlunparse(
+        (
+            scheme,
+            netloc,
+            parsed.path or "",
+            parsed.params or "",
+            parsed.query or "",
+            parsed.fragment or "",
+        )
+    )
+
+
 def _filter_source_quality(results: List[Dict[str, str]]) -> Dict[str, Any]:
     kept: List[Dict[str, str]] = []
     dropped_non_http = 0
@@ -719,7 +749,7 @@ def _filter_source_quality(results: List[Dict[str, str]]) -> Dict[str, Any]:
             dropped_local_or_private += 1
             continue
         row = dict(item)
-        row["url"] = normalized_url
+        row["url"] = _strip_url_userinfo(normalized_url)
         kept.append(row)
 
     return {

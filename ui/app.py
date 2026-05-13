@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -13,6 +14,7 @@ from flask import Flask, jsonify, render_template_string, request
 app = Flask(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG = "scripts/adapters/real_adapters_catalog.json"
+TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 HTML = """
@@ -298,6 +300,17 @@ def _load_json_if_exists(path: Path) -> Any:
         return None
 
 
+def _is_safe_task_id(task_id: str) -> bool:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return False
+    if not TASK_ID_PATTERN.fullmatch(tid):
+        return False
+    if ".." in tid or "/" in tid or "\\" in tid:
+        return False
+    return True
+
+
 @app.get("/")
 def index() -> str:
     return render_template_string(HTML)
@@ -353,6 +366,8 @@ def api_task_summary(task_id: str):
     tid = str(task_id or "").strip()
     if not tid:
         return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
     run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
     artifacts = {
         "plan_path": _task_artifact_path(tid, "plan.json"),

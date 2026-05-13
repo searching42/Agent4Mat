@@ -166,12 +166,14 @@ class RegressionTests(unittest.TestCase):
             fake_results = [
                 {"title": "ok_noscheme", "url": "nature.com/a"},
                 {"title": "ok_double_slash", "url": "//www.nature.com/b"},
+                {"title": "ok_with_auth", "url": "https://user:pass@nature.com/c"},
                 {"title": "bad_private_v6", "url": "http://[fe80::1]/c"},
             ]
             with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=fake_results):
                 out = tools_mod.search_web_evidence(ctx, query="q", topk=5, domains=["nature.com"])
             urls = [x.get("url") for x in out.get("results", [])]
-            self.assertEqual(urls, ["https://nature.com/a", "https://www.nature.com/b"])
+            self.assertEqual(urls, ["https://nature.com/a", "https://www.nature.com/b", "https://nature.com/c"])
+            self.assertTrue(all("@" not in str(u or "") for u in urls))
 
     def test_search_web_evidence_filters_non_public_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -7138,3 +7140,12 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(execution_summary.get("record_count"), 1)
             preview = payload.get("web_evidence_preview") if isinstance(payload.get("web_evidence_preview"), list) else []
             self.assertEqual(len(preview), 1)
+
+    def test_ui_task_summary_rejects_invalid_task_id(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/task/bad..id/summary")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid task_id")

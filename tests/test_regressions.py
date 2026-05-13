@@ -1069,12 +1069,16 @@ class RegressionTests(unittest.TestCase):
         script = repo_root / "scripts" / "check_step_mode.py"
         content = script.read_text(encoding="utf-8")
         self.assertIn("run_step_success(", content)
+        self.assertIn("run_step_json_success(", content)
+        self.assertIn("agent-run-step-json", content)
         self.assertIn('operation="clean_dataset"', content)
         self.assertIn('operation="score_candidates"', content)
         self.assertIn('operation="train_predictor"', content)
         self.assertIn("step_tool_state.json", content)
         self.assertIn("score_without_candidates_unexpected_success", content)
         self.assertIn("train_nonzero_unexpected_success", content)
+        self.assertIn("score_json_without_candidates_unexpected_success", content)
+        self.assertIn("train_json_nonzero_unexpected_success", content)
         self.assertIn("OLED_AGENT_TRAIN_CMD", content)
 
     def test_makefile_release_check_includes_request_template_validation(self) -> None:
@@ -1120,6 +1124,16 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("mineru_not_configured", troubleshoot)
         self.assertIn("molscribe_input_missing", troubleshoot)
         self.assertIn("make request-templates-validate", troubleshoot)
+
+    def test_ci_doc_includes_real_baseline_archive_template(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        ci_doc = repo_root / "docs" / "ci.md"
+        self.assertTrue(ci_doc.exists())
+        ci = ci_doc.read_text(encoding="utf-8")
+        self.assertIn("make real-chain-baseline TASK_ID=<base_task_id>", ci)
+        self.assertIn("baseline_summary.json", ci)
+        self.assertIn("strict_acceptance_summary.json", ci)
+        self.assertIn("release_evidence.json", ci)
 
     def test_gitattributes_enforces_lf_for_cross_platform_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

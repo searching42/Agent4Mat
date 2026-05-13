@@ -19,7 +19,7 @@ help:
 	@echo "  make request-templates-validate - validate request templates against request schema"
 	@echo "  make input-smoke         - run MolScribe image/pdf input smoke acceptance"
 	@echo "  make intake-contract-guard - validate task.v2 + step_request contracts"
-	@echo "  make step-mode-guard     - smoke check agent-run-step"
+	@echo "  make step-mode-guard     - smoke check agent-run-step and agent-run-step-json"
 	@echo "  make web-evidence-guard  - smoke check intake web evidence artifact"
 	@echo "  make real-no-fallback-gate - run require-real-adapters acceptance smoke"
 	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"

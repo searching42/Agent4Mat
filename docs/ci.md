@@ -58,3 +58,20 @@
   - `UNIMOL_REMOTE_PY`
   - `UNIMOL_REMOTE_TMP_BASE`
   - external workspace with `scripts/score_unimol_property_candidates.py`
+
+## Real baseline artifact template (manual archive)
+- for strict real-chain baseline runs, use:
+  - `make real-chain-baseline TASK_ID=<base_task_id>`
+- archive the following paths as one release evidence bundle:
+  - `runs/agent/<base_task_id>/baseline_summary.json`
+  - `runs/agent/<base_task_id>_r1/strict_acceptance_summary.json`
+  - `runs/agent/<base_task_id>_r2/strict_acceptance_summary.json`
+  - `runs/agent/<base_task_id>_r3/strict_acceptance_summary.json`
+  - `runs/agent/<base_task_id>_r1/release_evidence.json`
+  - `runs/agent/<base_task_id>_r2/release_evidence.json`
+  - `runs/agent/<base_task_id>_r3/release_evidence.json`
+- acceptance criteria:
+  - `baseline_summary.json` has `status=pass`
+  - all three runs show:
+    - `generate_adapter = reinvent4_generate_adapter_v1`
+    - `score_adapter = unimol_score_adapter_v1`

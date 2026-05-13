@@ -135,6 +135,44 @@ class RegressionTests(unittest.TestCase):
             called_query = mocked.call_args.kwargs.get("query")
             self.assertEqual(str(called_query or ""), "q")
 
+    def test_search_web_evidence_time_range_hours_note_reports_rounding(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="web_time_range_hours",
+                state={},
+            )
+            with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=[]):
+                out = tools_mod.search_web_evidence(ctx, query="q", topk=3, time_range="48h")
+            self.assertTrue(out["time_range_applied"])
+            self.assertEqual(out.get("time_range_kind"), "relative")
+            self.assertIn("rounded from 48h", str(out.get("time_range_note") or ""))
+
+    def test_search_web_evidence_normalizes_no_scheme_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            catalog_path = td_path / "catalog.json"
+            catalog_path.write_text(json.dumps({"models": []}) + "\n", encoding="utf-8")
+            ctx = ToolContext(
+                workspace_root=td_path,
+                catalog_path=catalog_path,
+                task_id="web_no_scheme",
+                state={},
+            )
+            fake_results = [
+                {"title": "ok_noscheme", "url": "nature.com/a"},
+                {"title": "ok_double_slash", "url": "//www.nature.com/b"},
+                {"title": "bad_private_v6", "url": "http://[fe80::1]/c"},
+            ]
+            with mock.patch("oled_agent.agent.tools.run_duckduckgo_search", return_value=fake_results):
+                out = tools_mod.search_web_evidence(ctx, query="q", topk=5, domains=["nature.com"])
+            urls = [x.get("url") for x in out.get("results", [])]
+            self.assertEqual(urls, ["https://nature.com/a", "https://www.nature.com/b"])
+
     def test_search_web_evidence_filters_non_public_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -7002,3 +7040,101 @@ class AdapterContractValidatorTests(unittest.TestCase):
         self.assertIn("[PASS] quickstart chain completed", cp.stdout)
         self.assertIn("generate_adapter=template_generate_cmd", cp.stdout)
         self.assertIn("score_adapter=template_score_cmd", cp.stdout)
+
+
+class UiPrototypeTests(unittest.TestCase):
+    def _load_ui_module(self):
+        try:
+            from ui import app as ui_app_mod  # type: ignore
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"ui dependency missing: {exc}")
+        return ui_app_mod
+
+    def test_ui_health_endpoint(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/health")
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "pass")
+        self.assertTrue(str(payload.get("repo_root") or ""))
+
+    def test_ui_run_step_endpoint_shells_out_to_agent_run_step_json(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        fake_step_result = {"status": "success", "task_id": "ui_step", "operation": "search_dataset"}
+        fake_cp = subprocess.CompletedProcess(
+            args=["python3", "-m", "oled_agent.cli", "agent-run-step-json"],
+            returncode=0,
+            stdout=json.dumps(fake_step_result, ensure_ascii=False),
+            stderr="",
+        )
+        payload_text = json.dumps(
+            {
+                "task": {
+                    "task_id": "ui_step",
+                    "request_text": "single step",
+                    "domain": "oled_molecule_design",
+                    "targets": [{"name": "plqy", "objective": "maximize", "target_center": 0.6, "sigma": 0.2, "weight": 1.0}],
+                    "constraints": {"mw_min": 150, "mw_max": 700, "domain_threshold": 0.2, "banned_alerts": []},
+                    "model_choice": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                    "budget": {"max_candidates": 10},
+                    "dataset_preferences": ["master_database"],
+                },
+                "operation": "search_dataset",
+                "args": {"preferences": ["master_database"]},
+            },
+            ensure_ascii=False,
+        )
+        with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+            resp = client.post(
+                "/api/run-step",
+                json={"payload_text": payload_text, "catalog_path": "configs/models/catalog.json"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        out = resp.get_json()
+        self.assertEqual(out.get("status"), "pass")
+        result = out.get("result") if isinstance(out.get("result"), dict) else {}
+        self.assertEqual(result.get("status"), "success")
+        cmd = mocked.call_args.args[0]
+        self.assertIn("agent-run-step-json", cmd)
+        self.assertIn("--step-request-json", cmd)
+
+    def test_ui_task_summary_reads_artifacts(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_summary_case"
+            run_dir = root / "runs" / "agent" / task_id
+            (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+            (run_dir / "execution.json").write_text(
+                json.dumps({"status": "success", "records": [{"name": "search_dataset"}]}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "task_state.json").write_text(
+                json.dumps({"status": "RUNNING", "current_stage": "MODEL_TRAINING"}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "decision_summary.json").write_text(
+                json.dumps(
+                    {"task_id": task_id, "selected_models": {}, "inference_step": {"used_fallback": False}},
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "artifacts" / "web_evidence.json").write_text(
+                json.dumps({"results": [{"title": "n", "url": "https://nature.com/a"}]}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/summary")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("task_id"), task_id)
+            execution_summary = payload.get("execution_summary") if isinstance(payload.get("execution_summary"), dict) else {}
+            self.assertEqual(execution_summary.get("record_count"), 1)
+            preview = payload.get("web_evidence_preview") if isinstance(payload.get("web_evidence_preview"), list) else []
+            self.assertEqual(len(preview), 1)

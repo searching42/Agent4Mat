@@ -7,7 +7,7 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke
 .PHONY: intake-contract-guard step-mode-guard web-evidence-guard real-no-fallback-gate
-.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke
+.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run
 
 help:
 	@echo "Available targets:"
@@ -31,6 +31,7 @@ help:
 	@echo "  make real-chain-release-bundle-check - validate baseline summary + archive manifest (+tar.gz)"
 	@echo "  make real-chain-evidence   - collect release evidence from acceptance_result.json"
 	@echo "  make ui-smoke            - run lightweight UI smoke check"
+	@echo "  make ui-run              - launch local UI prototype on http://127.0.0.1:8787"
 	@echo "  make quickstart          - run quickstart chain self-check"
 	@echo "  make adapter-validate    - validate adapter templates contract"
 	@echo "  make real-adapter-validate - validate real adapter shells (preflight/smoke)"
@@ -135,6 +136,9 @@ real-chain-evidence:
 
 ui-smoke:
 	@PYTHONPYCACHEPREFIX="$${TMPDIR:-/tmp}/agent4mat_pycache" $(PYTHON) -m py_compile ui/app.py
+
+ui-run:
+	@$(PYTHONPATH_ENV) $(PYTHON) ui/app.py
 
 release-check:
 	@$(MAKE) adapter-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"

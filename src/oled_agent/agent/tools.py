@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -619,8 +620,10 @@ def _apply_time_range_to_query(query: str, time_range: str) -> Dict[str, Any]:
         unit = m_rel.group(2)
         if count < 1:
             return {"query": q, "applied": False, "kind": "invalid", "note": "count must be >= 1"}
+        note = ""
         if unit == "h":
-            days = 1
+            days = max(1, int(math.ceil(float(count) / 24.0)))
+            note = f"after:{{since}} (rounded from {count}h to {days}d)"
         elif unit == "d":
             days = count
         elif unit == "w":
@@ -631,7 +634,11 @@ def _apply_time_range_to_query(query: str, time_range: str) -> Dict[str, Any]:
             days = count * 365
         since = (now_utc - timedelta(days=days)).date().isoformat()
         q2 = f"{q} after:{since}".strip()
-        return {"query": q2, "applied": True, "kind": "relative", "note": f"after:{since}"}
+        if not note:
+            note = f"after:{since}"
+        else:
+            note = note.format(since=since)
+        return {"query": q2, "applied": True, "kind": "relative", "note": note}
 
     m_abs = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", r)
     if m_abs:
@@ -653,21 +660,24 @@ def _is_private_or_local_host(host: str) -> bool:
     h = str(host or "").strip().lower()
     if not h:
         return True
-    if h in {"localhost", "::1"} or h.endswith(".local"):
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    if "%" in h:
+        h = h.split("%", 1)[0]
+    if h == "localhost" or h.endswith(".local"):
         return True
-    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", h):
-        parts = [int(x) for x in h.split(".")]
-        if parts[0] == 10:
-            return True
-        if parts[0] == 127:
-            return True
-        if parts[0] == 192 and parts[1] == 168:
-            return True
-        if parts[0] == 169 and parts[1] == 254:
-            return True
-        if parts[0] == 172 and 16 <= parts[1] <= 31:
-            return True
-    return False
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_unspecified
+        or ip.is_multicast
+        or ip.is_reserved
+    )
 
 
 def _filter_source_quality(results: List[Dict[str, str]]) -> Dict[str, Any]:
@@ -679,14 +689,38 @@ def _filter_source_quality(results: List[Dict[str, str]]) -> Dict[str, Any]:
         url = str(item.get("url") or "").strip()
         parsed = urlparse(url)
         scheme = str(parsed.scheme or "").lower()
-        host = str(parsed.hostname or "").lower()
+        host = str(parsed.hostname or "").strip().lower()
+        normalized_url = url
+
+        if not scheme:
+            if host:
+                # URL like //example.com/path; normalize to https for downstream parsing.
+                scheme = "https"
+                normalized_url = f"https://{host}{parsed.path or ''}"
+                if parsed.query:
+                    normalized_url += f"?{parsed.query}"
+                if parsed.fragment:
+                    normalized_url += f"#{parsed.fragment}"
+            else:
+                # URL like example.com/path (without scheme) from upstream providers.
+                guessed = urlparse(f"https://{url}")
+                guessed_host = str(guessed.hostname or "").strip().lower()
+                if guessed_host:
+                    scheme = str(guessed.scheme or "https").lower()
+                    host = guessed_host
+                    normalized_url = guessed.geturl()
         if scheme not in {"http", "https"}:
+            dropped_non_http += 1
+            continue
+        if not host:
             dropped_non_http += 1
             continue
         if _is_private_or_local_host(host):
             dropped_local_or_private += 1
             continue
-        kept.append(item)
+        row = dict(item)
+        row["url"] = normalized_url
+        kept.append(row)
 
     return {
         "results": kept,

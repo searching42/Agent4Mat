@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -12,8 +13,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 from oled_agent.agent.model_catalog import ModelCatalog
+from oled_agent.agent.task_v2 import dump_json, run_duckduckgo_search
 from oled_agent.runner import run_pipeline
 
 
@@ -470,6 +473,24 @@ def _copy_head_rows(src: Path, dst: Path, limit: int) -> int:
     return len(rows)
 
 
+def _resolve_csv_path(ctx: ToolContext, raw: str, *, default_name: str) -> Path:
+    text = str(raw or "").strip()
+    if text:
+        p = Path(text)
+        if not p.is_absolute():
+            p = (ctx.workspace_root / p).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+    p = _agent_artifact_dir(ctx) / default_name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _is_true_env(name: str, default: str = "0") -> bool:
+    raw = str(os.environ.get(name, default)).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _merge_csvs(base_csv: Path, addon_csv: Path, key: str = "candidate_id") -> None:
     base_rows = _load_rows(base_csv)
     addon_rows = _load_rows(addon_csv)
@@ -582,7 +603,109 @@ def list_models(ctx: ToolContext, *, kind: str = "") -> Dict[str, Any]:
     }
 
 
-def search_dataset(ctx: ToolContext, *, preferences: List[str]) -> Dict[str, Any]:
+def search_web_evidence(
+    ctx: ToolContext,
+    *,
+    query: str,
+    topk: int = 5,
+    domains: Optional[List[str]] = None,
+    time_range: str = "",
+) -> Dict[str, Any]:
+    q = str(query or "").strip()
+    topk_n = max(1, int(topk or 1))
+    out_path = _agent_artifact_dir(ctx) / "web_evidence.json"
+    time_range_applied = False
+    if not q:
+        payload = {
+            "query": q,
+            "topk": topk_n,
+            "domains": domains or [],
+            "time_range": str(time_range or ""),
+            "time_range_applied": time_range_applied,
+            "results": [],
+            "status": "skipped",
+            "error": "missing_query",
+        }
+        dump_json(out_path, payload)
+        ctx.state["web_evidence_json"] = str(out_path)
+        ctx.state["web_evidence"] = []
+        ctx.state["web_evidence_query"] = q
+        ctx.state["web_evidence_topk"] = topk_n
+        return {
+            "status": "skipped",
+            "query": q,
+            "count": 0,
+            "results": [],
+            "error": "missing_query",
+            "time_range_applied": time_range_applied,
+            "web_evidence_json": str(out_path),
+        }
+
+    results: List[Dict[str, str]] = []
+    status = "success"
+    error = ""
+    try:
+        results = run_duckduckgo_search(query=q, topk=topk_n)
+    except Exception as exc:
+        # Web evidence is additive. Network failures should not break main execution.
+        status = "warning"
+        error = f"{type(exc).__name__}: {exc}"
+        results = []
+    if domains:
+        allow: List[str] = []
+        for d in domains:
+            text = str(d or "").strip().lower()
+            if not text:
+                continue
+            parsed = urlparse(text if "://" in text else f"https://{text}")
+            host = str(parsed.hostname or "").strip().lower()
+            if host:
+                allow.append(host)
+        if allow:
+            filtered: List[Dict[str, str]] = []
+            for item in results:
+                url = str(item.get("url") or "").strip()
+                parsed = urlparse(url)
+                host = str(parsed.hostname or "").strip().lower()
+                if not host:
+                    continue
+                if any(host == d or host.endswith(f".{d}") for d in allow):
+                    filtered.append(item)
+            results = filtered
+
+    payload = {
+        "query": q,
+        "topk": topk_n,
+        "domains": domains or [],
+        "time_range": str(time_range or ""),
+        "time_range_applied": time_range_applied,
+        "results": results,
+        "status": status,
+        "error": error,
+    }
+    dump_json(out_path, payload)
+    ctx.state["web_evidence_json"] = str(out_path)
+    ctx.state["web_evidence"] = results
+    ctx.state["web_evidence_query"] = q
+    ctx.state["web_evidence_topk"] = topk_n
+    return {
+        "status": status,
+        "query": q,
+        "count": len(results),
+        "results": results,
+        "error": error,
+        "time_range_applied": time_range_applied,
+        "web_evidence_json": str(out_path),
+    }
+
+
+def search_dataset(
+    ctx: ToolContext,
+    *,
+    preferences: List[str],
+    use_web_search: bool = False,
+    web_topk: int = 5,
+) -> Dict[str, Any]:
     ext_root = _resolve_external_workspace_root(ctx)
 
     available = []
@@ -604,7 +727,217 @@ def search_dataset(ctx: ToolContext, *, preferences: List[str]) -> Dict[str, Any
         matched = [available[0]] if available else ["training_ready_subset_v1"]
 
     ctx.state["selected_datasets"] = matched
-    return {"selected": matched, "available": available}
+    out: Dict[str, Any] = {"selected": matched, "available": available}
+    if use_web_search:
+        q = " ".join(preferences) if preferences else "materials molecule dataset"
+        try:
+            web = search_web_evidence(ctx, query=q, topk=web_topk)
+            out["web_evidence"] = web.get("results", [])
+            out["web_evidence_query"] = q
+            out["web_evidence_refreshed"] = True
+        except Exception as exc:
+            out["web_evidence_error"] = str(exc)
+    return out
+
+
+def retrieve_candidate_data(
+    ctx: ToolContext,
+    *,
+    candidate_data: str = "",
+    output_csv: str = "",
+) -> Dict[str, Any]:
+    out_csv = _resolve_csv_path(ctx, output_csv, default_name="retrieved_candidates.csv")
+    src = str(candidate_data or "").strip()
+    if not src:
+        src = str((ctx.state.get("selected_datasets") or [""])[0] or "")
+    if src and src.lower().endswith(".csv"):
+        src_path = Path(src)
+        if not src_path.is_absolute():
+            src_path = (ctx.workspace_root / src_path).resolve()
+        if not src_path.exists():
+            raise ToolError(f"candidate_data csv does not exist: {src_path}")
+        n = _copy_head_rows(src_path, out_csv, 100000)
+        adapter = "explicit_candidate_csv"
+    else:
+        n = _write_stub_candidates(out_csv, 200)
+        adapter = "dataset_stub_retrieval"
+    ctx.state["candidate_csv"] = str(out_csv)
+    return {
+        "status": "success",
+        "adapter": adapter,
+        "candidate_data": src,
+        "output_csv": str(out_csv),
+        "rows": n,
+    }
+
+
+def _simple_smiles_mw(smiles: str) -> float:
+    # Approximate MW without heavy deps; enough for deterministic cleaning gate.
+    weights = {
+        "H": 1.008,
+        "C": 12.011,
+        "N": 14.007,
+        "O": 15.999,
+        "F": 18.998,
+        "P": 30.974,
+        "S": 32.06,
+        "Cl": 35.45,
+        "Br": 79.904,
+        "I": 126.90,
+    }
+    tokens = re.findall(r"Cl|Br|[A-Z][a-z]?", smiles or "")
+    total = 0.0
+    for t in tokens:
+        total += float(weights.get(t, 12.0))
+    return total
+
+
+def _estimate_mw(smiles: str) -> Dict[str, Any]:
+    text = str(smiles or "").strip()
+    if not text:
+        return {"value": 0.0, "method": "empty"}
+    try:
+        from rdkit import Chem  # type: ignore
+        from rdkit.Chem import Descriptors  # type: ignore
+
+        mol = Chem.MolFromSmiles(text)
+        if mol is not None:
+            return {"value": float(Descriptors.MolWt(mol)), "method": "rdkit"}
+    except Exception:
+        pass
+    return {"value": _simple_smiles_mw(text), "method": "approx_token_sum"}
+
+
+def clean_dataset(
+    ctx: ToolContext,
+    *,
+    input_csv: str = "",
+    output_csv: str = "",
+    constraints: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    input_raw = str(input_csv or ctx.state.get("candidate_csv") or "").strip()
+    if not input_raw:
+        raise ToolError("clean_dataset requires input_csv or existing candidate_csv in state")
+    in_path = Path(input_raw)
+    if not in_path.is_absolute():
+        in_path = (ctx.workspace_root / in_path).resolve()
+    if not in_path.exists():
+        raise ToolError(f"clean_dataset input_csv not found: {in_path}")
+
+    out_path = _resolve_csv_path(ctx, output_csv, default_name="cleaned_candidates.csv")
+    rows = _load_rows(in_path)
+    rows = _normalize_candidate_rows(rows, require_smiles=False)
+
+    c = constraints if isinstance(constraints, dict) else {}
+    mw_min = c.get("mw_min")
+    mw_max = c.get("mw_max")
+    banned_alerts = c.get("banned_alerts") if isinstance(c.get("banned_alerts"), list) else []
+    banned_alerts = [str(x).strip() for x in banned_alerts if str(x).strip()]
+
+    seen = set()
+    kept: List[Dict[str, str]] = []
+    report = {
+        "input_rows": len(rows),
+        "kept_rows": 0,
+        "drop_missing_smiles": 0,
+        "drop_duplicate_smiles": 0,
+        "drop_mw_low": 0,
+        "drop_mw_high": 0,
+        "soft_mw_low": 0,
+        "soft_mw_high": 0,
+        "drop_banned_alert": 0,
+        "mw_method": "",
+        "mw_filter_hard_applied": False,
+        "warnings": [],
+        "banned_alerts_match_mode": "smiles_substring",
+        "constraints": {"mw_min": mw_min, "mw_max": mw_max, "banned_alerts": banned_alerts},
+    }
+    allow_approx_hard = _is_true_env("OLED_AGENT_CLEAN_MW_APPROX_HARD_FILTER", default="0")
+
+    for row in rows:
+        smi = _extract_smiles(row)
+        if not smi:
+            report["drop_missing_smiles"] += 1
+            continue
+        if smi in seen:
+            report["drop_duplicate_smiles"] += 1
+            continue
+        seen.add(smi)
+        mw_info = _estimate_mw(smi)
+        mw = float(mw_info.get("value") or 0.0)
+        mw_method = str(mw_info.get("method") or "approx_token_sum")
+        if not report["mw_method"]:
+            report["mw_method"] = mw_method
+        hard_mw_filter = mw_method == "rdkit" or allow_approx_hard
+        report["mw_filter_hard_applied"] = bool(report["mw_filter_hard_applied"] or hard_mw_filter)
+        if isinstance(mw_min, (int, float)) and mw < float(mw_min):
+            if hard_mw_filter:
+                report["drop_mw_low"] += 1
+                continue
+            report["soft_mw_low"] += 1
+        if isinstance(mw_max, (int, float)) and mw > float(mw_max):
+            if hard_mw_filter:
+                report["drop_mw_high"] += 1
+                continue
+            report["soft_mw_high"] += 1
+        lower_smi = smi.lower()
+        if any(alert.lower() in lower_smi for alert in banned_alerts):
+            report["drop_banned_alert"] += 1
+            continue
+        out = dict(row)
+        out["smiles"] = smi
+        out["approx_mw"] = f"{mw:.3f}"
+        kept.append(out)
+
+    _write_rows(out_path, kept)
+    if (report["soft_mw_low"] or report["soft_mw_high"]) and not report["mw_filter_hard_applied"]:
+        report["warnings"].append(
+            "mw thresholds evaluated with approximate method; out-of-range molecules were not hard-dropped"
+        )
+    report["kept_rows"] = len(kept)
+    rep_path = _agent_artifact_dir(ctx) / "cleaning_report.json"
+    dump_json(rep_path, report)
+    ctx.state["candidate_csv"] = str(out_path)
+    ctx.state["cleaning_report_json"] = str(rep_path)
+    return {
+        "status": "success",
+        "adapter": "local_cleaning_v1",
+        "input_csv": str(in_path),
+        "output_csv": str(out_path),
+        "rows": len(kept),
+        "cleaning_report_json": str(rep_path),
+    }
+
+
+def prepare_train_data(
+    ctx: ToolContext,
+    *,
+    train_data: str = "",
+    output_csv: str = "",
+) -> Dict[str, Any]:
+    src_raw = str(train_data or "").strip()
+    if not src_raw:
+        src_raw = str((ctx.state.get("selected_datasets") or [""])[0] or "")
+    out_csv = _resolve_csv_path(ctx, output_csv, default_name="prepared_train_data.csv")
+    if src_raw.lower().endswith(".csv"):
+        src = Path(src_raw)
+        if not src.is_absolute():
+            src = (ctx.workspace_root / src).resolve()
+        if not src.exists():
+            raise ToolError(f"train_data csv does not exist: {src}")
+        n = _copy_head_rows(src, out_csv, 100000)
+        adapter = "explicit_train_csv"
+    else:
+        n = _write_stub_candidates(out_csv, 200)
+        adapter = "train_data_stub_builder"
+    ctx.state["prepared_train_csv"] = str(out_csv)
+    return {
+        "status": "success",
+        "adapter": adapter,
+        "train_data": src_raw,
+        "output_csv": str(out_csv),
+        "rows": n,
+    }
 
 
 def train_predictor(ctx: ToolContext, *, predictor_id: str, targets: List[str], target_specs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -1143,7 +1476,11 @@ def make_report(ctx: ToolContext) -> Dict[str, Any]:
 
 TOOL_REGISTRY = {
     "list_models": list_models,
+    "search_web_evidence": search_web_evidence,
     "search_dataset": search_dataset,
+    "retrieve_candidate_data": retrieve_candidate_data,
+    "clean_dataset": clean_dataset,
+    "prepare_train_data": prepare_train_data,
     "train_predictor": train_predictor,
     "generate_candidates": generate_candidates,
     "score_candidates": score_candidates,

@@ -5,8 +5,16 @@ import json
 from pathlib import Path
 from json import JSONDecodeError
 
+from oled_agent.agent.intake import approve_task, run_intake
 from oled_agent.agent.planner import DEFAULT_PLANNER_PROVIDER, PlannerValidationError
-from oled_agent.agent.request_contract import RequestValidationError, load_and_validate_request_json
+from oled_agent.agent.request_contract import (
+    RequestValidationError,
+    load_and_validate_request_json,
+    validate_step_request_payload,
+    validate_task_v2_payload,
+)
+from oled_agent.agent.step_runner import run_step, run_step_from_request_payload
+from oled_agent.agent.task_v2 import legacy_request_to_task_v2
 from oled_agent.agent.session import (
     execute_request,
     execute_request_from_payload,
@@ -106,12 +114,58 @@ def parse_args() -> argparse.Namespace:
     run_agent_p.add_argument("--mode", default="fast_screen", choices=["fast_screen", "train_then_design"])
     run_agent_p.add_argument("--planner-provider", default=DEFAULT_PLANNER_PROVIDER)
     run_agent_p.add_argument("--catalog", default="")
+    run_agent_p.add_argument(
+        "--require-real-adapters",
+        action="store_true",
+        help="Fail if fallback/local adapters are used",
+    )
 
     run_json_p = sub.add_parser("agent-run-json", help="Plan + execute from structured request JSON")
     run_json_p.add_argument("--request-json", required=True, help="Request JSON path (request.schema.json)")
     run_json_p.add_argument("--workspace-root", default=str(Path.cwd()))
     run_json_p.add_argument("--planner-provider", default=DEFAULT_PLANNER_PROVIDER)
     run_json_p.add_argument("--catalog", default="")
+    run_json_p.add_argument(
+        "--require-real-adapters",
+        action="store_true",
+        help="Fail if fallback/local adapters are used",
+    )
+
+    intake_p = sub.add_parser("agent-intake", help="Build task.v2 draft and missing info questions")
+    intake_p.add_argument("--request", required=True, help="User request text")
+    intake_p.add_argument("--task-id", required=True, help="Task id")
+    intake_p.add_argument("--workspace-root", default=str(Path.cwd()))
+    intake_p.add_argument("--disable-web-search", action="store_true")
+    intake_p.add_argument("--web-topk", type=int, default=5)
+
+    approve_p = sub.add_parser("agent-approve", help="Approve task.v2 and generate task.json + plan.md")
+    approve_p.add_argument("--task-json", required=True, help="Task.v2 JSON path")
+    approve_p.add_argument("--workspace-root", default=str(Path.cwd()))
+    approve_p.add_argument("--planner-provider", default=DEFAULT_PLANNER_PROVIDER)
+    approve_p.add_argument("--catalog", default="")
+
+    run_step_p = sub.add_parser("agent-run-step", help="Run a single operation from task.v2")
+    run_step_p.add_argument("--task-json", required=True, help="Task.v2 JSON path")
+    run_step_p.add_argument("--operation", required=True)
+    run_step_p.add_argument("--workspace-root", default=str(Path.cwd()))
+    run_step_p.add_argument("--catalog", default="")
+    run_step_p.add_argument("--args-json", default="", help="Optional operation args JSON object string")
+
+    run_step_json_p = sub.add_parser("agent-run-step-json", help="Run single operation from step request JSON")
+    run_step_json_p.add_argument("--step-request-json", required=True)
+    run_step_json_p.add_argument("--workspace-root", default=str(Path.cwd()))
+    run_step_json_p.add_argument("--catalog", default="")
+
+    resume_p = sub.add_parser("agent-resume", help="Resume task from task.json or request.json under runs/agent/<task_id>")
+    resume_p.add_argument("--task-id", required=True)
+    resume_p.add_argument("--workspace-root", default=str(Path.cwd()))
+    resume_p.add_argument("--planner-provider", default=DEFAULT_PLANNER_PROVIDER)
+    resume_p.add_argument("--catalog", default="")
+    resume_p.add_argument(
+        "--require-real-adapters",
+        action="store_true",
+        help="Fail if fallback/local adapters are used",
+    )
 
     return p.parse_args()
 
@@ -140,6 +194,40 @@ def _resolve_and_load_request_json(payload_path: str, workspace_root: Path) -> d
         raise
     except (FileNotFoundError, PermissionError, OSError, JSONDecodeError) as exc:
         raise RequestValidationError(str(exc)) from exc
+
+
+def _resolve_and_load_json(payload_path: str) -> dict:
+    p = Path(payload_path).resolve()
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RequestValidationError(str(exc)) from exc
+
+
+def _assert_no_fallback(result_payload: dict) -> None:
+    exec_path = Path(str(result_payload.get("execution_path") or "")).resolve()
+    if not exec_path.exists():
+        raise SystemExit(1)
+    execution = json.loads(exec_path.read_text(encoding="utf-8"))
+    records = execution.get("records", []) if isinstance(execution, dict) else []
+    forbidden = {
+        "local_deterministic_fallback",
+        "stub_generator",
+        "dataset_stub_retrieval",
+        "train_data_stub_builder",
+        "local_cleaning_v1",
+    }
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        res = rec.get("result") if isinstance(rec.get("result"), dict) else {}
+        adapter = str(res.get("adapter") or "")
+        if adapter in forbidden:
+            print(f"[FAIL] require-real-adapters hit fallback/stub adapter: {adapter}")
+            raise SystemExit(3)
+        if res.get("fallback_error"):
+            print(f"[FAIL] require-real-adapters found fallback_error in tool: {rec.get('name')}")
+            raise SystemExit(3)
 
 
 def main() -> None:
@@ -217,6 +305,41 @@ def main() -> None:
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return
 
+    if args.command == "agent-intake":
+        workspace_root = Path(args.workspace_root).resolve()
+        result = run_intake(
+            workspace_root=workspace_root,
+            task_id=args.task_id,
+            request_text=args.request,
+            enable_web_search=not bool(args.disable_web_search),
+            web_topk=max(1, int(args.web_topk)),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if str(result.get("status")) == "need_user_input":
+            raise SystemExit(2)
+        return
+
+    if args.command == "agent-approve":
+        workspace_root = Path(args.workspace_root).resolve()
+        catalog = Path(args.catalog).resolve() if args.catalog else None
+        task = _resolve_and_load_json(args.task_json)
+        try:
+            validate_task_v2_payload(task, workspace_root)
+        except RequestValidationError as exc:
+            print(f"[FAIL] invalid task json: {exc}")
+            raise SystemExit(2)
+        result = approve_task(
+            workspace_root=workspace_root,
+            task_payload=task,
+            planner_provider=args.planner_provider,
+            catalog_path=catalog,
+            plan_fn=plan_request_from_payload,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if str(result.get("status")) != "approved":
+            raise SystemExit(2)
+        return
+
     if args.command == "agent-plan-json":
         workspace_root = Path(args.workspace_root).resolve()
         catalog = Path(args.catalog).resolve() if args.catalog else None
@@ -252,6 +375,8 @@ def main() -> None:
             print(f"[FAIL] invalid request args: {exc}")
             raise SystemExit(2)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if bool(getattr(args, "require_real_adapters", False)):
+            _assert_no_fallback(result)
         if result.get("status") != "success":
             raise SystemExit(1)
         return
@@ -271,9 +396,116 @@ def main() -> None:
             print(f"[FAIL] invalid request json: {exc}")
             raise SystemExit(2)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if bool(getattr(args, "require_real_adapters", False)):
+            _assert_no_fallback(result)
         if result.get("status") != "success":
             raise SystemExit(1)
         return
+
+    if args.command == "agent-run-step":
+        workspace_root = Path(args.workspace_root).resolve()
+        catalog = Path(args.catalog).resolve() if args.catalog else (workspace_root / "configs/models/catalog.json").resolve()
+        task = _resolve_and_load_json(args.task_json)
+        try:
+            validate_task_v2_payload(task, workspace_root)
+        except RequestValidationError as exc:
+            print(f"[FAIL] invalid task json: {exc}")
+            raise SystemExit(2)
+        args_override = {}
+        if str(args.args_json or "").strip():
+            try:
+                args_override = json.loads(args.args_json)
+                if not isinstance(args_override, dict):
+                    raise ValueError("args-json must be object")
+            except Exception as exc:
+                print(f"[FAIL] invalid args-json: {exc}")
+                raise SystemExit(2)
+        result = run_step(
+            workspace_root=workspace_root,
+            task_payload=task,
+            operation=str(args.operation or ""),
+            args_override=args_override,
+            catalog_path=catalog,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("status") != "success":
+            raise SystemExit(1)
+        return
+
+    if args.command == "agent-run-step-json":
+        workspace_root = Path(args.workspace_root).resolve()
+        catalog = Path(args.catalog).resolve() if args.catalog else (workspace_root / "configs/models/catalog.json").resolve()
+        payload = _resolve_and_load_json(args.step_request_json)
+        try:
+            validate_step_request_payload(payload, workspace_root)
+        except RequestValidationError as exc:
+            print(f"[FAIL] invalid step request json: {exc}")
+            raise SystemExit(2)
+        result = run_step_from_request_payload(
+            workspace_root=workspace_root,
+            step_request_payload=payload,
+            catalog_path=catalog,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("status") != "success":
+            raise SystemExit(1)
+        return
+
+    if args.command == "agent-resume":
+        workspace_root = Path(args.workspace_root).resolve()
+        catalog = Path(args.catalog).resolve() if args.catalog else None
+        run_dir = (workspace_root / "runs" / "agent" / args.task_id).resolve()
+        if not run_dir.exists():
+            print(f"[FAIL] task run directory not found: {run_dir}")
+            raise SystemExit(2)
+        task_json = run_dir / "task.json"
+        req_json = run_dir / "request_from_task.json"
+        if task_json.exists():
+            task = _resolve_and_load_json(str(task_json))
+            result = approve_task(
+                workspace_root=workspace_root,
+                task_payload=task,
+                planner_provider=args.planner_provider,
+                catalog_path=catalog,
+                plan_fn=plan_request_from_payload,
+            )
+            if result.get("status") != "approved":
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                raise SystemExit(2)
+            req_payload = _resolve_and_load_json(str(req_json))
+            result_exec = execute_request_from_payload(
+                workspace_root=workspace_root,
+                request_payload=req_payload,
+                planner_provider=args.planner_provider,
+                catalog_path=catalog,
+            )
+            print(json.dumps(result_exec, ensure_ascii=False, indent=2))
+            if bool(getattr(args, "require_real_adapters", False)):
+                _assert_no_fallback(result_exec)
+            if result_exec.get("status") != "success":
+                raise SystemExit(1)
+            return
+        # fallback: resume from request.json of legacy agent-run-json
+        legacy_req = run_dir / "request.json"
+        if legacy_req.exists():
+            req_payload = _resolve_and_load_json(str(legacy_req))
+            task_v2 = legacy_request_to_task_v2(req_payload)
+            out_task = run_dir / "task.json"
+            out_task.write_text(json.dumps(task_v2, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            result_exec = execute_request_from_payload(
+                workspace_root=workspace_root,
+                request_payload=req_payload,
+                planner_provider=args.planner_provider,
+                catalog_path=catalog,
+            )
+            print(json.dumps(result_exec, ensure_ascii=False, indent=2))
+            if bool(getattr(args, "require_real_adapters", False)):
+                _assert_no_fallback(result_exec)
+            if result_exec.get("status") != "success":
+                raise SystemExit(1)
+            return
+        print(f"[FAIL] no resumable task.json/request.json found under: {run_dir}")
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

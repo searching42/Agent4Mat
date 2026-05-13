@@ -33,7 +33,11 @@ _EARLY_STATES = [
 ]
 _TOOL_STATE_MAP = {
     "list_models": "ROUTING",
+    "search_web_evidence": "DATA_ACQUISITION",
     "search_dataset": "DATA_ACQUISITION",
+    "retrieve_candidate_data": "DATA_ACQUISITION",
+    "clean_dataset": "PREPROCESSING",
+    "prepare_train_data": "PREPROCESSING",
     "train_predictor": "TRAINING_OPTIONAL",
     "generate_candidates": "PREPROCESSING",
     "score_candidates": "INFERENCE",
@@ -185,6 +189,11 @@ def _first_record(records: list[dict], name: str) -> Dict[str, Any]:
     return {}
 
 
+def _safe_status(value: Any) -> str:
+    text = str(value or "").strip()
+    return text or "not_run"
+
+
 def _build_structured_reports(
     *,
     plan: Dict[str, Any],
@@ -210,12 +219,12 @@ def _build_structured_reports(
         "task_id": design.get("task_id", ""),
         "status": execution.get("status", ""),
         "dataset_step": {
-            "status": search_rec.get("status", ""),
+            "status": _safe_status(search_rec.get("status", "")),
             "selected": (search_rec.get("result") or {}).get("selected", []),
             "available": (search_rec.get("result") or {}).get("available", []),
         },
         "candidate_step": {
-            "status": gen_rec.get("status", ""),
+            "status": _safe_status(gen_rec.get("status", "")),
             "adapter": (gen_rec.get("result") or {}).get("adapter", ""),
             "rows": (gen_rec.get("result") or {}).get("rows", 0),
             "source_csv": (gen_rec.get("result") or {}).get("source_csv", ""),
@@ -239,12 +248,12 @@ def _build_structured_reports(
         },
         "training_step": {
             "ran": bool(train_rec),
-            "status": train_rec.get("status", ""),
+            "status": _safe_status(train_rec.get("status", "")),
             "adapter": (train_rec.get("result") or {}).get("adapter", ""),
             "result": train_rec.get("result") or {},
         },
         "inference_step": {
-            "status": score_rec.get("status", ""),
+            "status": _safe_status(score_rec.get("status", "")),
             "adapter": score_result.get("adapter", ""),
             "used_fallback": score_result.get("adapter", "") == "local_deterministic_fallback",
             "fallback_error": score_result.get("fallback_error", {}),
@@ -258,13 +267,13 @@ def _build_structured_reports(
         "task_id": design.get("task_id", ""),
         "status": execution.get("status", ""),
         "filter_step": {
-            "status": filter_rec.get("status", ""),
+            "status": _safe_status(filter_rec.get("status", "")),
             "topn": (filter_rec.get("result") or {}).get("topn", 0),
             "manifest": (filter_rec.get("result") or {}).get("manifest", ""),
             "final_output": (filter_rec.get("result") or {}).get("final_output", ""),
         },
         "report_step": {
-            "status": report_rec.get("status", ""),
+            "status": _safe_status(report_rec.get("status", "")),
             "report": (report_rec.get("result") or {}).get("report", ""),
             "latest_run_dir": (report_rec.get("result") or {}).get("latest_run_dir", ""),
         },

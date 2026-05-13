@@ -244,6 +244,11 @@ def _apply_provider_metadata(
     return plan
 
 
+def _is_web_evidence_enabled() -> bool:
+    raw = str(os.environ.get("OLED_AGENT_ENABLE_WEB_EVIDENCE", "1")).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _build_rule_based_plan(
     *,
     user_request: str,
@@ -277,8 +282,10 @@ def _build_rule_based_plan(
     calls = [
         ToolCall(name="list_models", args={"kind": "predictor"}),
         ToolCall(name="list_models", args={"kind": "generator"}),
-        ToolCall(name="search_dataset", args={"preferences": design.dataset_preferences}),
     ]
+    if _is_web_evidence_enabled():
+        calls.append(ToolCall(name="search_web_evidence", args={"query": user_request, "topk": 5}))
+    calls.append(ToolCall(name="search_dataset", args={"preferences": design.dataset_preferences}))
 
     if mode == "train_then_design":
         calls.append(
@@ -458,8 +465,10 @@ def _build_rule_based_plan_from_request_payload(
     calls = [
         ToolCall(name="list_models", args={"kind": "predictor"}),
         ToolCall(name="list_models", args={"kind": "generator"}),
-        ToolCall(name="search_dataset", args={"preferences": design.dataset_preferences}),
     ]
+    if _is_web_evidence_enabled():
+        calls.append(ToolCall(name="search_web_evidence", args={"query": request_text, "topk": 5}))
+    calls.append(ToolCall(name="search_dataset", args={"preferences": design.dataset_preferences}))
 
     if mode == "train_then_design":
         calls.append(

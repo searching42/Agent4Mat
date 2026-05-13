@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Dict, List
 
-from oled_agent.agent.request_contract import RequestValidationError, validate_request_payload
+from oled_agent.agent.request_contract import RequestValidationError, validate_step_request_payload
 
 
 def _iter_json_files(path: Path, pattern: str) -> List[Path]:
@@ -19,7 +18,7 @@ def _iter_json_files(path: Path, pattern: str) -> List[Path]:
 
 
 def parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="Validate request JSON examples against request.schema.json")
+    ap = argparse.ArgumentParser(description="Validate step request JSON examples against step_request.schema.json")
     ap.add_argument(
         "--workspace-root",
         default=".",
@@ -28,12 +27,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--examples-dir",
         default="configs/request_templates",
-        help="Directory containing request JSON examples",
+        help="Directory containing step request JSON examples",
     )
     ap.add_argument(
         "--glob",
-        default="request_*.json",
-        help="Glob pattern under examples-dir (default: request_*.json)",
+        default="step_request_*.json",
+        help="Glob pattern under examples-dir (default: step_request_*.json)",
     )
     ap.add_argument("--json", action="store_true", help="Emit machine-readable summary JSON")
     return ap.parse_args()
@@ -56,7 +55,7 @@ def main() -> int:
     }
 
     if not files:
-        msg = f"no request examples found under: {examples_dir} (glob={args.glob})"
+        msg = f"no step request examples found under: {examples_dir} (glob={args.glob})"
         if args.json:
             summary["failed"] = 1
             summary["results"] = [{"path": str(examples_dir), "status": "fail", "error": msg}]
@@ -72,7 +71,7 @@ def main() -> int:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise RequestValidationError("root payload must be object")
-            validate_request_payload(payload=payload, workspace_root=workspace_root)
+            validate_step_request_payload(payload=payload, workspace_root=workspace_root)
             summary["passed"] = int(summary["passed"]) + 1
             cast_results = list(summary["results"])  # type: ignore[arg-type]
             cast_results.append({"path": str(path), "status": "pass"})
@@ -92,9 +91,7 @@ def main() -> int:
                 print(f"[PASS] {item['path']}")
             else:
                 print(f"[FAIL] {item['path']}: {item.get('error', '')}")
-        print(
-            f"REQUEST_EXAMPLES checked={summary['checked']} pass={summary['passed']} fail={summary['failed']}"
-        )
+        print(f"STEP_REQUEST_EXAMPLES checked={summary['checked']} pass={summary['passed']} fail={summary['failed']}")
 
     return exit_code
 

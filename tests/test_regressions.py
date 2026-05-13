@@ -1085,7 +1085,9 @@ class RegressionTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
         self.assertIn("request-templates-validate", makefile)
+        self.assertIn("step-request-templates-validate", makefile)
         self.assertIn("@$(MAKE) request-templates-validate WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", makefile)
+        self.assertIn("@$(MAKE) step-request-templates-validate WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", makefile)
 
     def test_env_example_uses_tmp_base_name(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1211,6 +1213,21 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(image_target.get("target_value"), 60.0)
         self.assertEqual(pdf_target.get("target_value"), 60.0)
 
+    def test_configs_step_request_templates_are_contract_valid(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        templates_dir = repo_root / "configs" / "request_templates"
+        clean_json = templates_dir / "step_request_clean_dataset.json"
+        train_json = templates_dir / "step_request_train_predictor.json"
+        self.assertTrue(clean_json.exists(), msg=f"Missing step request template: {clean_json}")
+        self.assertTrue(train_json.exists(), msg=f"Missing step request template: {train_json}")
+
+        clean_payload = json.loads(clean_json.read_text(encoding="utf-8"))
+        train_payload = json.loads(train_json.read_text(encoding="utf-8"))
+        validate_step_request_payload(payload=clean_payload, workspace_root=repo_root)
+        validate_step_request_payload(payload=train_payload, workspace_root=repo_root)
+        self.assertEqual(clean_payload.get("operation"), "clean_dataset")
+        self.assertEqual(train_payload.get("operation"), "train_predictor")
+
     def test_request_templates_validate_script_reports_pass(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         cp = subprocess.run(
@@ -1228,6 +1245,29 @@ class RegressionTests(unittest.TestCase):
             capture_output=True,
             text=True,
             env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+        )
+        self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+        payload = json.loads(cp.stdout)
+        self.assertEqual(payload.get("failed"), 0)
+        self.assertGreaterEqual(int(payload.get("checked", 0)), 2)
+
+    def test_step_request_templates_validate_script_reports_pass(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        cp = subprocess.run(
+            [
+                sys.executable,
+                "scripts/validate_step_request_examples.py",
+                "--workspace-root",
+                str(repo_root),
+                "--examples-dir",
+                "configs/request_templates",
+                "--json",
+            ],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
         )
         self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
         payload = json.loads(cp.stdout)
@@ -5601,6 +5641,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/adapters/check_quickstart_chain.sh", content)
         self.assertIn("scripts/adapters/validate_adapter_contract.py", content)
         self.assertIn("scripts/check_llm_planner_modes.py", content)
+        self.assertIn("scripts/validate_step_request_examples.py", content)
         self.assertIn("train_predictor_unimol_adapter.py", content)
         self.assertIn("score_candidates_unimol_adapter.py", content)
         self.assertIn("generate_candidates_mineru_adapter.py", content)
@@ -5628,6 +5669,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/archive_real_chain_baseline.py", content)
+        self.assertIn("step-request-templates-validate:", content)
         self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
         self.assertIn("scripts/run_real_chain_acceptance_real.sh", content)
         self.assertIn("scripts/run_real_chain_baseline.sh", content)
@@ -5648,6 +5690,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "build_script_migration_map.py",
             repo_root / "scripts" / "collect_real_chain_evidence.py",
             repo_root / "scripts" / "archive_real_chain_baseline.py",
+            repo_root / "scripts" / "validate_step_request_examples.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_real.sh",

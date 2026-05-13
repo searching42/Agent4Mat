@@ -1,0 +1,35 @@
+{
+  "task": {
+    "version": "2.0",
+    "task_id": "task_step_clean_dataset_template",
+    "request_text": "单步执行数据清洗",
+    "execution_mode": "single_step",
+    "operation": "clean_dataset",
+    "property": "plqy",
+    "range": "60-100",
+    "n_structures": 10,
+    "constraints": {
+      "mw_min": 150.0,
+      "mw_max": 700.0,
+      "domain_threshold": 0.2,
+      "banned_alerts": []
+    },
+    "train_data": null,
+    "candidate_data": "runs/ci/step_mode_input.csv",
+    "prediction_model": "unimol_lambda_plqy_v1",
+    "model_preferences": {
+      "predictor_id": "unimol_lambda_plqy_v1",
+      "generator_id": "reinvent4_lambda_em_v2"
+    },
+    "generation_input": {},
+    "provenance": {},
+    "status": "approved",
+    "missing_fields": [],
+    "questions": [],
+    "compatibility_warnings": []
+  },
+  "operation": "clean_dataset",
+  "args": {
+    "input_csv": "runs/ci/step_mode_input.csv"
+  }
+}

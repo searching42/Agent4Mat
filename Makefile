@@ -5,7 +5,7 @@ TASK_ID ?= make_quickstart
 RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
-.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate input-smoke
+.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke
 .PHONY: intake-contract-guard step-mode-guard web-evidence-guard real-no-fallback-gate
 .PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-evidence ui-smoke
 
@@ -17,6 +17,7 @@ help:
 	@echo "  make release-boundary    - check repo hygiene for release boundary"
 	@echo "  make script-map          - generate workspace script migration map"
 	@echo "  make request-templates-validate - validate request templates against request schema"
+	@echo "  make step-request-templates-validate - validate step request templates against step_request schema"
 	@echo "  make input-smoke         - run MolScribe image/pdf input smoke acceptance"
 	@echo "  make intake-contract-guard - validate task.v2 + step_request contracts"
 	@echo "  make step-mode-guard     - smoke check agent-run-step and agent-run-step-json"
@@ -91,6 +92,9 @@ script-map:
 request-templates-validate:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/validate_request_examples.py --workspace-root "$(WORKSPACE_ROOT)" --examples-dir "configs/request_templates"
 
+step-request-templates-validate:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/validate_step_request_examples.py --workspace-root "$(WORKSPACE_ROOT)" --examples-dir "configs/request_templates"
+
 input-smoke:
 	@./scripts/run_molscribe_input_smoke.sh "input_smoke"
 
@@ -127,6 +131,7 @@ ui-smoke:
 release-check:
 	@$(MAKE) adapter-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(MAKE) request-templates-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) step-request-templates-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(MAKE) quickstart TASK_ID="$(TASK_ID)"
 	@$(MAKE) llm-smoke
 	@$(MAKE) doctor WORKSPACE_ROOT="$(WORKSPACE_ROOT)"

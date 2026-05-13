@@ -31,5 +31,6 @@ Pass criteria:
    - `make real-chain-baseline TASK_ID=<base_task_id>` (recommended, 3 consecutive strict runs)
    - and verify `runs/agent/<base_task_id>/baseline_summary.json` has `status=pass`
    - and package artifacts: `make real-chain-baseline-archive TASK_ID=<base_task_id>`
+   - optional compressed package: `make real-chain-baseline-archive-tgz TASK_ID=<base_task_id>`
    - or `make real-chain-acceptance-real TASK_ID=<task_id>` for a single strict run
    - or `make real-chain-evidence TASK_ID=<task_id>` on an existing acceptance run

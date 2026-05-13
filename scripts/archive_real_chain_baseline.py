@@ -5,6 +5,7 @@ import argparse
 import json
 import shutil
 import subprocess
+import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -120,6 +121,9 @@ def _write_manifest_md(manifest: Dict[str, Any]) -> str:
     lines.append(f"- git_sha: `{manifest.get('git_sha')}`")
     lines.append(f"- copied_count: `{manifest.get('copied_count', 0)}`")
     lines.append(f"- missing_required_count: `{manifest.get('missing_required_count', 0)}`")
+    tar_gz_path = str(manifest.get("tar_gz_path") or "").strip()
+    if tar_gz_path:
+        lines.append(f"- tar_gz_path: `{tar_gz_path}`")
     lines.append("")
     lines.append("## Required Missing")
     missing = manifest.get("missing_required", [])
@@ -153,6 +157,16 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         default="",
         help="Output directory for archive bundle (default: runs/archive/<base_task_id>)",
+    )
+    p.add_argument(
+        "--tar-gz",
+        action="store_true",
+        help="Also write a .tar.gz package from out-dir",
+    )
+    p.add_argument(
+        "--tar-gz-path",
+        default="",
+        help="Output path for .tar.gz package (default: <out-dir>.tar.gz)",
     )
     p.add_argument("--overwrite", action="store_true", help="Overwrite existing out-dir")
     p.add_argument("--allow-nonpass", action="store_true", help="Do not fail when baseline summary status is not pass")
@@ -249,9 +263,25 @@ def main() -> int:
     manifest_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     manifest_md.write_text(_write_manifest_md(manifest), encoding="utf-8")
 
+    tar_gz_path = None
+    if bool(args.tar_gz):
+        tar_gz_path = (
+            _resolve_path(args.tar_gz_path, workspace_root)
+            if str(args.tar_gz_path).strip()
+            else out_dir.with_suffix(".tar.gz")
+        )
+        tar_gz_path.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(tar_gz_path, mode="w:gz") as tf:
+            tf.add(out_dir, arcname=out_dir.name)
+        manifest["tar_gz_path"] = str(tar_gz_path)
+        manifest_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        manifest_md.write_text(_write_manifest_md(manifest), encoding="utf-8")
+
     print(f"ARCHIVE_DIR={out_dir}")
     print(f"ARCHIVE_MANIFEST_JSON={manifest_json}")
     print(f"ARCHIVE_MANIFEST_MD={manifest_md}")
+    if tar_gz_path is not None:
+        print(f"ARCHIVE_TAR_GZ={tar_gz_path}")
     print(
         json.dumps(
             {
@@ -259,6 +289,7 @@ def main() -> int:
                 "base_task_id": base_task_id,
                 "copied_count": len(copied),
                 "missing_required_count": len(missing_required),
+                "tar_gz_path": str(tar_gz_path) if tar_gz_path is not None else "",
             },
             ensure_ascii=False,
         )

@@ -64,6 +64,7 @@
   - `make real-chain-baseline TASK_ID=<base_task_id>`
 - to package all baseline evidence into one directory, use:
   - `make real-chain-baseline-archive TASK_ID=<base_task_id>`
+  - optional compressed package: `make real-chain-baseline-archive-tgz TASK_ID=<base_task_id>`
 - archive the following paths as one release evidence bundle:
   - `runs/agent/<base_task_id>/baseline_summary.json`
   - `runs/agent/<base_task_id>_r1/strict_acceptance_summary.json`
@@ -80,3 +81,4 @@
 - packaged output:
   - `runs/archive/<base_task_id>/archive_manifest.json`
   - `runs/archive/<base_task_id>/archive_manifest.md`
+  - optional: `runs/archive/<base_task_id>.tar.gz`

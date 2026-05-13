@@ -8,6 +8,7 @@ import re
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -1134,8 +1135,10 @@ class RegressionTests(unittest.TestCase):
         ci = ci_doc.read_text(encoding="utf-8")
         self.assertIn("make real-chain-baseline TASK_ID=<base_task_id>", ci)
         self.assertIn("make real-chain-baseline-archive TASK_ID=<base_task_id>", ci)
+        self.assertIn("make real-chain-baseline-archive-tgz TASK_ID=<base_task_id>", ci)
         self.assertIn("baseline_summary.json", ci)
         self.assertIn("archive_manifest.json", ci)
+        self.assertIn("runs/archive/<base_task_id>.tar.gz", ci)
         self.assertIn("strict_acceptance_summary.json", ci)
         self.assertIn("release_evidence.json", ci)
 
@@ -1171,6 +1174,7 @@ class RegressionTests(unittest.TestCase):
         boundary = (repo_root / "docs" / "release_boundary.md").read_text(encoding="utf-8")
         self.assertIn("make real-chain-baseline TASK_ID=<base_task_id>", boundary)
         self.assertIn("make real-chain-baseline-archive TASK_ID=<base_task_id>", boundary)
+        self.assertIn("make real-chain-baseline-archive-tgz TASK_ID=<base_task_id>", boundary)
         self.assertIn("baseline_summary.json", boundary)
 
     def test_docs_examples_molscribe_requests_are_contract_valid(self) -> None:
@@ -5663,6 +5667,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("real-chain-acceptance-real:", content)
         self.assertIn("real-chain-baseline:", content)
         self.assertIn("real-chain-baseline-archive:", content)
+        self.assertIn("real-chain-baseline-archive-tgz:", content)
         self.assertIn("real-chain-evidence:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
@@ -5673,6 +5678,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/run_real_chain_acceptance_minimal.sh", content)
         self.assertIn("scripts/run_real_chain_acceptance_real.sh", content)
         self.assertIn("scripts/run_real_chain_baseline.sh", content)
+        self.assertIn("archive_real_chain_baseline.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --tar-gz", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
         self.assertIn("scripts/run_molscribe_input_smoke.sh", content)
@@ -5955,6 +5961,107 @@ class PlanProgressAssetsTests(unittest.TestCase):
             copied = manifest.get("copied", [])
             self.assertTrue(isinstance(copied, list) and len(copied) >= 10)
             self.assertTrue((out_dir / "files" / "runs" / "agent" / base_task_id / "baseline_summary.json").exists())
+
+    def test_archive_real_chain_baseline_script_writes_tar_gz_package(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            base_task_id = "demo_baseline_tgz"
+            base_dir = td_path / "runs" / "agent" / base_task_id
+            base_dir.mkdir(parents=True, exist_ok=True)
+
+            run_task_id = f"{base_task_id}_r1"
+            run_dir = td_path / "runs" / "agent" / run_task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            strict_path = run_dir / "strict_acceptance_summary.json"
+            result_path = run_dir / "acceptance_result.json"
+            release_json = run_dir / "release_evidence.json"
+            release_md = run_dir / "release_evidence.md"
+            plan_path = run_dir / "plan.json"
+            execution_path = run_dir / "execution.json"
+            decision_path = run_dir / "decision_summary.json"
+            task_state_path = run_dir / "task_state.json"
+            tool_state_path = run_dir / "tool_state.json"
+
+            strict_path.write_text(json.dumps({"status": "pass"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            plan_path.write_text(json.dumps({"summary": "ok"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            execution_path.write_text(json.dumps({"records": []}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            decision_path.write_text(json.dumps({"score_step": {"used_fallback": False}}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            task_state_path.write_text(json.dumps({"status": "success"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            tool_state_path.write_text(json.dumps({"status": "ok"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            release_json.write_text(json.dumps({"overall": "pass"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            release_md.write_text("# evidence\n", encoding="utf-8")
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "task_id": run_task_id,
+                        "status": "success",
+                        "plan_path": str(plan_path),
+                        "execution_path": str(execution_path),
+                        "decision_summary_path": str(decision_path),
+                        "task_state_path": str(task_state_path),
+                        "tool_state_path": str(tool_state_path),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            baseline_summary = base_dir / "baseline_summary.json"
+            baseline_summary.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "base_task_id": base_task_id,
+                        "run_count": 1,
+                        "runs": [
+                            {
+                                "task_id": run_task_id,
+                                "strict_summary": str(strict_path.relative_to(td_path)),
+                                "result_json": str(result_path.relative_to(td_path)),
+                                "release_evidence_json": str(release_json.relative_to(td_path)),
+                            }
+                        ],
+                        "failures": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out_dir = td_path / "runs" / "archive" / base_task_id
+            script = repo_root / "scripts" / "archive_real_chain_baseline.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--base-task-id",
+                    base_task_id,
+                    "--out-dir",
+                    str(out_dir),
+                    "--tar-gz",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            tar_path = out_dir.with_suffix(".tar.gz")
+            self.assertTrue(tar_path.exists(), msg=f"missing tar package: {tar_path}")
+            manifest = json.loads((out_dir / "archive_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(Path(str(manifest.get("tar_gz_path") or "")).resolve(), tar_path.resolve())
+            with tarfile.open(tar_path, mode="r:gz") as tf:
+                names = tf.getnames()
+            self.assertIn(f"{base_task_id}/archive_manifest.json", names)
+            self.assertIn(f"{base_task_id}/archive_manifest.md", names)
 
 
 class ModelCatalogTests(unittest.TestCase):

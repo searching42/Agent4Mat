@@ -209,6 +209,20 @@ HTML = """
         margin-bottom: 10px;
         font-size: 0.82rem;
       }
+      .progress-wrap {
+        width: 100%;
+        height: 10px;
+        border: 1px solid #ced8e9;
+        background: #ecf2fb;
+        border-radius: 999px;
+        overflow: hidden;
+        margin-top: 8px;
+      }
+      .progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+      }
       .state-pass { color: var(--ok); }
       .state-fail { color: var(--fail); }
       .state-warn { color: var(--warn); }
@@ -320,6 +334,11 @@ HTML = """
         <h2>Outputs</h2>
         <h3>Runtime + artifacts</h3>
         <div class=\"runtime\" id=\"runtime_box\">runtime: (waiting)</div>
+        <div class=\"progress-wrap\"><div class=\"progress-bar\" id=\"runtime_progress_bar\"></div></div>
+        <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
+        <div class=\"btn-row\">
+          <button onclick=\"retryCurrentTask()\">Retry Current Task (resume)</button>
+        </div>
         <label>Recent Events</label>
         <pre id=\"event_out\">(no events)</pre>
         <label>Artifact</label>
@@ -462,6 +481,22 @@ HTML = """
           lines.push(line);
         }
         document.getElementById('event_out').textContent = lines.length > 0 ? lines.join('\n') : '(no events)';
+      }
+
+      function renderRuntimeProgress(summary) {
+        const bar = document.getElementById('runtime_progress_bar');
+        const text = document.getElementById('runtime_progress_text');
+        const total = Number(summary && summary.total_steps ? summary.total_steps : 0);
+        const success = Number(summary && summary.success_steps ? summary.success_steps : 0);
+        const failed = Number(summary && summary.failed_steps ? summary.failed_steps : 0);
+        if (!Number.isFinite(total) || total <= 0) {
+          bar.style.width = '0%';
+          text.textContent = 'progress: -';
+          return;
+        }
+        const ratio = Math.max(0, Math.min(1, success / total));
+        bar.style.width = `${(ratio * 100).toFixed(1)}%`;
+        text.textContent = `progress: ${success}/${total} success, failed=${failed}`;
       }
 
       function taskId() {
@@ -740,10 +775,28 @@ HTML = """
         await sendChat(false);
       }
 
+      async function retryCurrentTask() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const r = await apiPost('/api/resume', {
+          task_id: tid,
+          planner_provider: document.getElementById('planner').value,
+          catalog_path: document.getElementById('catalog').value,
+        });
+        renderJsonOut(r.data);
+        const status = String((r.data && r.data.status) || 'unknown');
+        renderEvents([{stage: 'resume', status: status}]);
+        await loadRunRuntime();
+      }
+
       async function loadRunRuntime() {
         const tid = taskId();
         if (!tid || tid === '-') {
           document.getElementById('runtime_box').textContent = 'runtime: no active task';
+          renderRuntimeProgress(null);
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -764,6 +817,7 @@ HTML = """
         }
         const text = lines.join(' | ');
         document.getElementById('runtime_box').textContent = text;
+        renderRuntimeProgress(tl.summary || null);
       }
 
       async function boot() {

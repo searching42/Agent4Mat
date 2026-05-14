@@ -210,6 +210,7 @@ UI prototype API coverage:
 - `POST /api/intake` -> `agent-intake` (task clarification + evidence)
 - `POST /api/approve` -> `agent-approve` (task.v2 draft approval)
 - `POST /api/resume` -> `agent-resume` (idempotent task resume)
+- `POST /api/task/<task_id>/retry-failed-step` -> retry latest failed tool as single-step run
 - `GET /api/task/<task_id>/summary` -> artifact/status preview
 - `GET /api/task/<task_id>/artifact/<artifact_name>` -> artifact content preview (`plan|execution|tool_state|decision_summary|task_state|web_evidence|experiment_trace`)
 - `GET /api/task/<task_id>/timeline` -> step timeline with duration/status/adapter summary (supports `tool`, `status_filter`, `sort`)

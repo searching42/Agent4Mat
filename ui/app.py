@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Flask, jsonify, render_template_string, request
-from oled_agent.agent.task_v2 import compute_missing_questions
+from oled_agent.agent.task_v2 import compute_missing_questions, legacy_request_to_task_v2
 from oled_agent.agent.request_contract import validate_decision_summary_payload, validate_task_state_payload
 
 
@@ -348,6 +348,7 @@ HTML = """
         <div class=\"progress-wrap\"><div class=\"progress-bar\" id=\"runtime_progress_bar\"></div></div>
         <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
         <div class=\"btn-row\">
+          <button onclick=\"retryFailedStep()\">Retry Latest Failed Step</button>
           <button onclick=\"retryCurrentTask()\">Retry Current Task (resume)</button>
         </div>
         <label>Recent Events</label>
@@ -842,6 +843,22 @@ HTML = """
         await loadRunRuntime();
       }
 
+      async function retryFailedStep() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const r = await apiPost(`/api/task/${encodeURIComponent(tid)}/retry-failed-step`, {
+          catalog_path: document.getElementById('catalog').value,
+        });
+        renderJsonOut(r.data);
+        const status = String((r.data && r.data.status) || 'unknown');
+        const op = String((r.data && r.data.retry_operation) || '');
+        renderEvents([{stage: 'retry_failed_step', status: status, operation: op || undefined}]);
+        await loadRunRuntime();
+      }
+
       async function loadRunRuntime() {
         const tid = taskId();
         if (!tid || tid === '-') {
@@ -1075,6 +1092,96 @@ def _load_json_if_exists(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _tool_name_to_retry_operation(tool_name: str) -> Optional[str]:
+    name = str(tool_name or "").strip()
+    mapping = {
+        "search_dataset": "retrieve_candidate_data",
+        "retrieve_candidate_data": "retrieve_candidate_data",
+        "clean_dataset": "clean_dataset",
+        "prepare_train_data": "prepare_train_data",
+        "train_predictor": "train_predictor",
+        "generate_candidates": "generate_candidates",
+        "score_candidates": "score_candidates",
+        "filter_and_rank": "filter_and_rank",
+        "make_report": "make_report",
+    }
+    op = mapping.get(name)
+    if op not in STEP_OPERATIONS:
+        return None
+    return op
+
+
+def _load_task_payload_for_retry(task_id: str) -> Optional[Dict[str, Any]]:
+    run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
+    task_json = run_dir / "task.json"
+    draft_json = run_dir / "task.draft.json"
+    req_task_json = run_dir / "request_from_task.json"
+    legacy_req_json = run_dir / "request.json"
+    for p in (task_json, draft_json):
+        payload = _load_json_if_exists(p)
+        if isinstance(payload, dict):
+            return payload
+    req_payload = _load_json_if_exists(req_task_json)
+    if isinstance(req_payload, dict):
+        try:
+            return legacy_request_to_task_v2(req_payload)
+        except Exception:
+            return None
+    legacy_req = _load_json_if_exists(legacy_req_json)
+    if isinstance(legacy_req, dict):
+        try:
+            return legacy_request_to_task_v2(legacy_req)
+        except Exception:
+            return None
+    return None
+
+
+def _build_retry_args(
+    *,
+    operation: str,
+    task_payload: Dict[str, Any],
+    tool_state: Dict[str, Any],
+    failed_record_args: Dict[str, Any],
+) -> Dict[str, Any]:
+    # Prefer the original failed args for deterministic replay.
+    if isinstance(failed_record_args, dict) and failed_record_args:
+        return dict(failed_record_args)
+
+    candidate_data = str(task_payload.get("candidate_data") or "").strip()
+    train_data = str(task_payload.get("train_data") or "").strip()
+    n_structures = int(task_payload.get("n_structures") or 10)
+    if operation == "retrieve_candidate_data":
+        return {"candidate_data": candidate_data}
+    if operation == "clean_dataset":
+        input_csv = str(tool_state.get("candidate_csv") or candidate_data).strip()
+        return {"input_csv": input_csv} if input_csv else {}
+    if operation == "prepare_train_data":
+        return {"train_data": train_data} if train_data else {}
+    if operation == "generate_candidates":
+        args: Dict[str, Any] = {"max_candidates": max(1, n_structures)}
+        if candidate_data:
+            args["input_csv"] = candidate_data
+        return args
+    if operation == "score_candidates":
+        input_csv = str(tool_state.get("generated_csv") or tool_state.get("candidate_csv") or "").strip()
+        return {"input_csv": input_csv} if input_csv else {}
+    if operation == "filter_and_rank":
+        return {"topn": min(10, max(1, n_structures))}
+    return {}
+
+
+def _latest_failed_record(execution_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    records = execution_payload.get("records")
+    if not isinstance(records, list):
+        return None
+    for rec in reversed(records):
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("status") or "") != "success":
+            return rec
+    return None
 
 
 def _task_updated_epoch_ms(run_dir: Path) -> int:
@@ -2628,6 +2735,69 @@ def api_resume():
     if not _is_safe_task_id(task_id):
         return jsonify({"status": "fail", "error": "invalid task_id"}), 400
     return jsonify(_run_agent_resume(task_id=task_id, planner_provider=planner, catalog_path=catalog))
+
+
+@app.post("/api/task/<task_id>/retry-failed-step")
+def api_task_retry_failed_step(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+
+    run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    if not run_dir.exists():
+        return jsonify({"status": "missing", "task_id": tid, "error": "run_dir_missing"}), 404
+
+    execution = _load_json_if_exists(run_dir / "execution.json")
+    if not isinstance(execution, dict):
+        return jsonify({"status": "fail", "task_id": tid, "error": "missing_or_invalid_execution"}), 200
+    failed_rec = _latest_failed_record(execution)
+    if not isinstance(failed_rec, dict):
+        return jsonify({"status": "fail", "task_id": tid, "error": "no_failed_step"}), 200
+
+    failed_tool_name = str(failed_rec.get("name") or "").strip()
+    operation = _tool_name_to_retry_operation(failed_tool_name)
+    if not operation:
+        return jsonify(
+            {
+                "status": "fail",
+                "task_id": tid,
+                "error": "unsupported_failed_step_for_retry",
+                "failed_tool_name": failed_tool_name,
+            }
+        ), 200
+
+    task_payload = _load_task_payload_for_retry(tid)
+    if not isinstance(task_payload, dict):
+        return jsonify({"status": "fail", "task_id": tid, "error": "missing_task_payload_for_retry"}), 200
+
+    body = request.get_json(silent=True) or {}
+    catalog = str(body.get("catalog_path") or DEFAULT_CATALOG)
+    tool_state = _load_json_if_exists(run_dir / "tool_state.json")
+    if not isinstance(tool_state, dict):
+        tool_state = {}
+    failed_args = failed_rec.get("args") if isinstance(failed_rec.get("args"), dict) else {}
+    retry_args = _build_retry_args(
+        operation=operation,
+        task_payload=task_payload,
+        tool_state=tool_state,
+        failed_record_args=failed_args,
+    )
+    step_request = {
+        "task": task_payload,
+        "operation": operation,
+        "args": retry_args,
+    }
+    out = _run_agent_step_json(payload=step_request, catalog_path=catalog)
+    response: Dict[str, Any] = {
+        "task_id": tid,
+        "failed_tool_name": failed_tool_name,
+        "retry_operation": operation,
+        "retry_args": retry_args,
+        **out,
+    }
+    return jsonify(response)
 
 
 @app.get("/api/task/<task_id>/summary")

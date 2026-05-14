@@ -27,6 +27,7 @@ Open: `http://127.0.0.1:8787`
   - runtime summary (status / record_count / duration)
   - progress bar from timeline summary (`success_steps / total_steps`)
   - one-click retry current task via `agent-resume`
+  - one-click retry latest failed step via `agent-run-step-json`
   - recent stage events (intake/approve/run/step)
   - artifact preview and timeline / validation shortcuts
 - compatibility:
@@ -50,6 +51,7 @@ Open: `http://127.0.0.1:8787`
   - `POST /api/intake`
   - `POST /api/approve`
   - `POST /api/resume`
+  - `POST /api/task/<task_id>/retry-failed-step`
   - `GET /api/task/<task_id>/summary`
   - `GET /api/task/<task_id>/artifact/<artifact_name>`
   - `GET /api/task/<task_id>/timeline`

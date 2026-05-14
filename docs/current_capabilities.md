@@ -156,6 +156,7 @@ Implemented stages:
   - supports chat-first workflow (project memory + chat turn orchestration + file input entry)
   - chat API supports single-step command execution (`/step <operation> {args_json}`)
   - supports project APIs (`/api/projects`, `/api/projects/<id>/history`, `/api/chat/send`, `/api/projects/<id>/upload-ref`)
+  - supports targeted retry for latest failed step (`POST /api/task/<task_id>/retry-failed-step`)
   - keeps full pipeline / single-step / intake / approve / resume APIs for compatibility
   - supports experiment list endpoint (`/api/experiments`) for trace-level filtering
   - task inspector supports recent-task picker, artifact preview, timeline view (failed highlight + filter/sort), run-to-run compare, artifact key-path diff, and one-click core artifact validation

@@ -33,6 +33,7 @@ Open: `http://127.0.0.1:8787`
   - artifact preview and timeline / validation shortcuts
 - chat transcript:
   - stores per-turn event trace messages (`event_trace`) to show stage timeline inline
+  - includes grouped timeline board (Running / Completed / Failed) from `/api/task/<task_id>/timeline`
 - compatibility:
   - legacy run/step/intake/approve/resume/task-inspector APIs remain available
 

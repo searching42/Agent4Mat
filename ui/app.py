@@ -176,6 +176,43 @@ HTML = """
       .timeline-item {
         margin: 2px 0;
       }
+      .timeline-groups {
+        margin-top: 10px;
+        border: 1px solid #d6dfef;
+        border-radius: 9px;
+        padding: 8px;
+        background: #f7faff;
+      }
+      .tg-head {
+        font-size: 0.78rem;
+        color: #39465c;
+        margin-bottom: 6px;
+      }
+      .tg-cols {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+      .tg-col {
+        border: 1px solid #dce5f3;
+        border-radius: 8px;
+        background: #fff;
+        min-height: 66px;
+        padding: 6px;
+      }
+      .tg-col h4 {
+        margin: 0 0 5px 0;
+        font-size: 0.74rem;
+        color: #485772;
+      }
+      .tg-col ul {
+        margin: 0;
+        padding-left: 14px;
+        font-size: 0.72rem;
+      }
+      .tg-col li {
+        margin: 2px 0;
+      }
       .chat-input {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -239,6 +276,7 @@ HTML = """
       @media (max-width: 1200px) {
         .layout { grid-template-columns: 1fr; }
         .chat-wrap { min-height: 65vh; }
+        .tg-cols { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -295,6 +333,23 @@ HTML = """
 
       <section class=\"panel chat-wrap\">
         <div class=\"chat-log\" id=\"chat_log\"></div>
+        <div class=\"timeline-groups\" id=\"timeline_groups_box\">
+          <div class=\"tg-head\" id=\"timeline_groups_head\">Run Timeline Groups (current task)</div>
+          <div class=\"tg-cols\">
+            <div class=\"tg-col\">
+              <h4>Running</h4>
+              <ul id=\"tg_running\"><li>(empty)</li></ul>
+            </div>
+            <div class=\"tg-col\">
+              <h4>Completed</h4>
+              <ul id=\"tg_completed\"><li>(empty)</li></ul>
+            </div>
+            <div class=\"tg-col\">
+              <h4>Failed</h4>
+              <ul id=\"tg_failed\"><li>(empty)</li></ul>
+            </div>
+          </div>
+        </div>
         <div class=\"chat-input\">
           <label>Chat with agent</label>
           <textarea id=\"message_input\" placeholder=\"例如：设计470nm附近且高PLQY分子；补充字段：{&quot;candidate_data&quot;:&quot;/abs/path/data.csv&quot;}；或单步：/step clean_dataset {&quot;input_csv&quot;:&quot;/abs/path/data.csv&quot;}\"></textarea>
@@ -540,6 +595,59 @@ HTML = """
           txt += ` | latest_failed_step: ${name || '-'}`;
         }
         ele.textContent = txt;
+      }
+
+      function setListItems(targetId, lines) {
+        const ul = document.getElementById(targetId);
+        ul.innerHTML = '';
+        const arr = Array.isArray(lines) ? lines : [];
+        if (arr.length < 1) {
+          const li = document.createElement('li');
+          li.textContent = '(empty)';
+          ul.appendChild(li);
+          return;
+        }
+        for (const line of arr) {
+          const li = document.createElement('li');
+          li.textContent = String(line || '');
+          ul.appendChild(li);
+        }
+      }
+
+      function renderTimelineGroups(timelinePayload) {
+        const head = document.getElementById('timeline_groups_head');
+        const summary = (timelinePayload && typeof timelinePayload === 'object' && timelinePayload.summary && typeof timelinePayload.summary === 'object')
+          ? timelinePayload.summary
+          : {};
+        const events = Array.isArray(timelinePayload && timelinePayload.events) ? timelinePayload.events : [];
+        const running = [];
+        const completed = [];
+        const failed = [];
+        for (const ev of events) {
+          if (!ev || typeof ev !== 'object') continue;
+          const name = String(ev.name || 'step');
+          const status = String(ev.status || '');
+          const startedAt = String(ev.started_at || '');
+          const dur = (typeof ev.duration_ms === 'number') ? `${ev.duration_ms}ms` : 'n/a';
+          const text = `${name} | status=${status || '-'} | dur=${dur}`;
+          if (String(status).toLowerCase() === 'running') {
+            running.push(text);
+          } else if (Boolean(ev.is_failed)) {
+            failed.push(text);
+          } else {
+            completed.push(text);
+          }
+          if (!status && startedAt && !ev.ended_at) {
+            running.push(`${name} | status=running | dur=n/a`);
+          }
+        }
+        const total = Number(summary.total_steps || events.length || 0);
+        const succ = Number(summary.success_steps || 0);
+        const fail = Number(summary.failed_steps || failed.length || 0);
+        head.textContent = `Run Timeline Groups (total=${total}, success=${succ}, failed=${fail})`;
+        setListItems('tg_running', running);
+        setListItems('tg_completed', completed);
+        setListItems('tg_failed', failed);
       }
 
       function taskId() {
@@ -958,6 +1066,7 @@ HTML = """
           document.getElementById('runtime_box').textContent = 'runtime: no active task';
           document.getElementById('runtime_stage_text').textContent = 'stage: -';
           renderRuntimeProgress(null);
+          renderTimelineGroups(null);
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -980,6 +1089,7 @@ HTML = """
         document.getElementById('runtime_box').textContent = text;
         renderRuntimeStage(s, tl);
         renderRuntimeProgress(tl.summary || null);
+        renderTimelineGroups(tl);
       }
 
       async function boot() {

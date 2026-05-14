@@ -5,11 +5,13 @@ import os
 import re
 import subprocess
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Flask, jsonify, render_template_string, request
+from oled_agent.agent.task_v2 import compute_missing_questions
 from oled_agent.agent.request_contract import validate_decision_summary_payload, validate_task_state_payload
 
 
@@ -17,6 +19,9 @@ app = Flask(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG = "scripts/adapters/real_adapters_catalog.json"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PROJECTS_DIR_REL = Path("runs/ui_sessions/projects")
+UPLOADS_DIR_REL = Path("runs/ui_sessions/uploads")
+MAX_PROJECT_HISTORY = 400
 ARTIFACT_NAME_TO_FILE = {
     "plan": "plan.json",
     "execution": "execution.json",
@@ -33,104 +38,238 @@ HTML = """
 <html>
   <head>
     <meta charset=\"utf-8\" />
-    <title>Agent4Mat UI Prototype</title>
+    <title>Agent4Mat Chat Console</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; margin: 1.2rem; background: #f6f7fb; color: #111827; }
-      .wrap { max-width: 1120px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-      .card { background: white; border: 1px solid #e5e7eb; border-radius: 10px; padding: 1rem 1.2rem; }
-      label { display: block; margin-top: 0.8rem; font-weight: 600; }
-      input, textarea, select { width: 100%; margin-top: 0.3rem; padding: 0.5rem; }
-      button { margin-top: 0.8rem; padding: 0.5rem 0.9rem; margin-right: 0.5rem; }
-      pre { background: #f7f7f7; padding: 0.8rem; border-radius: 8px; overflow-x: auto; }
-      h2 { margin-top: 0.2rem; }
-      .full { grid-column: 1 / -1; }
+      :root {
+        --bg: #f3f5f9;
+        --card: #ffffff;
+        --line: #d6deea;
+        --txt: #1b2433;
+        --muted: #6b7483;
+        --brand: #0b5ed7;
+        --brand-soft: #dbe9ff;
+        --ok: #0f766e;
+        --warn: #b45309;
+        --fail: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at 20% 0%, #ecf3ff, var(--bg) 48%);
+        color: var(--txt);
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 280px minmax(520px, 1fr) 360px;
+        gap: 12px;
+        min-height: 100vh;
+        padding: 12px;
+      }
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        box-shadow: 0 8px 20px rgba(17, 24, 39, 0.04);
+      }
+      h2, h3 { margin: 0 0 8px 0; }
+      h2 { font-size: 1.0rem; }
+      h3 { font-size: 0.92rem; color: var(--muted); }
+      .muted { color: var(--muted); font-size: 0.84rem; }
+      label {
+        display: block;
+        margin-top: 8px;
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: #3a4252;
+      }
+      input, textarea, select, button {
+        font: inherit;
+      }
+      input, textarea, select {
+        width: 100%;
+        margin-top: 5px;
+        padding: 8px 9px;
+        border: 1px solid #cfd7e5;
+        border-radius: 9px;
+        background: white;
+      }
+      textarea { resize: vertical; }
+      button {
+        margin-top: 8px;
+        padding: 8px 11px;
+        border-radius: 9px;
+        border: 1px solid #bed1f8;
+        background: var(--brand-soft);
+        color: #114293;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--brand);
+        color: white;
+        border-color: var(--brand);
+      }
+      .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .project-meta {
+        margin-top: 8px;
+        padding: 8px;
+        background: #f7f9fd;
+        border: 1px solid #e2e7f1;
+        border-radius: 9px;
+        font-size: 0.82rem;
+      }
+      .chat-wrap { display: grid; grid-template-rows: 1fr auto; gap: 10px; min-height: 82vh; }
+      .chat-log {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fbfcff;
+        padding: 10px;
+        overflow: auto;
+      }
+      .msg {
+        max-width: 88%;
+        margin-bottom: 10px;
+        padding: 9px 10px;
+        border-radius: 10px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .msg.user {
+        margin-left: auto;
+        background: #dbe9ff;
+        border: 1px solid #bad1ff;
+      }
+      .msg.assistant {
+        margin-right: auto;
+        background: #eef2f8;
+        border: 1px solid #d7e0ee;
+      }
+      .msg.system {
+        margin-right: auto;
+        background: #fff8ea;
+        border: 1px solid #f3deb5;
+      }
+      .msg .meta {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+      .chat-input {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px;
+        background: #fff;
+      }
+      .chat-input textarea { min-height: 84px; }
+      .tool-box {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 9px;
+        margin-top: 10px;
+        background: #fbfcff;
+      }
+      pre {
+        margin: 0;
+        background: #0f1729;
+        color: #d3ddf3;
+        border-radius: 10px;
+        padding: 10px;
+        overflow: auto;
+        max-height: 380px;
+        font-size: 0.78rem;
+      }
+      .runtime {
+        border: 1px solid #d8e2ef;
+        background: #f7faff;
+        border-radius: 10px;
+        padding: 8px;
+        margin-bottom: 10px;
+        font-size: 0.82rem;
+      }
+      .state-pass { color: var(--ok); }
+      .state-fail { color: var(--fail); }
+      .state-warn { color: var(--warn); }
+      @media (max-width: 1200px) {
+        .layout { grid-template-columns: 1fr; }
+        .chat-wrap { min-height: 65vh; }
+      }
     </style>
   </head>
   <body>
-    <div class=\"wrap\">
-      <div class=\"card\">
-        <h2>Full Pipeline</h2>
-        <p>Run <code>agent-run-json</code> from a request payload.</p>
-        <label>Catalog path</label>
-        <input id=\"catalog\" value=\"scripts/adapters/real_adapters_catalog.json\" />
+    <div class=\"layout\">
+      <section class=\"panel\">
+        <h2>Projects</h2>
+        <h3>Independent chat memory per project</h3>
+        <label>Project picker</label>
+        <select id=\"project_picker\" onchange=\"switchProjectFromPicker()\">
+          <option value=\"\">(select)</option>
+        </select>
+        <button onclick=\"refreshProjects()\">Refresh Projects</button>
+
+        <label>Project ID</label>
+        <input id=\"project_id\" value=\"demo_chat_project\" />
+        <label>Project title</label>
+        <input id=\"project_title\" value=\"OLED chat test\" />
+
         <label>Planner provider</label>
         <select id=\"planner\">
           <option value=\"rule_based_v1\">rule_based_v1</option>
           <option value=\"llm_v1\">llm_v1</option>
         </select>
-        <label>Request JSON</label>
-        <textarea id=\"payload\" rows=\"12\">{
-  \"task_id\": \"ui_task_demo\",
-  \"request_text\": \"设计470nm附近且高PLQY分子\",
-  \"mode\": \"fast_screen\",
-  \"targets\": [{\"property\": \"plqy\", \"objective\": \"maximize\", \"target_value\": 0.6}],
-  \"budget\": {\"max_candidates\": 10}
-}</textarea>
-        <button onclick=\"runTask()\">Run</button>
-      </div>
+        <label>Catalog path</label>
+        <input id=\"catalog\" value=\"scripts/adapters/real_adapters_catalog.json\" />
 
-      <div class=\"card\">
-        <h2>Single Step</h2>
-        <p>Run <code>agent-run-step-json</code> for one operation.</p>
-        <label>Step request JSON</label>
-        <textarea id=\"step_payload\" rows=\"12\">{
-  \"task\": {
-    \"task_id\": \"ui_task_step_demo\",
-    \"request_text\": \"单步测试\",
-    \"domain\": \"oled_molecule_design\",
-    \"targets\": [{\"name\": \"plqy\", \"objective\": \"maximize\", \"target_center\": 0.6, \"sigma\": 0.2, \"weight\": 1.0}],
-    \"constraints\": {\"mw_min\": 150, \"mw_max\": 700, \"domain_threshold\": 0.2, \"banned_alerts\": []},
-    \"model_choice\": {\"predictor_id\": \"unimol_lambda_plqy_v1\", \"generator_id\": \"reinvent4_lambda_em_v2\"},
-    \"budget\": {\"max_candidates\": 10},
-    \"dataset_preferences\": [\"master_database\"]
-  },
-  \"operation\": \"search_dataset\",
-  \"args\": {\"preferences\": [\"master_database\"], \"use_web_search\": true, \"web_topk\": 3}
-}</textarea>
-        <button onclick=\"runStep()\">Run Step</button>
-      </div>
-
-      <div class=\"card\">
-        <h2>Task Intake</h2>
-        <p>Run <code>agent-intake</code> for target clarification.</p>
-        <label>Task ID</label>
-        <input id=\"intake_task_id\" value=\"ui_intake_demo\" />
-        <label>Request text</label>
-        <textarea id=\"intake_request\" rows=\"4\">设计470nm附近且高PLQY分子</textarea>
+        <label><input id=\"web_enabled\" type=\"checkbox\" checked /> Enable web evidence</label>
         <label>Web topk</label>
-        <input id=\"intake_web_topk\" value=\"5\" />
-        <button onclick=\"runIntake()\">Run Intake</button>
-      </div>
+        <input id=\"web_topk\" value=\"5\" />
 
-      <div class=\"card\">
-        <h2>Task Approve</h2>
-        <p>Run <code>agent-approve</code> from intake draft task JSON.</p>
-        <label>Task JSON path</label>
-        <input id=\"approve_task_json_path\" value=\"runs/agent/ui_intake_demo/task.draft.json\" />
-        <button onclick=\"runApprove()\">Run Approve</button>
-      </div>
+        <div class=\"btn-row\">
+          <button class=\"primary\" onclick=\"saveProject()\">Save/Load Project</button>
+          <button onclick=\"sendChat(true)\">Start New Task</button>
+        </div>
 
-      <div class=\"card\">
-        <h2>Task Resume</h2>
-        <p>Run <code>agent-resume</code> for resumable task runs.</p>
-        <label>Task ID</label>
-        <input id=\"resume_task_id\" value=\"ui_task_demo\" />
-        <button onclick=\"runResume()\">Run Resume</button>
-      </div>
+        <div class=\"project-meta\" id=\"project_meta\">
+          <div>task_id: <span id=\"current_task_id\">-</span></div>
+          <div>updated_at: <span id=\"project_updated_at\">-</span></div>
+          <div>session_file: <span id=\"project_file\">-</span></div>
+        </div>
+      </section>
 
-      <div class=\"card\">
-        <h2>Task Inspector</h2>
-        <p>Preview key artifacts under <code>runs/agent/&lt;task_id&gt;</code>.</p>
-        <label>Task ID</label>
-        <input id=\"inspect_task_id\" value=\"ui_task_demo\" />
-        <button onclick=\"loadTasks()\">Refresh Tasks</button>
-        <label>Recent tasks</label>
-        <select id=\"inspect_task_picker\" onchange=\"pickInspectTask()\">
-          <option value=\"\">(select)</option>
-        </select>
-        <button onclick=\"inspectTask()\">Load</button>
+      <section class=\"panel chat-wrap\">
+        <div class=\"chat-log\" id=\"chat_log\"></div>
+        <div class=\"chat-input\">
+          <label>Chat with agent</label>
+          <textarea id=\"message_input\" placeholder=\"例如：设计470nm附近且高PLQY分子；或补充：{&quot;candidate_data&quot;:&quot;/abs/path/data.csv&quot;}\"></textarea>
+          <div class=\"btn-row\">
+            <button class=\"primary\" onclick=\"sendChat(false)\">Send</button>
+            <button onclick=\"loadHistory()\">Reload History</button>
+            <button onclick=\"loadRunRuntime()\">Refresh Runtime</button>
+          </div>
+
+          <div class=\"tool-box\">
+            <h3>File Input Entry</h3>
+            <label>Local file path (recommended)</label>
+            <input id=\"attachment_path\" placeholder=\"/absolute/path/to/file.csv\" />
+            <div class=\"btn-row\">
+              <button onclick=\"attachPath()\">Attach Path</button>
+              <button onclick=\"setCandidateDataFromPath()\">Use As candidate_data</button>
+            </div>
+            <label>Upload file copy (optional)</label>
+            <input id=\"attachment_file\" type=\"file\" />
+            <button onclick=\"uploadFileRef()\">Upload File To Session</button>
+            <div class=\"muted\">上传文件将保存到 runs/ui_sessions/uploads/&lt;project_id&gt;/，并记录到项目会话。</div>
+          </div>
+        </div>
+      </section>
+
+      <section class=\"panel\">
+        <h2>Outputs</h2>
+        <h3>Runtime + artifacts</h3>
+        <div class=\"runtime\" id=\"runtime_box\">runtime: (waiting)</div>
         <label>Artifact</label>
-        <select id=\"inspect_artifact_name\">
+        <select id=\"artifact_name\">
           <option value=\"plan\">plan</option>
           <option value=\"execution\">execution</option>
           <option value=\"decision_summary\">decision_summary</option>
@@ -139,274 +278,295 @@ HTML = """
           <option value=\"web_evidence\">web_evidence</option>
           <option value=\"experiment_trace\">experiment_trace</option>
         </select>
-        <button onclick=\"previewArtifact()\">Preview Artifact</button>
-        <button onclick=\"showTimeline()\">Show Timeline</button>
-        <button onclick=\"validateTask()\">Validate Task</button>
-        <button onclick=\"compareTask()\">Compare Runs</button>
-        <button onclick=\"diffArtifact()\">Diff Artifact</button>
-        <label>Timeline tool filter (optional)</label>
-        <input id=\"timeline_tool_filter\" value=\"\" placeholder=\"e.g. score_candidates\" />
-        <label>Timeline status filter</label>
-        <select id=\"timeline_status_filter\">
-          <option value=\"all\">all</option>
-          <option value=\"failed\">failed</option>
-          <option value=\"success\">success</option>
-        </select>
-        <label>Timeline sort</label>
-        <select id=\"timeline_sort\">
-          <option value=\"original\">original</option>
-          <option value=\"duration_desc\">duration_desc</option>
-          <option value=\"duration_asc\">duration_asc</option>
-          <option value=\"name_asc\">name_asc</option>
-        </select>
-        <label>Compare picker</label>
-        <select id=\"compare_other_task_picker\" onchange=\"pickCompareTask()\">
-          <option value=\"\">(select)</option>
-        </select>
-        <label>Diff artifact</label>
-        <select id=\"compare_artifact_name\">
-          <option value=\"decision_summary\">decision_summary</option>
-          <option value=\"task_state\">task_state</option>
-          <option value=\"plan\">plan</option>
-          <option value=\"execution\">execution</option>
-          <option value=\"tool_state\">tool_state</option>
-          <option value=\"web_evidence\">web_evidence</option>
-          <option value=\"experiment_trace\">experiment_trace</option>
-        </select>
-        <label>Compare with task id</label>
-        <input id=\"compare_other_task_id\" value=\"ui_task_step_demo\" placeholder=\"task id to compare against\" />
-      </div>
-
-      <div class=\"card full\">
-        <h2>Result</h2>
-        <label>Experiments prefix (optional)</label>
-        <input id=\"exp_prefix\" value=\"\" placeholder=\"task id prefix\" />
-        <label>Experiments predictor_id (optional)</label>
-        <input id=\"exp_predictor\" value=\"\" placeholder=\"e.g. unimol_lambda_plqy_v1\" />
-        <label>Experiments generator_id (optional)</label>
-        <input id=\"exp_generator\" value=\"\" placeholder=\"e.g. reinvent4_lambda_em_v2\" />
-        <label>Experiments status</label>
-        <select id=\"exp_status\">
-          <option value=\"\">(all)</option>
-          <option value=\"success\">success</option>
-          <option value=\"failed\">failed</option>
-        </select>
-        <label>Experiments mode</label>
-        <select id=\"exp_mode\">
-          <option value=\"\">(all)</option>
-          <option value=\"full_pipeline\">full_pipeline</option>
-          <option value=\"single_step\">single_step</option>
-        </select>
-        <button onclick=\"listExperiments()\">List Experiments</button>
+        <div class=\"btn-row\">
+          <button onclick=\"previewArtifact()\">Preview Artifact</button>
+          <button onclick=\"showTimeline()\">Show Timeline</button>
+          <button onclick=\"validateTask()\">Validate Task</button>
+        </div>
         <pre id=\"out\">(waiting)</pre>
       </div>
     </div>
     <script>
-      async function postJSON(url, payload) {
+      const state = {
+        project: null,
+      };
+
+      function nowIso() {
+        return new Date().toISOString();
+      }
+
+      function renderJsonOut(payload) {
+        document.getElementById('out').textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function taskId() {
+        if (state.project && state.project.current_task_id) return state.project.current_task_id;
+        const span = document.getElementById('current_task_id');
+        return (span && span.textContent) ? span.textContent.trim() : '';
+      }
+
+      function renderProjectMeta(project) {
+        if (!project) return;
+        document.getElementById('current_task_id').textContent = project.current_task_id || '-';
+        document.getElementById('project_updated_at').textContent = project.updated_at || '-';
+        document.getElementById('project_file').textContent = project.project_path || '-';
+      }
+
+      function msgClass(role) {
+        if (role === 'assistant') return 'assistant';
+        if (role === 'user') return 'user';
+        return 'system';
+      }
+
+      function renderChat(messages) {
+        const log = document.getElementById('chat_log');
+        log.innerHTML = '';
+        for (const m of messages || []) {
+          const role = String(m.role || 'system');
+          const row = document.createElement('div');
+          row.className = `msg ${msgClass(role)}`;
+          const content = document.createElement('div');
+          content.textContent = String(m.content || '');
+          row.appendChild(content);
+          const meta = document.createElement('div');
+          const ts = String(m.created_at || '');
+          const kind = String(m.kind || 'text');
+          meta.className = 'meta';
+          meta.textContent = `${role} • ${kind} • ${ts}`;
+          row.appendChild(meta);
+          log.appendChild(row);
+        }
+        log.scrollTop = log.scrollHeight;
+      }
+
+      async function apiGet(url) {
+        const resp = await fetch(url);
+        const data = await resp.json();
+        return {status: resp.status, data};
+      }
+
+      async function apiPost(url, payload) {
         const resp = await fetch(url, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
         });
         const data = await resp.json();
         return {status: resp.status, data};
       }
 
-      async function runTask() {
-        const out = document.getElementById('out');
-        out.textContent = 'running...';
-        const payloadText = document.getElementById('payload').value;
+      function selectedProjectId() {
+        const v = (document.getElementById('project_id').value || '').trim();
+        return v || 'demo_chat_project';
+      }
+
+      function collectOptions() {
         const planner = document.getElementById('planner').value;
         const catalog = document.getElementById('catalog').value;
-        const r = await postJSON('/api/run', {payload_text: payloadText, planner_provider: planner, catalog_path: catalog});
-        out.textContent = JSON.stringify(r.data, null, 2);
+        const webEnabled = document.getElementById('web_enabled').checked;
+        const webTopk = Number(document.getElementById('web_topk').value || 5);
+        return {
+          planner_provider: planner,
+          catalog_path: catalog,
+          web_search_enabled: Boolean(webEnabled),
+          web_topk: Number.isFinite(webTopk) ? webTopk : 5,
+        };
       }
 
-      async function runStep() {
-        const out = document.getElementById('out');
-        out.textContent = 'running step...';
-        const payloadText = document.getElementById('step_payload').value;
-        const catalog = document.getElementById('catalog').value;
-        const r = await postJSON('/api/run-step', {payload_text: payloadText, catalog_path: catalog});
-        out.textContent = JSON.stringify(r.data, null, 2);
-      }
-
-      async function runIntake() {
-        const out = document.getElementById('out');
-        out.textContent = 'running intake...';
-        const taskId = document.getElementById('intake_task_id').value;
-        const requestText = document.getElementById('intake_request').value;
-        const webTopk = Number(document.getElementById('intake_web_topk').value || 5);
-        const r = await postJSON('/api/intake', {task_id: taskId, request_text: requestText, web_topk: webTopk});
-        const result = r.data && r.data.result ? r.data.result : null;
-        if (result && result.task_draft_path) {
-          document.getElementById('approve_task_json_path').value = result.task_draft_path;
+      async function refreshProjects() {
+        const r = await apiGet('/api/projects?limit=120');
+        renderJsonOut(r.data);
+        const picker = document.getElementById('project_picker');
+        while (picker.options.length > 1) picker.remove(1);
+        const projects = Array.isArray(r.data.projects) ? r.data.projects : [];
+        for (const p of projects) {
+          const pid = String(p.project_id || '');
+          if (!pid) continue;
+          const label = `${pid} [${String(p.current_task_id || '-')}]`;
+          const opt = document.createElement('option');
+          opt.value = pid;
+          opt.textContent = label;
+          picker.appendChild(opt);
         }
-        document.getElementById('inspect_task_id').value = taskId;
-        document.getElementById('resume_task_id').value = taskId;
-        out.textContent = JSON.stringify(r.data, null, 2);
       }
 
-      async function runApprove() {
-        const out = document.getElementById('out');
-        out.textContent = 'running approve...';
-        const taskJsonPath = document.getElementById('approve_task_json_path').value;
-        const planner = document.getElementById('planner').value;
-        const catalog = document.getElementById('catalog').value;
-        const r = await postJSON('/api/approve', {task_json_path: taskJsonPath, planner_provider: planner, catalog_path: catalog});
-        out.textContent = JSON.stringify(r.data, null, 2);
+      async function switchProjectFromPicker() {
+        const picker = document.getElementById('project_picker');
+        const pid = String(picker.value || '').trim();
+        if (!pid) return;
+        document.getElementById('project_id').value = pid;
+        await saveProject();
       }
 
-      async function runResume() {
-        const out = document.getElementById('out');
-        out.textContent = 'running resume...';
-        const taskId = document.getElementById('resume_task_id').value;
-        const planner = document.getElementById('planner').value;
-        const catalog = document.getElementById('catalog').value;
-        const r = await postJSON('/api/resume', {task_id: taskId, planner_provider: planner, catalog_path: catalog});
-        out.textContent = JSON.stringify(r.data, null, 2);
+      async function saveProject() {
+        const projectId = selectedProjectId();
+        const title = (document.getElementById('project_title').value || '').trim();
+        const r = await apiPost('/api/projects', {
+          project_id: projectId,
+          title: title,
+          options: collectOptions(),
+        });
+        renderJsonOut(r.data);
+        const project = r.data && r.data.project ? r.data.project : null;
+        if (project) {
+          state.project = project;
+          renderProjectMeta(project);
+        }
+        await refreshProjects();
+        await loadHistory();
       }
 
-      async function inspectTask() {
-        const out = document.getElementById('out');
-        out.textContent = 'loading...';
-        const taskId = document.getElementById('inspect_task_id').value;
-        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/summary`);
-        const data = await resp.json();
-        out.textContent = JSON.stringify(data, null, 2);
+      async function loadHistory() {
+        const pid = selectedProjectId();
+        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/history?limit=300`);
+        renderJsonOut(r.data);
+        if (r.data && r.data.project) {
+          state.project = r.data.project;
+          renderProjectMeta(r.data.project);
+        }
+        const messages = Array.isArray(r.data.messages) ? r.data.messages : [];
+        renderChat(messages);
+      }
+
+      async function sendChat(newTask) {
+        const pid = selectedProjectId();
+        const message = (document.getElementById('message_input').value || '').trim();
+        if (!message && !newTask) {
+          renderJsonOut({status: 'fail', error: 'empty message'});
+          return;
+        }
+        const r = await apiPost('/api/chat/send', {
+          project_id: pid,
+          message: message,
+          options: collectOptions(),
+          new_task: Boolean(newTask),
+        });
+        renderJsonOut(r.data);
+        if (r.data && r.data.project) {
+          state.project = r.data.project;
+          renderProjectMeta(r.data.project);
+        }
+        const msgs = Array.isArray(r.data.messages) ? r.data.messages : [];
+        if (msgs.length > 0) {
+          renderChat(msgs);
+        } else {
+          await loadHistory();
+        }
+        document.getElementById('message_input').value = '';
+        await loadRunRuntime();
       }
 
       async function previewArtifact() {
-        const out = document.getElementById('out');
-        out.textContent = 'loading artifact...';
-        const taskId = document.getElementById('inspect_task_id').value;
-        const artifact = document.getElementById('inspect_artifact_name').value;
-        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/artifact/${encodeURIComponent(artifact)}?max_chars=20000`);
-        const data = await resp.json();
-        out.textContent = JSON.stringify(data, null, 2);
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const artifact = document.getElementById('artifact_name').value;
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact/${encodeURIComponent(artifact)}?max_chars=20000`);
+        renderJsonOut(r.data);
       }
 
       async function showTimeline() {
-        const out = document.getElementById('out');
-        out.textContent = 'loading timeline...';
-        const taskId = document.getElementById('inspect_task_id').value;
-        const tool = (document.getElementById('timeline_tool_filter').value || '').trim();
-        const statusFilter = document.getElementById('timeline_status_filter').value;
-        const sort = document.getElementById('timeline_sort').value;
-        const params = new URLSearchParams();
-        if (tool) params.set('tool', tool);
-        if (statusFilter) params.set('status_filter', statusFilter);
-        if (sort) params.set('sort', sort);
-        const suffix = params.toString() ? `?${params.toString()}` : '';
-        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/timeline${suffix}`);
-        const data = await resp.json();
-        out.textContent = JSON.stringify(data, null, 2);
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/timeline?sort=duration_desc`);
+        renderJsonOut(r.data);
       }
 
       async function validateTask() {
-        const out = document.getElementById('out');
-        out.textContent = 'validating...';
-        const taskId = document.getElementById('inspect_task_id').value;
-        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/validate`);
-        const data = await resp.json();
-        out.textContent = JSON.stringify(data, null, 2);
-      }
-
-      async function compareTask() {
-        const out = document.getElementById('out');
-        out.textContent = 'comparing...';
-        const taskId = document.getElementById('inspect_task_id').value;
-        const other = (document.getElementById('compare_other_task_id').value || '').trim();
-        const params = new URLSearchParams();
-        if (other) params.set('other_task_id', other);
-        const suffix = params.toString() ? `?${params.toString()}` : '';
-        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/compare${suffix}`);
-        const data = await resp.json();
-        out.textContent = JSON.stringify(data, null, 2);
-      }
-
-      function fillTaskPicker(selectId, tasks, keepValue) {
-        const select = document.getElementById(selectId);
-        while (select.options.length > 1) {
-          select.remove(1);
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
         }
-        for (const t of tasks) {
-          const tid = (t && t.task_id) ? String(t.task_id) : '';
-          if (!tid) continue;
-          const status = (t && t.execution_status) ? String(t.execution_status) : '';
-          const records = (t && typeof t.record_count === 'number') ? t.record_count : 0;
-          const failed = (t && typeof t.failed_step_count === 'number') ? t.failed_step_count : 0;
-          const label = `${tid} [${status || 'unknown'}] records=${records} failed=${failed}`;
-          const opt = document.createElement('option');
-          opt.value = tid;
-          opt.text = label;
-          select.appendChild(opt);
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/validate`);
+        renderJsonOut(r.data);
+      }
+
+      async function attachPath() {
+        const pid = selectedProjectId();
+        const p = (document.getElementById('attachment_path').value || '').trim();
+        if (!p) {
+          renderJsonOut({status: 'fail', error: 'empty attachment_path'});
+          return;
         }
-        if (keepValue) {
-          select.value = keepValue;
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/upload-ref`, {
+          path: p,
+          label: 'manual_path',
+          kind: 'path',
+        });
+        renderJsonOut(r.data);
+        await loadHistory();
+      }
+
+      async function setCandidateDataFromPath() {
+        const p = (document.getElementById('attachment_path').value || '').trim();
+        if (!p) {
+          renderJsonOut({status: 'fail', error: 'empty attachment_path'});
+          return;
         }
+        document.getElementById('message_input').value = JSON.stringify({candidate_data: p}, null, 2);
       }
 
-      function pickInspectTask() {
-        const tid = (document.getElementById('inspect_task_picker').value || '').trim();
-        if (!tid) return;
-        document.getElementById('inspect_task_id').value = tid;
-        document.getElementById('resume_task_id').value = tid;
-      }
-
-      function pickCompareTask() {
-        const tid = (document.getElementById('compare_other_task_picker').value || '').trim();
-        if (!tid) return;
-        document.getElementById('compare_other_task_id').value = tid;
-      }
-
-      async function loadTasks() {
-        const out = document.getElementById('out');
-        out.textContent = 'loading tasks...';
-        const inspectNow = (document.getElementById('inspect_task_id').value || '').trim();
-        const compareNow = (document.getElementById('compare_other_task_id').value || '').trim();
-        const resp = await fetch('/api/tasks?limit=80');
+      async function uploadFileRef() {
+        const pid = selectedProjectId();
+        const fileInput = document.getElementById('attachment_file');
+        if (!fileInput.files || fileInput.files.length < 1) {
+          renderJsonOut({status: 'fail', error: 'no file selected'});
+          return;
+        }
+        const form = new FormData();
+        form.append('file', fileInput.files[0]);
+        form.append('label', 'browser_upload');
+        const resp = await fetch(`/api/projects/${encodeURIComponent(pid)}/upload-ref`, {
+          method: 'POST',
+          body: form,
+        });
         const data = await resp.json();
-        const tasks = Array.isArray(data.tasks) ? data.tasks : [];
-        fillTaskPicker('inspect_task_picker', tasks, inspectNow);
-        fillTaskPicker('compare_other_task_picker', tasks, compareNow);
-        out.textContent = JSON.stringify(data, null, 2);
+        renderJsonOut(data);
+        if (data && data.attachment && data.attachment.path) {
+          document.getElementById('attachment_path').value = String(data.attachment.path);
+        }
+        await loadHistory();
       }
 
-      async function diffArtifact() {
-        const out = document.getElementById('out');
-        out.textContent = 'diffing artifact...';
-        const taskId = document.getElementById('inspect_task_id').value;
-        const other = (document.getElementById('compare_other_task_id').value || '').trim();
-        const artifact = document.getElementById('compare_artifact_name').value;
-        const params = new URLSearchParams();
-        if (other) params.set('other_task_id', other);
-        if (artifact) params.set('artifact', artifact);
-        const suffix = params.toString() ? `?${params.toString()}` : '';
-        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/artifact-diff${suffix}`);
-        const data = await resp.json();
-        out.textContent = JSON.stringify(data, null, 2);
+      async function loadRunRuntime() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          document.getElementById('runtime_box').textContent = 'runtime: no active task';
+          return;
+        }
+        const [summaryResp, timelineResp] = await Promise.all([
+          apiGet(`/api/task/${encodeURIComponent(tid)}/summary`),
+          apiGet(`/api/task/${encodeURIComponent(tid)}/timeline`),
+        ]);
+        const s = summaryResp.data || {};
+        const tl = timelineResp.data || {};
+        const lines = [];
+        lines.push(`task_id: ${tid}`);
+        lines.push(`summary_status: ${String(s.status || '-')}`);
+        const exec = (s.execution_summary && typeof s.execution_summary === 'object') ? s.execution_summary : {};
+        lines.push(`execution_status: ${String(exec.status || '-')}`);
+        lines.push(`record_count: ${String(exec.record_count || 0)}`);
+        const totalMs = tl.total_duration_ms;
+        if (typeof totalMs === 'number') {
+          lines.push(`duration_sec: ${(totalMs / 1000).toFixed(2)}`);
+        }
+        const text = lines.join(' | ');
+        document.getElementById('runtime_box').textContent = text;
       }
 
-      async function listExperiments() {
-        const out = document.getElementById('out');
-        out.textContent = 'loading experiments...';
-        const params = new URLSearchParams();
-        params.set('limit', '120');
-        const prefix = (document.getElementById('exp_prefix').value || '').trim();
-        const predictor = (document.getElementById('exp_predictor').value || '').trim();
-        const generator = (document.getElementById('exp_generator').value || '').trim();
-        const status = document.getElementById('exp_status').value || '';
-        const mode = document.getElementById('exp_mode').value || '';
-        if (prefix) params.set('prefix', prefix);
-        if (predictor) params.set('predictor_id', predictor);
-        if (generator) params.set('generator_id', generator);
-        if (status) params.set('status', status);
-        if (mode) params.set('execution_mode', mode);
-        const resp = await fetch(`/api/experiments?${params.toString()}`);
-        const data = await resp.json();
-        out.textContent = JSON.stringify(data, null, 2);
+      async function boot() {
+        await refreshProjects();
+        await saveProject();
+        await loadRunRuntime();
       }
+
+      boot();
     </script>
   </body>
 </html>
@@ -531,19 +691,22 @@ def _run_agent_step_json(*, payload: Dict[str, Any], catalog_path: str) -> Dict[
     )
 
 
-def _run_agent_intake(*, task_id: str, request_text: str, web_topk: int) -> Dict[str, Any]:
+def _run_agent_intake(*, task_id: str, request_text: str, web_topk: int, enable_web_search: bool = True) -> Dict[str, Any]:
+    cli_args = [
+        "agent-intake",
+        "--workspace-root",
+        str(REPO_ROOT),
+        "--task-id",
+        task_id,
+        "--request",
+        request_text,
+        "--web-topk",
+        str(max(1, int(web_topk))),
+    ]
+    if not enable_web_search:
+        cli_args.append("--disable-web-search")
     return _run_cli_command(
-        cli_args=[
-            "agent-intake",
-            "--workspace-root",
-            str(REPO_ROOT),
-            "--task-id",
-            task_id,
-            "--request",
-            request_text,
-            "--web-topk",
-            str(max(1, int(web_topk))),
-        ],
+        cli_args=cli_args,
         ok_returncodes=[0, 2],
     )
 
@@ -1024,6 +1187,463 @@ def _is_safe_task_id(task_id: str) -> bool:
     return True
 
 
+def _is_safe_project_id(project_id: str) -> bool:
+    return _is_safe_task_id(project_id)
+
+
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _ui_projects_root() -> Path:
+    p = (REPO_ROOT / PROJECTS_DIR_REL).resolve()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _ui_uploads_root(project_id: str) -> Path:
+    p = (REPO_ROOT / UPLOADS_DIR_REL / project_id).resolve()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _project_file_path(project_id: str) -> Path:
+    return (_ui_projects_root() / f"{project_id}.json").resolve()
+
+
+def _resolve_optional_path(raw_path: Any) -> Optional[Path]:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+    p = Path(text)
+    if not p.is_absolute():
+        p = (REPO_ROOT / p).resolve()
+    else:
+        p = p.resolve()
+    return p
+
+
+def _normalize_project_options(raw: Any) -> Dict[str, Any]:
+    options = raw if isinstance(raw, dict) else {}
+    planner = str(options.get("planner_provider") or "rule_based_v1").strip() or "rule_based_v1"
+    catalog = str(options.get("catalog_path") or DEFAULT_CATALOG).strip() or DEFAULT_CATALOG
+    web_enabled = bool(options.get("web_search_enabled", True))
+    web_topk = _as_int(options.get("web_topk"), 5)
+    web_topk = max(1, min(web_topk, 20))
+    return {
+        "planner_provider": planner,
+        "catalog_path": catalog,
+        "web_search_enabled": web_enabled,
+        "web_topk": web_topk,
+    }
+
+
+def _new_project_state(project_id: str, *, title: str = "", options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    now = _now_iso()
+    return {
+        "schema_version": "1.0.0",
+        "project_id": project_id,
+        "title": str(title or project_id).strip() or project_id,
+        "created_at": now,
+        "updated_at": now,
+        "options": _normalize_project_options(options or {}),
+        "current_task_id": "",
+        "task_draft_path": "",
+        "task_json_path": "",
+        "request_path": "",
+        "last_runtime": {},
+        "attachments": [],
+        "messages": [],
+    }
+
+
+def _project_summary(project: Dict[str, Any]) -> Dict[str, Any]:
+    pid = str(project.get("project_id") or "")
+    messages = project.get("messages")
+    attachments = project.get("attachments")
+    return {
+        "project_id": pid,
+        "title": str(project.get("title") or ""),
+        "created_at": str(project.get("created_at") or ""),
+        "updated_at": str(project.get("updated_at") or ""),
+        "options": project.get("options") if isinstance(project.get("options"), dict) else {},
+        "current_task_id": str(project.get("current_task_id") or ""),
+        "task_draft_path": str(project.get("task_draft_path") or ""),
+        "task_json_path": str(project.get("task_json_path") or ""),
+        "request_path": str(project.get("request_path") or ""),
+        "last_runtime": project.get("last_runtime") if isinstance(project.get("last_runtime"), dict) else {},
+        "message_count": len(messages) if isinstance(messages, list) else 0,
+        "attachment_count": len(attachments) if isinstance(attachments, list) else 0,
+        "project_path": str(_project_file_path(pid)) if pid else "",
+    }
+
+
+def _load_project_state(project_id: str) -> Optional[Dict[str, Any]]:
+    p = _project_file_path(project_id)
+    if not p.exists():
+        return None
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload["project_id"] = str(payload.get("project_id") or project_id)
+    payload["options"] = _normalize_project_options(payload.get("options"))
+    if not isinstance(payload.get("attachments"), list):
+        payload["attachments"] = []
+    if not isinstance(payload.get("messages"), list):
+        payload["messages"] = []
+    return payload
+
+
+def _save_project_state(project: Dict[str, Any]) -> Dict[str, Any]:
+    project = dict(project)
+    project_id = str(project.get("project_id") or "").strip()
+    if not _is_safe_project_id(project_id):
+        raise ValueError("invalid project_id")
+    if not str(project.get("created_at") or "").strip():
+        project["created_at"] = _now_iso()
+    project["updated_at"] = _now_iso()
+    project["options"] = _normalize_project_options(project.get("options"))
+    messages = project.get("messages")
+    if not isinstance(messages, list):
+        messages = []
+    if len(messages) > MAX_PROJECT_HISTORY:
+        messages = messages[-MAX_PROJECT_HISTORY:]
+    project["messages"] = messages
+    attachments = project.get("attachments")
+    if not isinstance(attachments, list):
+        attachments = []
+    if len(attachments) > 120:
+        attachments = attachments[-120:]
+    project["attachments"] = attachments
+    p = _project_file_path(project_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(project, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return project
+
+
+def _append_message(
+    project: Dict[str, Any],
+    *,
+    role: str,
+    content: str,
+    kind: str = "text",
+    meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    messages = project.get("messages")
+    if not isinstance(messages, list):
+        messages = []
+        project["messages"] = messages
+    messages.append(
+        {
+            "id": str(uuid.uuid4()),
+            "role": str(role or "system"),
+            "kind": str(kind or "text"),
+            "content": str(content or "").strip(),
+            "created_at": _now_iso(),
+            "meta": meta if isinstance(meta, dict) else {},
+        }
+    )
+    if len(messages) > MAX_PROJECT_HISTORY:
+        project["messages"] = messages[-MAX_PROJECT_HISTORY:]
+
+
+def _recent_messages(project: Dict[str, Any], *, limit: int = 160) -> List[Dict[str, Any]]:
+    messages = project.get("messages")
+    if not isinstance(messages, list):
+        return []
+    cap = max(1, min(int(limit), MAX_PROJECT_HISTORY))
+    out: List[Dict[str, Any]] = []
+    for item in messages[-cap:]:
+        if isinstance(item, dict):
+            out.append(item)
+    return out
+
+
+def _create_task_id(project_id: str) -> str:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = f"{project_id}_{stamp}"
+    if len(base) <= 128 and _is_safe_task_id(base):
+        return base
+    short = f"{project_id[:48]}_{stamp}"
+    if _is_safe_task_id(short):
+        return short
+    return f"task_{stamp}"
+
+
+def _parse_message_patch(text: str) -> Dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        return payload
+
+    # Allow plain "candidate_data=/abs/path.csv" or bare csv path.
+    m = re.search(r"(?:candidate_data|候选数据)\s*[:=]\s*([^\s]+)", raw, flags=re.IGNORECASE)
+    if m:
+        return {"candidate_data": str(m.group(1)).strip()}
+    raw_l = raw.lower()
+    if ".csv" in raw_l and (raw.startswith("/") or raw.startswith("./") or raw.startswith("../")):
+        return {"candidate_data": raw}
+    return {}
+
+
+def _merge_task_draft(draft: Dict[str, Any], patch: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    updated: List[str] = []
+    out = dict(draft)
+    for key in (
+        "property",
+        "range",
+        "n_structures",
+        "train_data",
+        "candidate_data",
+        "prediction_model",
+        "execution_mode",
+        "operation",
+        "request_text",
+    ):
+        if key not in patch:
+            continue
+        value = patch.get(key)
+        if key == "n_structures":
+            try:
+                value_i = int(value)
+            except Exception:
+                continue
+            if value_i < 1:
+                continue
+            out[key] = value_i
+        else:
+            out[key] = value
+        updated.append(key)
+
+    if isinstance(patch.get("constraints"), dict):
+        constraints = out.get("constraints") if isinstance(out.get("constraints"), dict) else {}
+        constraints = dict(constraints)
+        constraints.update(patch.get("constraints") or {})
+        out["constraints"] = constraints
+        updated.append("constraints")
+
+    model_keys = ("model_preferences", "model_choice")
+    for mk in model_keys:
+        if isinstance(patch.get(mk), dict):
+            model = out.get("model_preferences") if isinstance(out.get("model_preferences"), dict) else {}
+            model = dict(model)
+            model.update(patch.get(mk) or {})
+            out["model_preferences"] = model
+            updated.append("model_preferences")
+            break
+
+    missing, questions = compute_missing_questions(out)
+    out["missing_fields"] = missing
+    out["questions"] = questions
+    out["status"] = "need_user_input" if missing else "draft"
+    return out, updated
+
+
+def _load_json_path(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _assistant_need_input_text(missing_fields: Any, questions: Any) -> str:
+    missing = [str(x) for x in (missing_fields if isinstance(missing_fields, list) else []) if str(x).strip()]
+    qs = [str(x) for x in (questions if isinstance(questions, list) else []) if str(x).strip()]
+    lines = ["还需要补充信息后才能继续执行。"]
+    if missing:
+        lines.append(f"missing_fields: {', '.join(missing)}")
+    for idx, q in enumerate(qs, start=1):
+        lines.append(f"{idx}. {q}")
+    lines.append('可直接回复 JSON，例如: {"candidate_data": "/abs/path/candidates.csv"}')
+    return "\n".join(lines)
+
+
+def _assistant_cli_fail_text(stage: str, payload: Dict[str, Any]) -> str:
+    stderr = str(payload.get("stderr") or "").strip()
+    rc = payload.get("returncode")
+    msg = f"{stage} 执行失败，returncode={rc}。"
+    if stderr:
+        msg += f"\nstderr: {stderr[:800]}"
+    return msg
+
+
+def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool) -> Dict[str, Any]:
+    options = _normalize_project_options(project.get("options"))
+    planner = str(options.get("planner_provider") or "rule_based_v1")
+    catalog = str(options.get("catalog_path") or DEFAULT_CATALOG)
+    web_enabled = bool(options.get("web_search_enabled", True))
+    web_topk = int(options.get("web_topk") or 5)
+
+    if new_task:
+        project["current_task_id"] = ""
+        project["task_draft_path"] = ""
+        project["task_json_path"] = ""
+        project["request_path"] = ""
+        project["last_runtime"] = {}
+
+    if message:
+        _append_message(project, role="user", content=message, kind="chat")
+
+    task_id = str(project.get("current_task_id") or "").strip()
+    if not task_id:
+        task_id = _create_task_id(str(project.get("project_id") or "task"))
+        project["current_task_id"] = task_id
+
+    draft_path = _resolve_optional_path(project.get("task_draft_path"))
+    patch = _parse_message_patch(message)
+
+    # Stage 1: intake (if no draft yet)
+    if draft_path is None or not draft_path.exists():
+        if not str(message or "").strip():
+            _append_message(project, role="assistant", content="请先输入任务目标，然后我会自动做 intake。", kind="assistant")
+            project = _save_project_state(project)
+            return {"status": "pass", "project": _project_summary(project), "messages": _recent_messages(project), "events": []}
+        intake = _run_agent_intake(task_id=task_id, request_text=message, web_topk=web_topk, enable_web_search=web_enabled)
+        intake_result = intake.get("result") if isinstance(intake.get("result"), dict) else {}
+        draft_path = _resolve_optional_path(intake_result.get("task_draft_path"))
+        if draft_path is not None:
+            project["task_draft_path"] = str(draft_path)
+        project["current_task_id"] = str(intake_result.get("task_id") or task_id)
+
+        if intake.get("status") != "pass":
+            _append_message(project, role="assistant", content=_assistant_cli_fail_text("agent-intake", intake), kind="assistant")
+            project = _save_project_state(project)
+            return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "intake", "status": "fail"}]}
+
+        if str(intake_result.get("status") or "") == "need_user_input":
+            _append_message(
+                project,
+                role="assistant",
+                content=_assistant_need_input_text(intake_result.get("missing_fields"), intake_result.get("questions")),
+                kind="assistant",
+            )
+            project = _save_project_state(project)
+            return {
+                "status": "need_user_input",
+                "project": _project_summary(project),
+                "messages": _recent_messages(project),
+                "events": [{"stage": "intake", "status": "need_user_input"}],
+            }
+
+    if draft_path is None or not draft_path.exists():
+        _append_message(project, role="assistant", content="intake 未生成可用 task.draft.json。", kind="assistant")
+        project = _save_project_state(project)
+        return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "intake", "status": "fail"}]}
+
+    draft = _load_json_path(draft_path)
+    if not isinstance(draft, dict):
+        _append_message(project, role="assistant", content=f"draft 读取失败: {draft_path}", kind="assistant")
+        project = _save_project_state(project)
+        return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "draft_read", "status": "fail"}]}
+
+    if patch:
+        draft, updated_fields = _merge_task_draft(draft, patch)
+        draft_path.parent.mkdir(parents=True, exist_ok=True)
+        draft_path.write_text(json.dumps(draft, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        if updated_fields:
+            _append_message(
+                project,
+                role="system",
+                content=f"已更新 task 草案字段: {', '.join(updated_fields)}",
+                kind="task_patch",
+                meta={"updated_fields": updated_fields},
+            )
+
+    started_at = datetime.now()
+    approve = _run_agent_approve(task_json_path=draft_path, planner_provider=planner, catalog_path=catalog)
+    approve_result = approve.get("result") if isinstance(approve.get("result"), dict) else {}
+    if approve.get("status") != "pass":
+        _append_message(project, role="assistant", content=_assistant_cli_fail_text("agent-approve", approve), kind="assistant")
+        project = _save_project_state(project)
+        return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "approve", "status": "fail"}]}
+
+    approve_status = str(approve_result.get("status") or "")
+    if approve_status == "need_user_input":
+        _append_message(
+            project,
+            role="assistant",
+            content=_assistant_need_input_text(approve_result.get("missing_fields"), approve_result.get("questions")),
+            kind="assistant",
+        )
+        project = _save_project_state(project)
+        return {
+            "status": "need_user_input",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "approve", "status": "need_user_input"}],
+        }
+    if approve_status != "approved":
+        _append_message(project, role="assistant", content=f"agent-approve 返回未知状态: {approve_status}", kind="assistant")
+        project = _save_project_state(project)
+        return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "approve", "status": "fail"}]}
+
+    request_path = _resolve_optional_path(approve_result.get("request_path"))
+    task_json_path = _resolve_optional_path(approve_result.get("task_path"))
+    if request_path is not None:
+        project["request_path"] = str(request_path)
+    if task_json_path is not None:
+        project["task_json_path"] = str(task_json_path)
+    project["current_task_id"] = str(approve_result.get("task_id") or project.get("current_task_id") or "")
+
+    if request_path is None or not request_path.exists():
+        _append_message(project, role="assistant", content="approved 后未找到 request_path，无法执行 agent-run-json。", kind="assistant")
+        project = _save_project_state(project)
+        return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "approve", "status": "fail"}]}
+
+    request_payload = _load_json_path(request_path)
+    if not isinstance(request_payload, dict):
+        _append_message(project, role="assistant", content=f"request_from_task.json 解析失败: {request_path}", kind="assistant")
+        project = _save_project_state(project)
+        return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "request_load", "status": "fail"}]}
+
+    run_result = _run_agent_run_json(payload=request_payload, planner_provider=planner, catalog_path=catalog)
+    elapsed_ms = int((datetime.now() - started_at).total_seconds() * 1000)
+
+    if run_result.get("status") != "pass":
+        _append_message(project, role="assistant", content=_assistant_cli_fail_text("agent-run-json", run_result), kind="assistant")
+        project["last_runtime"] = {"status": "failed", "duration_ms": elapsed_ms, "updated_at": _now_iso()}
+        project = _save_project_state(project)
+        return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "run", "status": "fail"}]}
+
+    rr = run_result.get("result") if isinstance(run_result.get("result"), dict) else {}
+    run_label = str(rr.get("run_label") or "")
+    result_dir = str(rr.get("result_dir") or "")
+    status_text = str(rr.get("status") or "unknown")
+    _append_message(
+        project,
+        role="assistant",
+        content=f"任务执行完成: status={status_text}\nrun_label={run_label}\nresult_dir={result_dir}",
+        kind="assistant",
+        meta={"run_result": rr},
+    )
+    project["last_runtime"] = {
+        "status": status_text,
+        "duration_ms": elapsed_ms,
+        "run_label": run_label,
+        "result_dir": result_dir,
+        "updated_at": _now_iso(),
+    }
+    project = _save_project_state(project)
+    return {
+        "status": "pass",
+        "project": _project_summary(project),
+        "messages": _recent_messages(project),
+        "events": [{"stage": "run", "status": status_text}],
+        "run_result": rr,
+    }
+
+
 @app.get("/")
 def index() -> str:
     return render_template_string(HTML)
@@ -1032,6 +1652,176 @@ def index() -> str:
 @app.get("/api/health")
 def api_health():
     return jsonify({"status": "pass", "repo_root": str(REPO_ROOT)})
+
+
+@app.get("/api/projects")
+def api_projects():
+    limit = _as_int(request.args.get("limit"), 80)
+    limit = max(1, min(limit, 300))
+    root = _ui_projects_root()
+    rows: List[Dict[str, Any]] = []
+    for p in root.glob("*.json"):
+        project_id = str(p.stem or "").strip()
+        if not _is_safe_project_id(project_id):
+            continue
+        project = _load_project_state(project_id)
+        if not isinstance(project, dict):
+            continue
+        rows.append(_project_summary(project))
+    rows.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    limited = rows[:limit]
+    return jsonify(
+        {
+            "status": "pass",
+            "projects_root": str(root),
+            "count": len(limited),
+            "count_before_limit": len(rows),
+            "limit": limit,
+            "projects": limited,
+        }
+    )
+
+
+@app.post("/api/projects")
+def api_projects_upsert():
+    body = request.get_json(silent=True) or {}
+    project_id = str(body.get("project_id") or "").strip()
+    title = str(body.get("title") or "").strip()
+    options = body.get("options")
+    if not project_id:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(project_id):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+
+    project = _load_project_state(project_id)
+    if not isinstance(project, dict):
+        project = _new_project_state(project_id, title=title, options=options if isinstance(options, dict) else {})
+    else:
+        if title:
+            project["title"] = title
+        if isinstance(options, dict):
+            merged = dict(project.get("options") or {})
+            merged.update(options)
+            project["options"] = merged
+    project = _save_project_state(project)
+    return jsonify({"status": "pass", "project": _project_summary(project), "messages": _recent_messages(project)})
+
+
+@app.get("/api/projects/<project_id>/history")
+def api_project_history(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    limit = _as_int(request.args.get("limit"), 180)
+    limit = max(1, min(limit, MAX_PROJECT_HISTORY))
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    return jsonify(
+        {
+            "status": "pass",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project, limit=limit),
+            "attachments": project.get("attachments") if isinstance(project.get("attachments"), list) else [],
+        }
+    )
+
+
+@app.post("/api/projects/<project_id>/upload-ref")
+def api_project_upload_ref(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        project = _new_project_state(pid, title=pid, options={})
+
+    attachment: Dict[str, Any] = {}
+    file_obj = request.files.get("file")
+    if file_obj is not None and str(file_obj.filename or "").strip():
+        base_name = Path(str(file_obj.filename or "")).name
+        if not base_name:
+            base_name = "upload.bin"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", base_name).strip("._") or "upload.bin"
+        out_dir = _ui_uploads_root(pid)
+        out_path = (out_dir / f"{stamp}_{safe_name}").resolve()
+        file_obj.save(str(out_path))
+        attachment = {
+            "id": str(uuid.uuid4()),
+            "kind": "uploaded_file",
+            "label": str(request.form.get("label") or "upload").strip() or "upload",
+            "name": base_name,
+            "path": str(out_path),
+            "created_at": _now_iso(),
+        }
+    else:
+        body = request.get_json(silent=True) or {}
+        path_text = str(body.get("path") or "").strip()
+        if not path_text:
+            return jsonify({"status": "fail", "error": "missing path or file"}), 400
+        attachment = {
+            "id": str(uuid.uuid4()),
+            "kind": str(body.get("kind") or "path_ref").strip() or "path_ref",
+            "label": str(body.get("label") or "path_ref").strip() or "path_ref",
+            "name": Path(path_text).name,
+            "path": path_text,
+            "created_at": _now_iso(),
+        }
+
+    attachments = project.get("attachments")
+    if not isinstance(attachments, list):
+        attachments = []
+    attachments.append(attachment)
+    project["attachments"] = attachments[-120:]
+    _append_message(
+        project,
+        role="system",
+        content=f"附件已记录: {attachment.get('path')}",
+        kind="attachment",
+        meta={"attachment": attachment},
+    )
+    project = _save_project_state(project)
+    return jsonify(
+        {
+            "status": "pass",
+            "project": _project_summary(project),
+            "attachment": attachment,
+            "messages": _recent_messages(project),
+        }
+    )
+
+
+@app.post("/api/chat/send")
+def api_chat_send():
+    body = request.get_json(silent=True) or {}
+    project_id = str(body.get("project_id") or "").strip()
+    message = str(body.get("message") or "").strip()
+    new_task = bool(body.get("new_task"))
+    options = body.get("options")
+
+    if not project_id:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(project_id):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    if not message and not new_task:
+        return jsonify({"status": "fail", "error": "missing message"}), 400
+
+    project = _load_project_state(project_id)
+    if not isinstance(project, dict):
+        project = _new_project_state(project_id, title=project_id, options={})
+    if isinstance(options, dict):
+        merged_options = dict(project.get("options") or {})
+        merged_options.update(options)
+        project["options"] = merged_options
+
+    out = _chat_run_pipeline(project=project, message=message, new_task=new_task)
+    return jsonify(out)
 
 
 @app.get("/api/tasks")
@@ -1170,11 +1960,14 @@ def api_intake():
     task_id = str(body.get("task_id") or "").strip()
     request_text = str(body.get("request_text") or "").strip()
     web_topk = int(body.get("web_topk") or 5)
+    web_enabled = bool(body.get("web_search_enabled", True))
     if not task_id:
         return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(task_id):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
     if not request_text:
         return jsonify({"status": "fail", "error": "missing request_text"}), 400
-    return jsonify(_run_agent_intake(task_id=task_id, request_text=request_text, web_topk=web_topk))
+    return jsonify(_run_agent_intake(task_id=task_id, request_text=request_text, web_topk=web_topk, enable_web_search=web_enabled))
 
 
 @app.post("/api/approve")

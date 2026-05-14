@@ -153,7 +153,9 @@ Implemented stages:
   - persists aggregate `runs/agent/<task_id>/baseline_summary.json`
 - lightweight UI prototype smoke:
   - `ui/app.py`
-  - supports full pipeline / single-step / intake / approve / resume / task artifact summary panels
+  - supports chat-first workflow (project memory + chat turn orchestration + file input entry)
+  - supports project APIs (`/api/projects`, `/api/projects/<id>/history`, `/api/chat/send`, `/api/projects/<id>/upload-ref`)
+  - keeps full pipeline / single-step / intake / approve / resume APIs for compatibility
   - supports experiment list endpoint (`/api/experiments`) for trace-level filtering
   - task inspector supports recent-task picker, artifact preview, timeline view (failed highlight + filter/sort), run-to-run compare, artifact key-path diff, and one-click core artifact validation
   - `make ui-smoke`

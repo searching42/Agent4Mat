@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 import builtins
@@ -7315,6 +7316,231 @@ class UiPrototypeTests(unittest.TestCase):
         payload = resp.get_json()
         self.assertEqual(payload.get("status"), "pass")
         self.assertTrue(str(payload.get("repo_root") or ""))
+
+    def test_ui_projects_create_history_and_upload_ref(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                create_resp = client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_proj_a",
+                        "title": "project A",
+                        "options": {
+                            "planner_provider": "rule_based_v1",
+                            "catalog_path": "configs/models/catalog.json",
+                            "web_search_enabled": True,
+                            "web_topk": 6,
+                        },
+                    },
+                )
+                self.assertEqual(create_resp.status_code, 200)
+                created = create_resp.get_json()
+                self.assertEqual(created.get("status"), "pass")
+                project = created.get("project") if isinstance(created.get("project"), dict) else {}
+                self.assertEqual(project.get("project_id"), "ui_proj_a")
+                self.assertEqual(project.get("title"), "project A")
+
+                upload_resp = client.post(
+                    "/api/projects/ui_proj_a/upload-ref",
+                    json={"path": "/tmp/demo_candidates.csv", "label": "manual", "kind": "path_ref"},
+                )
+                self.assertEqual(upload_resp.status_code, 200)
+                uploaded = upload_resp.get_json()
+                self.assertEqual(uploaded.get("status"), "pass")
+                attachment = uploaded.get("attachment") if isinstance(uploaded.get("attachment"), dict) else {}
+                self.assertEqual(attachment.get("path"), "/tmp/demo_candidates.csv")
+
+                hist_resp = client.get("/api/projects/ui_proj_a/history?limit=50")
+                self.assertEqual(hist_resp.status_code, 200)
+                hist = hist_resp.get_json()
+                self.assertEqual(hist.get("status"), "pass")
+                messages = hist.get("messages") if isinstance(hist.get("messages"), list) else []
+                self.assertTrue(any(str(m.get("kind") or "") == "attachment" for m in messages if isinstance(m, dict)))
+                attachments = hist.get("attachments") if isinstance(hist.get("attachments"), list) else []
+                self.assertEqual(len(attachments), 1)
+
+    def test_ui_upload_ref_accepts_multipart_file(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_upload_case", "title": "upload"})
+                data = {
+                    "label": "browser_upload",
+                    "file": (io.BytesIO(b"smiles,plqy\nc1ccccc1,0.6\n"), "candidates.csv"),
+                }
+                resp = client.post("/api/projects/ui_upload_case/upload-ref", data=data, content_type="multipart/form-data")
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                att = payload.get("attachment") if isinstance(payload.get("attachment"), dict) else {}
+                path = Path(str(att.get("path") or ""))
+                self.assertTrue(path.exists())
+                self.assertIn("runs/ui_sessions/uploads/ui_upload_case", str(path))
+
+    def test_ui_chat_send_need_user_input_path(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_need_input", "title": "need input"})
+                intake_result = {
+                    "task_id": "ui_chat_need_input_20260514_000001",
+                    "status": "need_user_input",
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_need_input_20260514_000001" / "task.draft.json"),
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？本地CSV路径还是数据库关键词？"],
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=2,
+                    stdout=json.dumps(intake_result, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp):
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_need_input",
+                            "message": "设计470nm附近且高PLQY分子",
+                            "options": {"planner_provider": "rule_based_v1", "catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+                assistant_text = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
+                self.assertIn("candidate_data", assistant_text)
+
+    def test_ui_chat_send_happy_path_runs_pipeline(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_chat_run_20260514_000002"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            draft_path = run_dir / "task.draft.json"
+            request_from_task = run_dir / "request_from_task.json"
+            task_json_path = run_dir / "task.json"
+            draft_payload = {
+                "version": "2.0",
+                "task_id": task_id,
+                "request_text": "设计470nm附近且高PLQY分子",
+                "execution_mode": "full_pipeline",
+                "operation": "full_pipeline",
+                "property": "plqy",
+                "range": "458.0-482.0nm",
+                "n_structures": 120,
+                "constraints": {"mw_min": 150.0, "mw_max": 700.0, "domain_threshold": 0.2, "banned_alerts": []},
+                "train_data": None,
+                "candidate_data": "/tmp/candidates.csv",
+                "prediction_model": "unimol_lambda_plqy_v1",
+                "model_preferences": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                "generation_input": {},
+                "provenance": {"intake_source": "agent-intake", "web_evidence": [], "web_evidence_json": ""},
+                "status": "draft",
+                "missing_fields": [],
+                "questions": [],
+                "compatibility_warnings": [],
+            }
+            draft_path.write_text(json.dumps(draft_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            request_from_task.write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize"}],
+                        "constraints": {"candidate_data": "/tmp/candidates.csv"},
+                        "model_choice": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                        "budget": {"max_candidates": 120},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            task_json_path.write_text(json.dumps(draft_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_run", "title": "run"})
+                cp_intake = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "task_id": task_id,
+                            "status": "draft",
+                            "task_draft_path": str(draft_path),
+                            "web_evidence_path": str(run_dir / "web_evidence.json"),
+                            "missing_fields": [],
+                            "questions": [],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    stderr="",
+                )
+                cp_approve = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-approve"],
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "task_id": task_id,
+                            "status": "approved",
+                            "task_path": str(task_json_path),
+                            "request_path": str(request_from_task),
+                            "plan_path": str(run_dir / "plan.json"),
+                            "plan_md_path": str(run_dir / "plan.md"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    stderr="",
+                )
+                cp_run = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-run-json"],
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "task_id": task_id,
+                            "status": "success",
+                            "run_label": f"{task_id}-20260514-010101",
+                            "result_dir": str(root / "result" / f"{task_id}-20260514-010101"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", side_effect=[cp_intake, cp_approve, cp_run]) as mocked:
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_run",
+                            "message": "设计470nm附近且高PLQY分子",
+                            "options": {
+                                "planner_provider": "rule_based_v1",
+                                "catalog_path": "configs/models/catalog.json",
+                                "web_search_enabled": True,
+                                "web_topk": 4,
+                            },
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                run_result = payload.get("run_result") if isinstance(payload.get("run_result"), dict) else {}
+                self.assertEqual(run_result.get("status"), "success")
+                events = payload.get("events") if isinstance(payload.get("events"), list) else []
+                self.assertTrue(any((isinstance(e, dict) and str(e.get("stage")) == "run") for e in events))
+                messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+                assistant_text = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
+                self.assertIn("任务执行完成", assistant_text)
+                self.assertEqual(mocked.call_count, 3)
 
     def test_ui_tasks_endpoint_lists_recent_runs(self) -> None:
         ui_app_mod = self._load_ui_module()

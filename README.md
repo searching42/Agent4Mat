@@ -196,6 +196,11 @@ make ui-run
 Open: `http://127.0.0.1:8787`
 
 UI prototype API coverage:
+- `GET /api/projects` -> list persisted chat projects
+- `POST /api/projects` -> create/update one project session
+- `GET /api/projects/<project_id>/history` -> chat history + attachments
+- `POST /api/projects/<project_id>/upload-ref` -> register local file path or upload copy
+- `POST /api/chat/send` -> chat orchestration (`intake -> approve -> run`)
 - `GET /api/tasks` -> recent run list for inspector/compare picker (`limit`, `prefix`)
 - `GET /api/experiments` -> experiment-trace list with filters (`limit`, `prefix`, `predictor_id`, `generator_id`, `status`, `execution_mode`)
 - `POST /api/run` -> `agent-run-json` (full pipeline)

@@ -348,7 +348,10 @@ HTML = """
         <div class=\"muted\" id=\"runtime_stage_text\">stage: -</div>
         <div class=\"progress-wrap\"><div class=\"progress-bar\" id=\"runtime_progress_bar\"></div></div>
         <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
+        <label>Retry Args JSON (optional override)</label>
+        <textarea id=\"retry_failed_args_json\" rows=\"3\">{}</textarea>
         <div class=\"btn-row\">
+          <button onclick=\"previewRetryFailedStep()\">Preview Failed-Step Retry</button>
           <button onclick=\"retryFailedStep()\">Retry Latest Failed Step</button>
           <button onclick=\"retryCurrentTask()\">Retry Current Task (resume)</button>
         </div>
@@ -862,19 +865,56 @@ HTML = """
       }
 
       async function retryFailedStep() {
+        await retryFailedStepInternal(false);
+      }
+
+      async function previewRetryFailedStep() {
+        await retryFailedStepInternal(true);
+      }
+
+      function parseRetryArgsOptional() {
+        const txt = String(document.getElementById('retry_failed_args_json').value || '').trim();
+        if (!txt) return {ok: true, args: null};
+        try {
+          const payload = JSON.parse(txt);
+          if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+            return {ok: true, args: payload};
+          }
+          return {ok: false, error: 'retry args must be JSON object'};
+        } catch (e) {
+          return {ok: false, error: `invalid retry args json: ${String(e)}`};
+        }
+      }
+
+      async function retryFailedStepInternal(dryRun) {
         const tid = taskId();
         if (!tid || tid === '-') {
           renderJsonOut({status: 'fail', error: 'no current_task_id'});
           return;
         }
-        const r = await apiPost(`/api/task/${encodeURIComponent(tid)}/retry-failed-step`, {
+        const parsed = parseRetryArgsOptional();
+        if (!parsed.ok) {
+          renderJsonOut({status: 'fail', error: parsed.error});
+          return;
+        }
+        const body = {
           catalog_path: document.getElementById('catalog').value,
+          dry_run: Boolean(dryRun),
+        };
+        if (parsed.args && Object.keys(parsed.args).length > 0) {
+          body.args = parsed.args;
+        }
+        const r = await apiPost(`/api/task/${encodeURIComponent(tid)}/retry-failed-step`, {
+          ...body,
         });
         renderJsonOut(r.data);
         const status = String((r.data && r.data.status) || 'unknown');
         const op = String((r.data && r.data.retry_operation) || '');
-        renderEvents([{stage: 'retry_failed_step', status: status, operation: op || undefined}]);
-        await loadRunRuntime();
+        const stage = dryRun ? 'preview_retry_failed_step' : 'retry_failed_step';
+        renderEvents([{stage: stage, status: status, operation: op || undefined}]);
+        if (!dryRun) {
+          await loadRunRuntime();
+        }
       }
 
       async function loadRunRuntime() {
@@ -2794,6 +2834,10 @@ def api_task_retry_failed_step(task_id: str):
 
     body = request.get_json(silent=True) or {}
     catalog = str(body.get("catalog_path") or DEFAULT_CATALOG)
+    dry_run = bool(body.get("dry_run"))
+    override_args = body.get("args")
+    if override_args is not None and not isinstance(override_args, dict):
+        return jsonify({"status": "fail", "task_id": tid, "error": "args_must_be_object"}), 400
     tool_state = _load_json_if_exists(run_dir / "tool_state.json")
     if not isinstance(tool_state, dict):
         tool_state = {}
@@ -2804,17 +2848,24 @@ def api_task_retry_failed_step(task_id: str):
         tool_state=tool_state,
         failed_record_args=failed_args,
     )
+    if isinstance(override_args, dict):
+        retry_args = dict(override_args)
     step_request = {
         "task": task_payload,
         "operation": operation,
         "args": retry_args,
     }
-    out = _run_agent_step_json(payload=step_request, catalog_path=catalog)
+    out: Dict[str, Any]
+    if dry_run:
+        out = {"status": "pass", "mode": "dry_run"}
+    else:
+        out = _run_agent_step_json(payload=step_request, catalog_path=catalog)
     response: Dict[str, Any] = {
         "task_id": tid,
         "failed_tool_name": failed_tool_name,
         "retry_operation": operation,
         "retry_args": retry_args,
+        "dry_run": dry_run,
         **out,
     }
     return jsonify(response)

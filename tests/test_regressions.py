@@ -7997,6 +7997,136 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(payload.get("status"), "fail")
             self.assertEqual(payload.get("error"), "no_failed_step")
 
+    def test_ui_retry_failed_step_endpoint_dry_run_preview_does_not_execute(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_retry_dry_run_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "status": "failed",
+                        "records": [
+                            {"name": "clean_dataset", "status": "failed", "args": {"input_csv": "/tmp/a.csv"}},
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "task.json").write_text(
+                json.dumps(
+                    {
+                        "version": "2.0",
+                        "task_id": task_id,
+                        "request_text": "retry dry run",
+                        "execution_mode": "full_pipeline",
+                        "operation": "full_pipeline",
+                        "property": "plqy",
+                        "range": "60-100",
+                        "n_structures": 20,
+                        "constraints": {"mw_min": 150, "mw_max": 700, "domain_threshold": 0.2, "banned_alerts": []},
+                        "train_data": None,
+                        "candidate_data": "/tmp/candidates.csv",
+                        "prediction_model": "unimol_lambda_plqy_v1",
+                        "model_preferences": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                        "generation_input": {},
+                        "provenance": {},
+                        "status": "approved",
+                        "missing_fields": [],
+                        "questions": [],
+                        "compatibility_warnings": [],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                with mock.patch("ui.app._run_agent_step_json", side_effect=AssertionError("should not execute on dry_run")):
+                    resp = client.post(
+                        f"/api/task/{task_id}/retry-failed-step",
+                        json={"dry_run": True},
+                    )
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("mode"), "dry_run")
+            self.assertTrue(bool(payload.get("dry_run")))
+            self.assertEqual(payload.get("retry_operation"), "clean_dataset")
+
+    def test_ui_retry_failed_step_endpoint_uses_override_args(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_retry_override_args_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "status": "failed",
+                        "records": [
+                            {"name": "score_candidates", "status": "failed", "args": {"input_csv": "/tmp/old.csv"}},
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "task.json").write_text(
+                json.dumps(
+                    {
+                        "version": "2.0",
+                        "task_id": task_id,
+                        "request_text": "retry override args",
+                        "execution_mode": "full_pipeline",
+                        "operation": "full_pipeline",
+                        "property": "plqy",
+                        "range": "60-100",
+                        "n_structures": 20,
+                        "constraints": {"mw_min": 150, "mw_max": 700, "domain_threshold": 0.2, "banned_alerts": []},
+                        "train_data": None,
+                        "candidate_data": "/tmp/candidates.csv",
+                        "prediction_model": "unimol_lambda_plqy_v1",
+                        "model_preferences": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                        "generation_input": {},
+                        "provenance": {},
+                        "status": "approved",
+                        "missing_fields": [],
+                        "questions": [],
+                        "compatibility_warnings": [],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            override_args = {"input_csv": "/tmp/new.csv", "force": True}
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                with mock.patch(
+                    "ui.app._run_agent_step_json",
+                    return_value={"status": "pass", "result": {"status": "success", "task_id": task_id}},
+                ) as mocked_step:
+                    resp = client.post(
+                        f"/api/task/{task_id}/retry-failed-step",
+                        json={"args": override_args, "catalog_path": "configs/models/catalog.json"},
+                    )
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("retry_args"), override_args)
+            called_payload = mocked_step.call_args.kwargs.get("payload") if mocked_step.call_args and mocked_step.call_args.kwargs else {}
+            self.assertEqual(called_payload.get("args"), override_args)
+
     def test_ui_approve_rejects_missing_task_json_path(self) -> None:
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()

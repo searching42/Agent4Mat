@@ -34,6 +34,9 @@ Open: `http://127.0.0.1:8787`
 - chat transcript:
   - stores per-turn event trace messages (`event_trace`) to show stage timeline inline
   - includes grouped timeline board (Running / Completed / Failed) from `/api/task/<task_id>/timeline`
+  - timeline board supports scope switch:
+    - `current_task`: current task grouped timeline
+    - `recent_tasks`: aggregate grouped timeline across recent N tasks
   - failed-group items support inline Retry action (reuses row args by default, supports override args JSON)
 - compatibility:
   - legacy run/step/intake/approve/resume/task-inspector APIs remain available
@@ -60,6 +63,7 @@ Open: `http://127.0.0.1:8787`
   - `GET /api/task/<task_id>/summary`
   - `GET /api/task/<task_id>/artifact/<artifact_name>`
   - `GET /api/task/<task_id>/timeline`
+  - `GET /api/timeline-groups` (`scope=recent_tasks&limit=N`)
   - `GET /api/task/<task_id>/compare`
   - `GET /api/task/<task_id>/artifact-diff`
   - `GET /api/task/<task_id>/validate`

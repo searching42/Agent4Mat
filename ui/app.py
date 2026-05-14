@@ -335,6 +335,16 @@ HTML = """
         <div class=\"chat-log\" id=\"chat_log\"></div>
         <div class=\"timeline-groups\" id=\"timeline_groups_box\">
           <div class=\"tg-head\" id=\"timeline_groups_head\">Run Timeline Groups (current task)</div>
+          <div class=\"btn-row\">
+            <label style=\"margin-top:0; font-weight:600;\">Scope</label>
+            <select id=\"timeline_scope\" style=\"max-width: 180px;\">
+              <option value=\"current_task\">Current Task</option>
+              <option value=\"recent_tasks\">Recent Tasks</option>
+            </select>
+            <label style=\"margin-top:0; font-weight:600;\">Recent N</label>
+            <input id=\"timeline_recent_limit\" value=\"5\" style=\"max-width: 70px;\" />
+            <button onclick=\"loadTimelineGroupsByScope()\">Apply</button>
+          </div>
           <div class=\"tg-cols\">
             <div class=\"tg-col\">
               <h4>Running</h4>
@@ -713,6 +723,33 @@ HTML = """
         setListItems('tg_running', running);
         setListItems('tg_completed', completed);
         setListItems('tg_failed', failed);
+      }
+
+      function renderTimelineGroupsAggregate(payload) {
+        const head = document.getElementById('timeline_groups_head');
+        const running = Array.isArray(payload && payload.running_items) ? payload.running_items : [];
+        const completed = Array.isArray(payload && payload.completed_items) ? payload.completed_items : [];
+        const failed = Array.isArray(payload && payload.failed_items) ? payload.failed_items : [];
+        const total = Number(payload && payload.total_steps ? payload.total_steps : (running.length + completed.length + failed.length));
+        const scope = String(payload && payload.scope ? payload.scope : 'recent_tasks');
+        const tasksN = Number(payload && payload.task_count ? payload.task_count : 0);
+        head.textContent = `Run Timeline Groups (${scope}, tasks=${tasksN}, total=${total}, success=${completed.length}, failed=${failed.length})`;
+        setListItems('tg_running', running);
+        setListItems('tg_completed', completed);
+        setListItems('tg_failed', failed);
+      }
+
+      async function loadTimelineGroupsByScope() {
+        const scope = String(document.getElementById('timeline_scope').value || 'current_task');
+        if (scope === 'current_task') {
+          await loadRunRuntime();
+          return;
+        }
+        const limitRaw = Number(document.getElementById('timeline_recent_limit').value || 5);
+        const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(20, Math.floor(limitRaw))) : 5;
+        const r = await apiGet(`/api/timeline-groups?scope=recent_tasks&limit=${encodeURIComponent(String(limit))}`);
+        renderJsonOut(r.data);
+        renderTimelineGroupsAggregate(r.data);
       }
 
       function taskId() {
@@ -1679,6 +1716,98 @@ def _timeline_line(event: Dict[str, Any]) -> str:
     if adapter:
         return f"{idx:02d} {marker} {name} status={status} duration={dur_text} adapter={adapter}"
     return f"{idx:02d} {marker} {name} status={status} duration={dur_text}"
+
+
+def _events_from_execution(execution: Dict[str, Any]) -> List[Dict[str, Any]]:
+    records = execution.get("records", []) if isinstance(execution.get("records"), list) else []
+    events: List[Dict[str, Any]] = []
+    for idx, rec in enumerate(records, start=1):
+        if not isinstance(rec, dict):
+            continue
+        result = rec.get("result")
+        event: Dict[str, Any] = {
+            "index": idx,
+            "name": str(rec.get("name") or ""),
+            "status": str(rec.get("status") or ""),
+            "started_at": rec.get("started_at"),
+            "ended_at": rec.get("ended_at"),
+            "duration_ms": _duration_ms(rec.get("started_at"), rec.get("ended_at")),
+            "error": str(rec.get("error") or ""),
+            "result_summary": _timeline_result_summary(result),
+            "is_failed": str(rec.get("status") or "") != "success",
+            "args": rec.get("args") if isinstance(rec.get("args"), dict) else {},
+        }
+        if isinstance(result, dict) and result.get("adapter"):
+            event["adapter"] = result.get("adapter")
+        event["highlight"] = "fail" if bool(event.get("is_failed")) else "normal"
+        events.append(event)
+    return events
+
+
+def _timeline_groups_recent_tasks(*, limit: int) -> Dict[str, Any]:
+    runs_root = (REPO_ROOT / "runs" / "agent").resolve()
+    if not runs_root.exists():
+        return {
+            "status": "pass",
+            "scope": "recent_tasks",
+            "task_count": 0,
+            "total_steps": 0,
+            "running_items": [],
+            "completed_items": [],
+            "failed_items": [],
+            "tasks": [],
+        }
+
+    rows: List[Dict[str, Any]] = []
+    for child in runs_root.iterdir():
+        if not child.is_dir():
+            continue
+        tid = str(child.name or "").strip()
+        if not _is_safe_task_id(tid):
+            continue
+        updated_ms = _task_updated_epoch_ms(child)
+        rows.append({"task_id": tid, "run_dir": child, "updated_ms": updated_ms})
+    rows.sort(key=lambda item: int(item.get("updated_ms") or 0), reverse=True)
+    selected = rows[: max(1, min(limit, 50))]
+
+    running_items: List[Dict[str, Any]] = []
+    completed_items: List[Dict[str, Any]] = []
+    failed_items: List[Dict[str, Any]] = []
+    task_ids: List[str] = []
+    for item in selected:
+        tid = str(item.get("task_id") or "")
+        run_dir = item.get("run_dir")
+        if not tid or not isinstance(run_dir, Path):
+            continue
+        task_ids.append(tid)
+        execution = _load_json_if_exists(run_dir / "execution.json")
+        if not isinstance(execution, dict):
+            continue
+        events = _events_from_execution(execution)
+        for ev in events:
+            enriched = dict(ev)
+            enriched["task_id"] = tid
+            name = str(enriched.get("name") or "")
+            status = str(enriched.get("status") or "")
+            if name:
+                enriched["name"] = f"{tid}:{name}"
+            if str(status).lower() == "running":
+                running_items.append(enriched)
+            elif bool(enriched.get("is_failed")):
+                failed_items.append(enriched)
+            else:
+                completed_items.append(enriched)
+
+    return {
+        "status": "pass",
+        "scope": "recent_tasks",
+        "task_count": len(task_ids),
+        "total_steps": len(running_items) + len(completed_items) + len(failed_items),
+        "running_items": running_items,
+        "completed_items": completed_items,
+        "failed_items": failed_items,
+        "tasks": task_ids,
+    }
 
 
 def _task_compare_summary(task_id: str) -> Dict[str, Any]:
@@ -2962,6 +3091,18 @@ def api_experiments():
             "experiments": limited,
         }
     )
+
+
+@app.get("/api/timeline-groups")
+def api_timeline_groups():
+    scope = str(request.args.get("scope") or "recent_tasks").strip()
+    if scope not in {"recent_tasks"}:
+        return jsonify({"status": "fail", "error": "invalid scope"}), 400
+    limit = _as_int(request.args.get("limit"), 5)
+    limit = max(1, min(limit, 50))
+    out = _timeline_groups_recent_tasks(limit=limit)
+    out["limit"] = limit
+    return jsonify(out)
 
 
 @app.post("/api/run")

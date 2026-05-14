@@ -7803,6 +7803,66 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertEqual(payload2.get("status"), "fail")
         self.assertEqual(payload2.get("error"), "invalid execution_mode")
 
+    def test_ui_timeline_groups_endpoint_recent_tasks(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            runs = root / "runs" / "agent"
+            a = runs / "tg_a"
+            b = runs / "tg_b"
+            a.mkdir(parents=True, exist_ok=True)
+            b.mkdir(parents=True, exist_ok=True)
+            (a / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "tg_a",
+                        "status": "success",
+                        "records": [
+                            {"name": "generate_candidates", "status": "success", "args": {}, "result": {}, "error": ""},
+                            {"name": "score_candidates", "status": "failed", "args": {"input_csv": "/tmp/a.csv"}, "result": {}, "error": "boom"},
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (b / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "tg_b",
+                        "status": "success",
+                        "records": [
+                            {"name": "search_dataset", "status": "success", "args": {}, "result": {}, "error": ""},
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.utime(a, (1700000000, 1700000000))
+            os.utime(b, (1800000000, 1800000000))
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get("/api/timeline-groups?scope=recent_tasks&limit=2")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("scope"), "recent_tasks")
+            self.assertEqual(int(payload.get("task_count") or 0), 2)
+            failed_items = payload.get("failed_items") if isinstance(payload.get("failed_items"), list) else []
+            self.assertTrue(any(isinstance(it, dict) and str(it.get("name") or "").endswith(":score_candidates") for it in failed_items))
+
+    def test_ui_timeline_groups_endpoint_rejects_invalid_scope(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/timeline-groups?scope=bad_scope")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid scope")
+
     def test_ui_run_step_endpoint_shells_out_to_agent_run_step_json(self) -> None:
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()

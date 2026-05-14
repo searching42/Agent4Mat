@@ -135,6 +135,7 @@ HTML = """
         <button onclick=\"previewArtifact()\">Preview Artifact</button>
         <button onclick=\"showTimeline()\">Show Timeline</button>
         <button onclick=\"validateTask()\">Validate Task</button>
+        <button onclick=\"compareTask()\">Compare Runs</button>
         <label>Timeline tool filter (optional)</label>
         <input id=\"timeline_tool_filter\" value=\"\" placeholder=\"e.g. score_candidates\" />
         <label>Timeline status filter</label>
@@ -150,6 +151,8 @@ HTML = """
           <option value=\"duration_asc\">duration_asc</option>
           <option value=\"name_asc\">name_asc</option>
         </select>
+        <label>Compare with task id</label>
+        <input id=\"compare_other_task_id\" value=\"ui_task_step_demo\" placeholder=\"task id to compare against\" />
       </div>
 
       <div class=\"card full\">
@@ -264,6 +267,19 @@ HTML = """
         out.textContent = 'validating...';
         const taskId = document.getElementById('inspect_task_id').value;
         const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/validate`);
+        const data = await resp.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function compareTask() {
+        const out = document.getElementById('out');
+        out.textContent = 'comparing...';
+        const taskId = document.getElementById('inspect_task_id').value;
+        const other = (document.getElementById('compare_other_task_id').value || '').trim();
+        const params = new URLSearchParams();
+        if (other) params.set('other_task_id', other);
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/compare${suffix}`);
         const data = await resp.json();
         out.textContent = JSON.stringify(data, null, 2);
       }
@@ -600,6 +616,102 @@ def _timeline_line(event: Dict[str, Any]) -> str:
     return f"{idx:02d} {marker} {name} status={status} duration={dur_text}"
 
 
+def _task_compare_summary(task_id: str) -> Dict[str, Any]:
+    run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
+    by_name = _task_artifact_paths(task_id)
+    artifact_exists = {name: path.exists() for name, path in by_name.items()}
+    artifact_missing = [name for name, ok in artifact_exists.items() if not ok]
+
+    execution = _load_json_if_exists(by_name["execution"])
+    records = execution.get("records", []) if isinstance(execution, dict) and isinstance(execution.get("records"), list) else []
+    execution_status = str(execution.get("status") or "") if isinstance(execution, dict) else ""
+    total_duration_ms = _duration_ms(execution.get("started_at"), execution.get("ended_at")) if isinstance(execution, dict) else None
+
+    failed_steps: List[str] = []
+    adapters: set[str] = set()
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("status") or "") != "success":
+            failed_steps.append(str(rec.get("name") or ""))
+        result = rec.get("result")
+        if isinstance(result, dict):
+            adapter = str(result.get("adapter") or "").strip()
+            if adapter:
+                adapters.add(adapter)
+
+    web_evidence = _load_json_if_exists(by_name["web_evidence"])
+    web_results = web_evidence.get("results", []) if isinstance(web_evidence, dict) and isinstance(web_evidence.get("results"), list) else []
+
+    return {
+        "task_id": task_id,
+        "run_dir": str(run_dir),
+        "run_dir_exists": run_dir.exists(),
+        "artifacts_exists": artifact_exists,
+        "artifacts_missing": artifact_missing,
+        "execution_status": execution_status,
+        "record_count": len(records),
+        "failed_step_count": len(failed_steps),
+        "failed_steps": failed_steps,
+        "adapters": sorted(adapters),
+        "total_duration_ms": total_duration_ms,
+        "web_evidence_count": len(web_results),
+    }
+
+
+def _task_compare_diff(primary: Dict[str, Any], other: Dict[str, Any]) -> Dict[str, Any]:
+    primary_adapters = set(primary.get("adapters", [])) if isinstance(primary.get("adapters"), list) else set()
+    other_adapters = set(other.get("adapters", [])) if isinstance(other.get("adapters"), list) else set()
+    primary_failed = set(primary.get("failed_steps", [])) if isinstance(primary.get("failed_steps"), list) else set()
+    other_failed = set(other.get("failed_steps", [])) if isinstance(other.get("failed_steps"), list) else set()
+
+    primary_rc = int(primary.get("record_count") or 0)
+    other_rc = int(other.get("record_count") or 0)
+    primary_fail = int(primary.get("failed_step_count") or 0)
+    other_fail = int(other.get("failed_step_count") or 0)
+    primary_web = int(primary.get("web_evidence_count") or 0)
+    other_web = int(other.get("web_evidence_count") or 0)
+    primary_dur = primary.get("total_duration_ms")
+    other_dur = other.get("total_duration_ms")
+
+    duration_delta: Optional[int] = None
+    if isinstance(primary_dur, int) and isinstance(other_dur, int):
+        duration_delta = primary_dur - other_dur
+
+    return {
+        "execution_status_changed": str(primary.get("execution_status") or "") != str(other.get("execution_status") or ""),
+        "record_count_delta": primary_rc - other_rc,
+        "failed_step_count_delta": primary_fail - other_fail,
+        "web_evidence_count_delta": primary_web - other_web,
+        "total_duration_ms_delta": duration_delta,
+        "adapters_only_in_primary": sorted(primary_adapters - other_adapters),
+        "adapters_only_in_other": sorted(other_adapters - primary_adapters),
+        "failed_steps_only_in_primary": sorted(primary_failed - other_failed),
+        "failed_steps_only_in_other": sorted(other_failed - primary_failed),
+    }
+
+
+def _task_compare_lines(primary: Dict[str, Any], other: Dict[str, Any], diff: Dict[str, Any]) -> List[str]:
+    p_tid = str(primary.get("task_id") or "")
+    o_tid = str(other.get("task_id") or "")
+    out = [
+        f"record_count {p_tid}={int(primary.get('record_count') or 0)} vs {o_tid}={int(other.get('record_count') or 0)} delta={int(diff.get('record_count_delta') or 0)}",
+        f"failed_steps {p_tid}={int(primary.get('failed_step_count') or 0)} vs {o_tid}={int(other.get('failed_step_count') or 0)} delta={int(diff.get('failed_step_count_delta') or 0)}",
+        f"web_evidence {p_tid}={int(primary.get('web_evidence_count') or 0)} vs {o_tid}={int(other.get('web_evidence_count') or 0)} delta={int(diff.get('web_evidence_count_delta') or 0)}",
+    ]
+    if isinstance(diff.get("total_duration_ms_delta"), int):
+        out.append(f"duration_ms delta={int(diff.get('total_duration_ms_delta') or 0)}")
+    if bool(diff.get("execution_status_changed")):
+        out.append(
+            f"execution_status changed: {p_tid}={str(primary.get('execution_status') or '')} vs {o_tid}={str(other.get('execution_status') or '')}"
+        )
+    if isinstance(diff.get("adapters_only_in_primary"), list) and diff.get("adapters_only_in_primary"):
+        out.append(f"adapters only in {p_tid}: {', '.join(diff.get('adapters_only_in_primary', []))}")
+    if isinstance(diff.get("adapters_only_in_other"), list) and diff.get("adapters_only_in_other"):
+        out.append(f"adapters only in {o_tid}: {', '.join(diff.get('adapters_only_in_other', []))}")
+    return out
+
+
 def _is_safe_task_id(task_id: str) -> bool:
     tid = str(task_id or "").strip()
     if not tid:
@@ -824,6 +936,43 @@ def api_task_timeline(task_id: str):
             },
             "events": sorted_events,
             "timeline_lines": timeline_lines,
+        }
+    )
+
+
+@app.get("/api/task/<task_id>/compare")
+def api_task_compare(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    other = str(request.args.get("other_task_id") or "").strip()
+    if not other:
+        return jsonify({"status": "fail", "error": "missing other_task_id"}), 400
+    if not _is_safe_task_id(other):
+        return jsonify({"status": "fail", "error": "invalid other_task_id"}), 400
+    if other == tid:
+        return jsonify({"status": "fail", "error": "other_task_id must differ from task_id"}), 400
+
+    primary = _task_compare_summary(tid)
+    other_summary = _task_compare_summary(other)
+    diff = _task_compare_diff(primary, other_summary)
+    warnings: List[str] = []
+    if not bool(primary.get("run_dir_exists")):
+        warnings.append("primary_run_dir_missing")
+    if not bool(other_summary.get("run_dir_exists")):
+        warnings.append("other_run_dir_missing")
+    return jsonify(
+        {
+            "status": "pass" if not warnings else "partial",
+            "task_id": tid,
+            "other_task_id": other,
+            "warnings": warnings,
+            "primary": primary,
+            "other": other_summary,
+            "diff": diff,
+            "compare_lines": _task_compare_lines(primary, other_summary, diff),
         }
     )
 

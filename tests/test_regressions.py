@@ -7363,6 +7363,104 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertEqual(payload2.get("status"), "fail")
         self.assertEqual(payload2.get("error"), "invalid sort")
 
+    def test_ui_task_compare_returns_diff(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_a = "ui_compare_a"
+            task_b = "ui_compare_b"
+            run_a = root / "runs" / "agent" / task_a
+            run_b = root / "runs" / "agent" / task_b
+            (run_a / "artifacts").mkdir(parents=True, exist_ok=True)
+            (run_b / "artifacts").mkdir(parents=True, exist_ok=True)
+            (run_a / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "started_at": "2026-05-14T00:00:00+00:00",
+                        "ended_at": "2026-05-14T00:00:06+00:00",
+                        "records": [
+                            {
+                                "name": "generate_candidates",
+                                "status": "success",
+                                "result": {"adapter": "reinvent4_generate_adapter_v1"},
+                            },
+                            {
+                                "name": "score_candidates",
+                                "status": "failed",
+                                "result": {"adapter": "unimol_score_adapter_v1"},
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_b / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "started_at": "2026-05-14T00:00:00+00:00",
+                        "ended_at": "2026-05-14T00:00:03+00:00",
+                        "records": [
+                            {
+                                "name": "generate_candidates",
+                                "status": "success",
+                                "result": {"adapter": "template_generate_cmd"},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_a / "artifacts" / "web_evidence.json").write_text(
+                json.dumps({"results": [{"url": "https://nature.com/a"}]}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (run_b / "artifacts" / "web_evidence.json").write_text(
+                json.dumps({"results": []}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_a}/compare?other_task_id={task_b}")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            diff = payload.get("diff") if isinstance(payload.get("diff"), dict) else {}
+            self.assertEqual(diff.get("record_count_delta"), 1)
+            self.assertEqual(diff.get("failed_step_count_delta"), 1)
+            self.assertEqual(diff.get("web_evidence_count_delta"), 1)
+            self.assertEqual(diff.get("total_duration_ms_delta"), 3000)
+            self.assertEqual(diff.get("adapters_only_in_primary"), ["reinvent4_generate_adapter_v1", "unimol_score_adapter_v1"])
+            self.assertEqual(diff.get("adapters_only_in_other"), ["template_generate_cmd"])
+            lines = payload.get("compare_lines") if isinstance(payload.get("compare_lines"), list) else []
+            self.assertTrue(any("record_count" in str(line) for line in lines))
+
+    def test_ui_task_compare_rejects_invalid_inputs(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/task/ui_task_demo/compare")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "missing other_task_id")
+
+        resp2 = client.get("/api/task/ui_task_demo/compare?other_task_id=bad..id")
+        self.assertEqual(resp2.status_code, 400)
+        payload2 = resp2.get_json()
+        self.assertEqual(payload2.get("status"), "fail")
+        self.assertEqual(payload2.get("error"), "invalid other_task_id")
+
+        resp3 = client.get("/api/task/ui_task_demo/compare?other_task_id=ui_task_demo")
+        self.assertEqual(resp3.status_code, 400)
+        payload3 = resp3.get_json()
+        self.assertEqual(payload3.get("status"), "fail")
+        self.assertEqual(payload3.get("error"), "other_task_id must differ from task_id")
+
     def test_ui_task_validate_handles_missing_run_dir(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

@@ -30,10 +30,13 @@ Open: `http://127.0.0.1:8787`
   - previews `execution/task_state/decision_summary/web_evidence`
   - supports one-click artifact preview, timeline, and core validation
   - timeline supports failed-step highlight, tool filter, and duration sort
+  - supports recent-task picker (quick fill for inspect/compare task ids)
   - supports run-to-run compare (`task_id` vs `other_task_id`) with key deltas (records/failures/adapters/duration/evidence)
 
 ## API endpoints
 - `GET /api/health`
+- `GET /api/tasks`
+  - query params: `limit`, `prefix`
 - `POST /api/run`
 - `POST /api/run-step`
 - `POST /api/intake`

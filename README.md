@@ -194,6 +194,7 @@ make ui-run
 Open: `http://127.0.0.1:8787`
 
 UI prototype API coverage:
+- `GET /api/tasks` -> recent run list for inspector/compare picker (`limit`, `prefix`)
 - `POST /api/run` -> `agent-run-json` (full pipeline)
 - `POST /api/run-step` -> `agent-run-step-json` (single operation)
 - `POST /api/intake` -> `agent-intake` (task clarification + evidence)

@@ -122,6 +122,11 @@ HTML = """
         <p>Preview key artifacts under <code>runs/agent/&lt;task_id&gt;</code>.</p>
         <label>Task ID</label>
         <input id=\"inspect_task_id\" value=\"ui_task_demo\" />
+        <button onclick=\"loadTasks()\">Refresh Tasks</button>
+        <label>Recent tasks</label>
+        <select id=\"inspect_task_picker\" onchange=\"pickInspectTask()\">
+          <option value=\"\">(select)</option>
+        </select>
         <button onclick=\"inspectTask()\">Load</button>
         <label>Artifact</label>
         <select id=\"inspect_artifact_name\">
@@ -150,6 +155,10 @@ HTML = """
           <option value=\"duration_desc\">duration_desc</option>
           <option value=\"duration_asc\">duration_asc</option>
           <option value=\"name_asc\">name_asc</option>
+        </select>
+        <label>Compare picker</label>
+        <select id=\"compare_other_task_picker\" onchange=\"pickCompareTask()\">
+          <option value=\"\">(select)</option>
         </select>
         <label>Compare with task id</label>
         <input id=\"compare_other_task_id\" value=\"ui_task_step_demo\" placeholder=\"task id to compare against\" />
@@ -281,6 +290,54 @@ HTML = """
         const suffix = params.toString() ? `?${params.toString()}` : '';
         const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/compare${suffix}`);
         const data = await resp.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      }
+
+      function fillTaskPicker(selectId, tasks, keepValue) {
+        const select = document.getElementById(selectId);
+        while (select.options.length > 1) {
+          select.remove(1);
+        }
+        for (const t of tasks) {
+          const tid = (t && t.task_id) ? String(t.task_id) : '';
+          if (!tid) continue;
+          const status = (t && t.execution_status) ? String(t.execution_status) : '';
+          const records = (t && typeof t.record_count === 'number') ? t.record_count : 0;
+          const failed = (t && typeof t.failed_step_count === 'number') ? t.failed_step_count : 0;
+          const label = `${tid} [${status || 'unknown'}] records=${records} failed=${failed}`;
+          const opt = document.createElement('option');
+          opt.value = tid;
+          opt.text = label;
+          select.appendChild(opt);
+        }
+        if (keepValue) {
+          select.value = keepValue;
+        }
+      }
+
+      function pickInspectTask() {
+        const tid = (document.getElementById('inspect_task_picker').value || '').trim();
+        if (!tid) return;
+        document.getElementById('inspect_task_id').value = tid;
+        document.getElementById('resume_task_id').value = tid;
+      }
+
+      function pickCompareTask() {
+        const tid = (document.getElementById('compare_other_task_picker').value || '').trim();
+        if (!tid) return;
+        document.getElementById('compare_other_task_id').value = tid;
+      }
+
+      async function loadTasks() {
+        const out = document.getElementById('out');
+        out.textContent = 'loading tasks...';
+        const inspectNow = (document.getElementById('inspect_task_id').value || '').trim();
+        const compareNow = (document.getElementById('compare_other_task_id').value || '').trim();
+        const resp = await fetch('/api/tasks?limit=80');
+        const data = await resp.json();
+        const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+        fillTaskPicker('inspect_task_picker', tasks, inspectNow);
+        fillTaskPicker('compare_other_task_picker', tasks, compareNow);
         out.textContent = JSON.stringify(data, null, 2);
       }
     </script>
@@ -478,6 +535,43 @@ def _load_json_if_exists(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _task_updated_epoch_ms(run_dir: Path) -> int:
+    latest = run_dir.stat().st_mtime if run_dir.exists() else 0.0
+    try:
+        for p in run_dir.rglob("*"):
+            try:
+                mt = p.stat().st_mtime
+            except Exception:
+                continue
+            if mt > latest:
+                latest = mt
+    except Exception:
+        pass
+    return int(latest * 1000)
+
+
+def _task_list_item(task_id: str, run_dir: Path) -> Dict[str, Any]:
+    execution = _load_json_if_exists(run_dir / "execution.json")
+    task_state = _load_json_if_exists(run_dir / "task_state.json")
+    records = execution.get("records", []) if isinstance(execution, dict) and isinstance(execution.get("records"), list) else []
+    failed_n = 0
+    for rec in records:
+        if isinstance(rec, dict) and str(rec.get("status") or "") != "success":
+            failed_n += 1
+    updated_ms = _task_updated_epoch_ms(run_dir)
+    updated_at = datetime.fromtimestamp(updated_ms / 1000.0).isoformat(timespec="seconds")
+    return {
+        "task_id": task_id,
+        "run_dir": str(run_dir),
+        "updated_epoch_ms": updated_ms,
+        "updated_at": updated_at,
+        "execution_status": str(execution.get("status") or "") if isinstance(execution, dict) else "",
+        "record_count": len(records),
+        "failed_step_count": failed_n,
+        "task_state_status": str(task_state.get("status") or "") if isinstance(task_state, dict) else "",
+    }
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -731,6 +825,42 @@ def index() -> str:
 @app.get("/api/health")
 def api_health():
     return jsonify({"status": "pass", "repo_root": str(REPO_ROOT)})
+
+
+@app.get("/api/tasks")
+def api_tasks():
+    limit = _as_int(request.args.get("limit"), 50)
+    limit = max(1, min(limit, 200))
+    prefix = str(request.args.get("prefix") or "").strip()
+    if prefix and not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", prefix):
+        return jsonify({"status": "fail", "error": "invalid prefix"}), 400
+    runs_root = (REPO_ROOT / "runs" / "agent").resolve()
+    if not runs_root.exists():
+        return jsonify({"status": "pass", "tasks": [], "count": 0, "runs_root": str(runs_root)})
+
+    items: List[Dict[str, Any]] = []
+    for child in runs_root.iterdir():
+        if not child.is_dir():
+            continue
+        tid = str(child.name or "").strip()
+        if not _is_safe_task_id(tid):
+            continue
+        if prefix and not tid.startswith(prefix):
+            continue
+        items.append(_task_list_item(tid, child))
+    items.sort(key=lambda it: int(it.get("updated_epoch_ms") or 0), reverse=True)
+    limited = items[:limit]
+    return jsonify(
+        {
+            "status": "pass",
+            "runs_root": str(runs_root),
+            "count": len(limited),
+            "count_before_limit": len(items),
+            "limit": limit,
+            "prefix": prefix,
+            "tasks": limited,
+        }
+    )
 
 
 @app.post("/api/run")

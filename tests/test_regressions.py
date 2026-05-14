@@ -7061,6 +7061,49 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertEqual(payload.get("status"), "pass")
         self.assertTrue(str(payload.get("repo_root") or ""))
 
+    def test_ui_tasks_endpoint_lists_recent_runs(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            base = root / "runs" / "agent"
+            run_a = base / "ui_task_a"
+            run_b = base / "ui_task_b"
+            run_skip = base / "bad..id"
+            for run in [run_a, run_b, run_skip]:
+                run.mkdir(parents=True, exist_ok=True)
+            (run_a / "execution.json").write_text(
+                json.dumps({"status": "success", "records": [{"status": "success"}]}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (run_a / "task_state.json").write_text(json.dumps({"status": "SUCCESS"}, ensure_ascii=False) + "\n", encoding="utf-8")
+            (run_b / "execution.json").write_text(
+                json.dumps({"status": "failed", "records": [{"status": "failed"}]}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (run_b / "task_state.json").write_text(json.dumps({"status": "FAILED"}, ensure_ascii=False) + "\n", encoding="utf-8")
+            os.utime(run_a, (1700000000, 1700000000))
+            os.utime(run_b, (1800000000, 1800000000))
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get("/api/tasks?limit=1")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(int(payload.get("count") or 0), 1)
+            tasks = payload.get("tasks") if isinstance(payload.get("tasks"), list) else []
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0].get("task_id"), "ui_task_b")
+            self.assertEqual(tasks[0].get("execution_status"), "failed")
+
+    def test_ui_tasks_endpoint_rejects_invalid_prefix(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/tasks?prefix=bad/../x")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid prefix")
+
     def test_ui_run_step_endpoint_shells_out_to_agent_run_step_json(self) -> None:
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()

@@ -6209,6 +6209,104 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(len(recent), 1)
             self.assertEqual(recent[0].get("task_id"), "exp_ok")
 
+    def test_summarize_experiments_prioritizes_failed_and_extracts_score_fallback(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            run_a = td_path / "runs" / "agent" / "exp_a"
+            run_b = td_path / "runs" / "agent" / "exp_b"
+            (run_a / "artifacts").mkdir(parents=True, exist_ok=True)
+            (run_b / "artifacts").mkdir(parents=True, exist_ok=True)
+            (run_a / "artifacts" / "experiment_trace.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "exp_a",
+                        "run_label": "exp_a-1",
+                        "generated_at": "2026-05-14T04:00:00+00:00",
+                        "execution_mode": "full_pipeline",
+                        "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                        "execution_summary": {
+                            "status": "success",
+                            "record_count": 3,
+                            "failed_count": 0,
+                            "failed_steps": [],
+                            "adapters": ["a_gen"],
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_b / "artifacts" / "experiment_trace.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "exp_b",
+                        "run_label": "exp_b-1",
+                        "generated_at": "2026-05-14T03:00:00+00:00",
+                        "execution_mode": "full_pipeline",
+                        "model_choice": {"predictor_id": "p2", "generator_id": "g2"},
+                        "execution_summary": {
+                            "status": "failed",
+                            "record_count": 2,
+                            "failed_count": 1,
+                            "failed_steps": ["score_candidates"],
+                            "adapters": ["a_score"],
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_b / "decision_summary.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "exp_b",
+                        "score_step": {
+                            "adapter": "unimol_score_adapter_v1",
+                            "used_fallback": True,
+                            "fallback_code": "adapter_timeout",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            out_md = td_path / "summary.md"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/summarize_experiments.py",
+                    "--workspace-root",
+                    str(td_path),
+                    "--limit",
+                    "2",
+                    "--md-out",
+                    str(out_md),
+                ],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+            payload = json.loads(cp.stdout)
+            recent_failed_first = payload.get("recent_failed_first") if isinstance(payload.get("recent_failed_first"), list) else []
+            self.assertEqual(len(recent_failed_first), 2)
+            self.assertEqual(recent_failed_first[0].get("task_id"), "exp_b")
+            self.assertEqual(recent_failed_first[0].get("score_adapter"), "unimol_score_adapter_v1")
+            self.assertEqual(recent_failed_first[0].get("score_used_fallback"), True)
+            self.assertEqual(recent_failed_first[0].get("score_fallback_code"), "adapter_timeout")
+            md = out_md.read_text(encoding="utf-8")
+            self.assertIn("## Failed Runs (Newest First)", md)
+            self.assertIn("task_id=exp_b", md)
+            self.assertIn("score_used_fallback=True", md)
+
     def test_plan_progress_docs_exist(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         expected_docs = [

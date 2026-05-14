@@ -166,6 +166,16 @@ HTML = """
         color: var(--muted);
         font-size: 0.72rem;
       }
+      .timeline {
+        margin-top: 8px;
+        border-top: 1px dashed #ccd7ea;
+        padding-top: 7px;
+        font-size: 0.75rem;
+        color: #3f4d62;
+      }
+      .timeline-item {
+        margin: 2px 0;
+      }
       .chat-input {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -567,6 +577,31 @@ HTML = """
           meta.className = 'meta';
           meta.textContent = `${role} • ${kind} • ${ts}`;
           row.appendChild(meta);
+
+          const metaObj = (m && typeof m === 'object' && m.meta && typeof m.meta === 'object') ? m.meta : {};
+          const timelineItems = [];
+          if (metaObj.events && Array.isArray(metaObj.events)) {
+            for (const ev of metaObj.events) {
+              if (!ev || typeof ev !== 'object') continue;
+              const stage = String(ev.stage || '');
+              const status = String(ev.status || '');
+              const op = String(ev.operation || '');
+              let line = `${stage || 'stage'}: ${status || 'unknown'}`;
+              if (op) line += ` | op=${op}`;
+              timelineItems.push(line);
+            }
+          }
+          if (timelineItems.length > 0) {
+            const wrap = document.createElement('div');
+            wrap.className = 'timeline';
+            for (const line of timelineItems) {
+              const item = document.createElement('div');
+              item.className = 'timeline-item';
+              item.textContent = line;
+              wrap.appendChild(item);
+            }
+            row.appendChild(wrap);
+          }
           log.appendChild(row);
         }
         log.scrollTop = log.scrollHeight;
@@ -2619,6 +2654,18 @@ def api_chat_send():
         project["options"] = merged_options
 
     out = _chat_run_pipeline(project=project, message=message, new_task=new_task)
+    events_for_meta = out.get("events") if isinstance(out.get("events"), list) else []
+    if events_for_meta:
+        _append_message(
+            project,
+            role="system",
+            kind="event_trace",
+            content="Execution timeline updated.",
+            meta={"events": events_for_meta},
+        )
+        project = _save_project_state(project)
+        out["project"] = _project_summary(project)
+        out["messages"] = _recent_messages(project)
     return jsonify(out)
 
 

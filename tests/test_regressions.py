@@ -7590,6 +7590,15 @@ class UiPrototypeTests(unittest.TestCase):
                 messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
                 assistant_text = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
                 self.assertIn("任务执行完成", assistant_text)
+                event_msgs = [
+                    m for m in messages
+                    if isinstance(m, dict)
+                    and str(m.get("kind") or "") == "event_trace"
+                    and isinstance(m.get("meta"), dict)
+                ]
+                self.assertTrue(len(event_msgs) >= 1)
+                meta_events = event_msgs[-1].get("meta", {}).get("events") if isinstance(event_msgs[-1].get("meta"), dict) else []
+                self.assertTrue(any(isinstance(e, dict) and str(e.get("stage") or "") == "run" for e in (meta_events if isinstance(meta_events, list) else [])))
                 self.assertEqual(mocked.call_count, 3)
 
     def test_ui_chat_send_step_command_runs_step_json(self) -> None:

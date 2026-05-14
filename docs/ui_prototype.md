@@ -31,6 +31,8 @@ Open: `http://127.0.0.1:8787`
   - one-click retry latest failed step via `agent-run-step-json` (supports args override and dry-run preview)
   - recent stage events (intake/approve/run/step)
   - artifact preview and timeline / validation shortcuts
+- chat transcript:
+  - stores per-turn event trace messages (`event_trace`) to show stage timeline inline
 - compatibility:
   - legacy run/step/intake/approve/resume/task-inspector APIs remain available
 

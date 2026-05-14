@@ -179,6 +179,7 @@ HTML = """
 
       <div class=\"card full\">
         <h2>Result</h2>
+        <button onclick=\"listExperiments()\">List Experiments</button>
         <pre id=\"out\">(waiting)</pre>
       </div>
     </div>
@@ -365,6 +366,14 @@ HTML = """
         if (artifact) params.set('artifact', artifact);
         const suffix = params.toString() ? `?${params.toString()}` : '';
         const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/artifact-diff${suffix}`);
+        const data = await resp.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function listExperiments() {
+        const out = document.getElementById('out');
+        out.textContent = 'loading experiments...';
+        const resp = await fetch('/api/experiments?limit=120');
         const data = await resp.json();
         out.textContent = JSON.stringify(data, null, 2);
       }
@@ -600,6 +609,33 @@ def _task_list_item(task_id: str, run_dir: Path) -> Dict[str, Any]:
         "failed_step_count": failed_n,
         "task_state_status": str(task_state.get("status") or "") if isinstance(task_state, dict) else "",
     }
+
+
+def _experiment_row_from_trace(trace: Dict[str, Any], trace_path: Path) -> Dict[str, Any]:
+    model_choice = trace.get("model_choice") if isinstance(trace.get("model_choice"), dict) else {}
+    execution_summary = trace.get("execution_summary") if isinstance(trace.get("execution_summary"), dict) else {}
+    source_artifacts = trace.get("source_artifacts") if isinstance(trace.get("source_artifacts"), dict) else {}
+    candidate = source_artifacts.get("candidate_csv") if isinstance(source_artifacts.get("candidate_csv"), dict) else {}
+    scored = source_artifacts.get("scored_csv") if isinstance(source_artifacts.get("scored_csv"), dict) else {}
+    return {
+        "task_id": str(trace.get("task_id") or ""),
+        "run_label": str(trace.get("run_label") or ""),
+        "generated_at": str(trace.get("generated_at") or ""),
+        "execution_mode": str(trace.get("execution_mode") or ""),
+        "status": str(execution_summary.get("status") or ""),
+        "record_count": int(execution_summary.get("record_count") or 0),
+        "failed_count": int(execution_summary.get("failed_count") or 0),
+        "adapters": execution_summary.get("adapters", []) if isinstance(execution_summary.get("adapters"), list) else [],
+        "predictor_id": str(model_choice.get("predictor_id") or ""),
+        "generator_id": str(model_choice.get("generator_id") or ""),
+        "candidate_csv_exists": bool(candidate.get("exists")),
+        "scored_csv_exists": bool(scored.get("exists")),
+        "trace_path": str(trace_path),
+    }
+
+
+def _safe_filter_token(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value))
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -1000,6 +1036,73 @@ def api_tasks():
             "limit": limit,
             "prefix": prefix,
             "tasks": limited,
+        }
+    )
+
+
+@app.get("/api/experiments")
+def api_experiments():
+    limit = _as_int(request.args.get("limit"), 80)
+    limit = max(1, min(limit, 500))
+    prefix = str(request.args.get("prefix") or "").strip()
+    predictor_id = str(request.args.get("predictor_id") or "").strip()
+    generator_id = str(request.args.get("generator_id") or "").strip()
+    status = str(request.args.get("status") or "").strip()
+    execution_mode = str(request.args.get("execution_mode") or "").strip()
+    for token in (prefix, predictor_id, generator_id):
+        if token and not _safe_filter_token(token):
+            return jsonify({"status": "fail", "error": "invalid filter token"}), 400
+    if status and status not in {"success", "failed"}:
+        return jsonify({"status": "fail", "error": "invalid status"}), 400
+    if execution_mode and execution_mode not in {"full_pipeline", "single_step"}:
+        return jsonify({"status": "fail", "error": "invalid execution_mode"}), 400
+
+    runs_root = (REPO_ROOT / "runs" / "agent").resolve()
+    if not runs_root.exists():
+        return jsonify({"status": "pass", "experiments": [], "count": 0, "runs_root": str(runs_root)})
+
+    rows: List[Dict[str, Any]] = []
+    for child in runs_root.iterdir():
+        if not child.is_dir():
+            continue
+        task_id = str(child.name or "").strip()
+        if not _is_safe_task_id(task_id):
+            continue
+        if prefix and not task_id.startswith(prefix):
+            continue
+        trace_path = child / "artifacts" / "experiment_trace.json"
+        if not trace_path.exists():
+            continue
+        trace = _load_json_if_exists(trace_path)
+        if not isinstance(trace, dict):
+            continue
+        row = _experiment_row_from_trace(trace, trace_path)
+        if predictor_id and row.get("predictor_id") != predictor_id:
+            continue
+        if generator_id and row.get("generator_id") != generator_id:
+            continue
+        if status and row.get("status") != status:
+            continue
+        if execution_mode and row.get("execution_mode") != execution_mode:
+            continue
+        rows.append(row)
+    rows.sort(key=lambda item: str(item.get("generated_at") or ""), reverse=True)
+    limited = rows[:limit]
+    return jsonify(
+        {
+            "status": "pass",
+            "runs_root": str(runs_root),
+            "count": len(limited),
+            "count_before_limit": len(rows),
+            "limit": limit,
+            "filters": {
+                "prefix": prefix,
+                "predictor_id": predictor_id,
+                "generator_id": generator_id,
+                "status": status,
+                "execution_mode": execution_mode,
+            },
+            "experiments": limited,
         }
     )
 

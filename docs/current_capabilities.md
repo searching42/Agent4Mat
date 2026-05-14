@@ -144,5 +144,6 @@ Implemented stages:
 - lightweight UI prototype smoke:
   - `ui/app.py`
   - supports full pipeline / single-step / intake / approve / resume / task artifact summary panels
+  - supports experiment list endpoint (`/api/experiments`) for trace-level filtering
   - task inspector supports recent-task picker, artifact preview, timeline view (failed highlight + filter/sort), run-to-run compare, artifact key-path diff, and one-click core artifact validation
   - `make ui-smoke`

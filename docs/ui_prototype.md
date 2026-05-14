@@ -39,6 +39,8 @@ Open: `http://127.0.0.1:8787`
 - `GET /api/health`
 - `GET /api/tasks`
   - query params: `limit`, `prefix`
+- `GET /api/experiments`
+  - query params: `limit`, `prefix`, `predictor_id`, `generator_id`, `status`, `execution_mode`
 - `POST /api/run`
 - `POST /api/run-step`
 - `POST /api/intake`

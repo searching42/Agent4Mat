@@ -7119,6 +7119,73 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertEqual(payload.get("status"), "fail")
         self.assertEqual(payload.get("error"), "invalid prefix")
 
+    def test_ui_experiments_endpoint_filters_records(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            runs = root / "runs" / "agent"
+            a = runs / "exp_a" / "artifacts"
+            b = runs / "exp_b" / "artifacts"
+            a.mkdir(parents=True, exist_ok=True)
+            b.mkdir(parents=True, exist_ok=True)
+            (a / "experiment_trace.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "exp_a",
+                        "run_label": "exp_a-20260514-010101",
+                        "generated_at": "2026-05-14T01:01:01+00:00",
+                        "execution_mode": "full_pipeline",
+                        "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                        "execution_summary": {"status": "success", "record_count": 4, "failed_count": 0, "adapters": ["a1"]},
+                        "source_artifacts": {"candidate_csv": {"exists": True}, "scored_csv": {"exists": True}},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (b / "experiment_trace.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "exp_b",
+                        "run_label": "exp_b-20260514-010102",
+                        "generated_at": "2026-05-14T01:01:02+00:00",
+                        "execution_mode": "single_step",
+                        "model_choice": {"predictor_id": "p2", "generator_id": "g2"},
+                        "execution_summary": {"status": "failed", "record_count": 1, "failed_count": 1, "adapters": ["a2"]},
+                        "source_artifacts": {"candidate_csv": {"exists": False}, "scored_csv": {"exists": False}},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get("/api/experiments?predictor_id=p1&execution_mode=full_pipeline&status=success")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            exps = payload.get("experiments") if isinstance(payload.get("experiments"), list) else []
+            self.assertEqual(len(exps), 1)
+            self.assertEqual(exps[0].get("task_id"), "exp_a")
+            self.assertEqual(exps[0].get("predictor_id"), "p1")
+
+    def test_ui_experiments_endpoint_rejects_invalid_filters(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/experiments?status=weird")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid status")
+
+        resp2 = client.get("/api/experiments?execution_mode=abc")
+        self.assertEqual(resp2.status_code, 400)
+        payload2 = resp2.get_json()
+        self.assertEqual(payload2.get("status"), "fail")
+        self.assertEqual(payload2.get("error"), "invalid execution_mode")
+
     def test_ui_run_step_endpoint_shells_out_to_agent_run_step_json(self) -> None:
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()

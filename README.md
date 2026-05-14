@@ -195,6 +195,7 @@ Open: `http://127.0.0.1:8787`
 
 UI prototype API coverage:
 - `GET /api/tasks` -> recent run list for inspector/compare picker (`limit`, `prefix`)
+- `GET /api/experiments` -> experiment-trace list with filters (`limit`, `prefix`, `predictor_id`, `generator_id`, `status`, `execution_mode`)
 - `POST /api/run` -> `agent-run-json` (full pipeline)
 - `POST /api/run-step` -> `agent-run-step-json` (single operation)
 - `POST /api/intake` -> `agent-intake` (task clarification + evidence)

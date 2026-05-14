@@ -33,6 +33,7 @@ Open: `http://127.0.0.1:8787`
   - one-click retry current task via `agent-resume`
   - one-click retry latest failed step via `agent-run-step-json` (supports args override, target failed_tool_name, and dry-run preview)
   - `Load Suggested Retry Args` can auto-fill retry args from dry-run replay suggestion
+  - task compare / artifact diff shortcuts for two-run diffing
   - recent stage events (intake/approve/run/step)
   - artifact preview and timeline / validation shortcuts
 - chat transcript:

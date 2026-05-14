@@ -476,6 +476,16 @@ HTML = """
           <button onclick=\"showTimeline()\">Show Timeline</button>
           <button onclick=\"validateTask()\">Validate Task</button>
         </div>
+        <div class=\"tool-box\">
+          <h3>Task Compare</h3>
+          <label>Other Task ID</label>
+          <input id=\"compare_other_task_id\" placeholder=\"e.g. acc_local_20260514_095552\" />
+          <div class=\"btn-row\">
+            <button onclick=\"compareTasks()\">Compare Tasks</button>
+            <button onclick=\"compareSelectedArtifact()\">Compare Selected Artifact Diff</button>
+          </div>
+          <div class=\"muted\">使用当前 task 与另一个 task 做 summary / artifact diff 对比。</div>
+        </div>
         <pre id=\"out\">(waiting)</pre>
       </div>
     </div>
@@ -1261,6 +1271,39 @@ HTML = """
           return;
         }
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/validate`);
+        renderJsonOut(r.data);
+      }
+
+      async function compareTasks() {
+        const tid = taskId();
+        const other = String(document.getElementById('compare_other_task_id').value || '').trim();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        if (!other) {
+          renderJsonOut({status: 'fail', error: 'missing other_task_id'});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/compare?other_task_id=${encodeURIComponent(other)}`);
+        renderJsonOut(r.data);
+      }
+
+      async function compareSelectedArtifact() {
+        const tid = taskId();
+        const other = String(document.getElementById('compare_other_task_id').value || '').trim();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        if (!other) {
+          renderJsonOut({status: 'fail', error: 'missing other_task_id'});
+          return;
+        }
+        const artifact = String(document.getElementById('artifact_name').value || 'decision_summary').trim();
+        const r = await apiGet(
+          `/api/task/${encodeURIComponent(tid)}/artifact-diff?other_task_id=${encodeURIComponent(other)}&artifact=${encodeURIComponent(artifact)}`
+        );
         renderJsonOut(r.data);
       }
 

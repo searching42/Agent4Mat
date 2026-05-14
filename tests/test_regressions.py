@@ -7428,6 +7428,16 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("Ctrl/Cmd+Enter 发送", html)
         self.assertIn("prompt-chip", html)
 
+    def test_ui_html_contains_task_compare_controls(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("compare_other_task_id", html)
+        self.assertIn("compareTasks()", html)
+        self.assertIn("compareSelectedArtifact()", html)
+
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

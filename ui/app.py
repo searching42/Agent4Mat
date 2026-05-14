@@ -238,6 +238,26 @@ HTML = """
         color: #3b4455;
         font-size: 0.84rem;
       }
+      .prompt-history {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .prompt-history .empty {
+        color: var(--muted);
+        font-size: 0.76rem;
+      }
+      .prompt-chip {
+        margin-top: 0;
+        padding: 6px 8px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        background: #eef4ff;
+        border: 1px solid #c8d9fb;
+        color: #244b8f;
+        cursor: pointer;
+      }
       pre {
         margin: 0;
         background: #0f1729;
@@ -365,6 +385,8 @@ HTML = """
           <label>Chat with agent</label>
           <textarea id=\"message_input\" placeholder=\"例如：设计470nm附近且高PLQY分子；补充字段：{&quot;candidate_data&quot;:&quot;/abs/path/data.csv&quot;}；或单步：/step clean_dataset {&quot;input_csv&quot;:&quot;/abs/path/data.csv&quot;}\"></textarea>
           <div class=\"muted\">Step mode: 支持 `/step <operation> {args_json}` 或直接发送 `{\"operation\":\"...\",\"args\":{...}}`。</div>
+          <div class=\"muted\">快捷键: Ctrl/Cmd+Enter 发送，Shift+Enter 换行。</div>
+          <div class=\"prompt-history\" id=\"prompt_history_box\"></div>
           <div class=\"btn-row\">
             <button class=\"primary\" onclick=\"sendChat(false)\">Send</button>
             <button onclick=\"loadHistory()\">Reload History</button>
@@ -461,7 +483,10 @@ HTML = """
       const state = {
         project: null,
         pendingInput: null,
+        promptHistory: [],
       };
+
+      const PROMPT_HISTORY_LIMIT = 8;
 
       const pendingFieldMeta = {
         property: {label: 'property', placeholder: 'plqy / lambda_em / stability'},
@@ -524,6 +549,109 @@ HTML = """
 
       function renderJsonOut(payload) {
         document.getElementById('out').textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function currentProjectKey() {
+        return String(selectedProjectId() || 'demo_chat_project').trim() || 'demo_chat_project';
+      }
+
+      function messageDraftKey(projectId) {
+        return `agent4mat.ui.message_draft.${String(projectId || '').trim() || 'demo_chat_project'}`;
+      }
+
+      function promptHistoryKey(projectId) {
+        return `agent4mat.ui.prompt_history.${String(projectId || '').trim() || 'demo_chat_project'}`;
+      }
+
+      function loadPromptHistory(projectId) {
+        try {
+          const raw = localStorage.getItem(promptHistoryKey(projectId));
+          if (!raw) return [];
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return [];
+          return parsed.filter((item) => typeof item === 'string' && item.trim()).slice(0, PROMPT_HISTORY_LIMIT);
+        } catch (e) {
+          return [];
+        }
+      }
+
+      function savePromptHistory(projectId, items) {
+        try {
+          localStorage.setItem(promptHistoryKey(projectId), JSON.stringify(items.slice(0, PROMPT_HISTORY_LIMIT)));
+        } catch (e) {
+          // ignore storage failures
+        }
+      }
+
+      function renderPromptHistory(projectId) {
+        const box = document.getElementById('prompt_history_box');
+        if (!box) return;
+        const items = loadPromptHistory(projectId);
+        state.promptHistory = items;
+        box.innerHTML = '';
+        if (items.length < 1) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'Recent prompts: (empty)';
+          box.appendChild(empty);
+          return;
+        }
+        for (const prompt of items) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'prompt-chip';
+          const short = prompt.length > 42 ? `${prompt.slice(0, 42)}...` : prompt;
+          btn.textContent = short;
+          btn.title = prompt;
+          btn.onclick = () => {
+            setMessageInput(prompt, {persist: true});
+            document.getElementById('message_input').focus();
+          };
+          box.appendChild(btn);
+        }
+      }
+
+      function capturePromptHistory(projectId, message) {
+        const text = String(message || '').trim();
+        if (!text) return;
+        const existing = loadPromptHistory(projectId);
+        const deduped = [text, ...existing.filter((item) => String(item || '').trim() !== text)];
+        savePromptHistory(projectId, deduped);
+        renderPromptHistory(projectId);
+      }
+
+      function restoreMessageDraft(projectId) {
+        const key = messageDraftKey(projectId);
+        try {
+          const saved = localStorage.getItem(key);
+          if (saved !== null) {
+            document.getElementById('message_input').value = saved;
+          }
+        } catch (e) {
+          // ignore storage failures
+        }
+      }
+
+      function persistMessageDraft() {
+        const pid = currentProjectKey();
+        const text = String(document.getElementById('message_input').value || '');
+        try {
+          if (text.trim()) {
+            localStorage.setItem(messageDraftKey(pid), text);
+          } else {
+            localStorage.removeItem(messageDraftKey(pid));
+          }
+        } catch (e) {
+          // ignore storage failures
+        }
+      }
+
+      function setMessageInput(text, opts) {
+        const value = String(text || '');
+        document.getElementById('message_input').value = value;
+        if (!opts || opts.persist !== false) {
+          persistMessageDraft();
+        }
       }
 
       function clearPendingInput() {
@@ -999,6 +1127,8 @@ HTML = """
         }
         await refreshProjects();
         await loadHistory();
+        restoreMessageDraft(projectId);
+        renderPromptHistory(projectId);
       }
 
       async function exportProject() {
@@ -1051,6 +1181,8 @@ HTML = """
         }
         const messages = Array.isArray(r.data.messages) ? r.data.messages : [];
         renderChat(messages);
+        restoreMessageDraft(pid);
+        renderPromptHistory(pid);
       }
 
       async function sendChat(newTask) {
@@ -1066,6 +1198,9 @@ HTML = """
           options: collectOptions(),
           new_task: Boolean(newTask),
         });
+        if (message) {
+          capturePromptHistory(pid, message);
+        }
         renderJsonOut(r.data);
         renderEvents(r.data && r.data.events ? r.data.events : []);
         const pending = (r.data && r.data.pending_input)
@@ -1082,7 +1217,7 @@ HTML = """
         } else {
           await loadHistory();
         }
-        document.getElementById('message_input').value = '';
+        setMessageInput('', {persist: false});
         await loadRunRuntime();
       }
 
@@ -1092,7 +1227,7 @@ HTML = """
           renderJsonOut({status: 'fail', error: 'pending form has no values'});
           return;
         }
-        document.getElementById('message_input').value = JSON.stringify(patch, null, 2);
+        setMessageInput(JSON.stringify(patch, null, 2));
         if (sendNow) {
           await sendChat(false);
         }
@@ -1151,7 +1286,7 @@ HTML = """
           renderJsonOut({status: 'fail', error: 'empty attachment_path'});
           return;
         }
-        document.getElementById('message_input').value = JSON.stringify({candidate_data: p}, null, 2);
+        setMessageInput(JSON.stringify({candidate_data: p}, null, 2));
       }
 
       async function uploadFileRef() {
@@ -1194,8 +1329,22 @@ HTML = """
             return;
           }
         }
-        document.getElementById('message_input').value = JSON.stringify({operation: op, args: args}, null, 2);
+        setMessageInput(JSON.stringify({operation: op, args: args}, null, 2));
         await sendChat(false);
+      }
+
+      function bindComposerShortcuts() {
+        const input = document.getElementById('message_input');
+        if (!input) return;
+        input.addEventListener('input', () => {
+          persistMessageDraft();
+        });
+        input.addEventListener('keydown', (evt) => {
+          if ((evt.ctrlKey || evt.metaKey) && evt.key === 'Enter') {
+            evt.preventDefault();
+            sendChat(false);
+          }
+        });
       }
 
       function applyStepArgsTemplate(forceOverwrite) {
@@ -1318,8 +1467,10 @@ HTML = """
 
       async function boot() {
         applyStepArgsTemplate(true);
+        bindComposerShortcuts();
         await refreshProjects();
         await saveProject();
+        renderPromptHistory(currentProjectKey());
         await loadRunRuntime();
       }
 

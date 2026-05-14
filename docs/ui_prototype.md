@@ -14,6 +14,7 @@ Open: `http://127.0.0.1:8787`
   - user sends natural-language messages
   - backend orchestrates `agent-intake -> agent-approve -> agent-run-json`
   - if info is missing, assistant returns structured clarification questions
+  - supports step mode in chat via `/step <operation> {args_json}` or JSON (`{"operation":"clean_dataset","args":{...}}`)
 - project/session memory:
   - each project persists independent chat history and runtime pointers
   - session file: `runs/ui_sessions/projects/<project_id>.json`

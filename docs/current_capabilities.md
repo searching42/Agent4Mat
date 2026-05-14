@@ -154,6 +154,7 @@ Implemented stages:
 - lightweight UI prototype smoke:
   - `ui/app.py`
   - supports chat-first workflow (project memory + chat turn orchestration + file input entry)
+  - chat API supports single-step command execution (`/step <operation> {args_json}`)
   - supports project APIs (`/api/projects`, `/api/projects/<id>/history`, `/api/chat/send`, `/api/projects/<id>/upload-ref`)
   - keeps full pipeline / single-step / intake / approve / resume APIs for compatibility
   - supports experiment list endpoint (`/api/experiments`) for trace-level filtering

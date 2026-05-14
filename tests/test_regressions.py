@@ -7542,6 +7542,76 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertIn("任务执行完成", assistant_text)
                 self.assertEqual(mocked.call_count, 3)
 
+    def test_ui_chat_send_step_command_runs_step_json(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_step", "title": "step"})
+                task_payload = {
+                    "version": "2.0",
+                    "task_id": "ui_chat_step_task",
+                    "request_text": "单步执行",
+                    "execution_mode": "single_step",
+                    "operation": "clean_dataset",
+                    "property": "plqy",
+                    "range": "60-100",
+                    "n_structures": 100,
+                    "constraints": {"mw_min": 150.0, "mw_max": 700.0, "domain_threshold": 0.2, "banned_alerts": []},
+                    "train_data": None,
+                    "candidate_data": "/tmp/candidates.csv",
+                    "prediction_model": "unimol_lambda_plqy_v1",
+                    "model_preferences": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                    "generation_input": {},
+                    "provenance": {},
+                    "status": "draft",
+                    "missing_fields": [],
+                    "questions": [],
+                    "compatibility_warnings": [],
+                }
+                msg_payload = {
+                    "operation": "clean_dataset",
+                    "args": {"input_csv": "/tmp/candidates.csv", "dedupe_by_smiles": True},
+                    "task": task_payload,
+                }
+                cp_step = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-run-step-json"],
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "task_id": "ui_chat_step_task",
+                            "status": "success",
+                            "operation": "clean_dataset",
+                            "run_label": "ui_chat_step_task-20260514-111111",
+                            "execution_path": str(root / "runs" / "agent" / "ui_chat_step_task" / "execution.json"),
+                            "task_path": str(root / "runs" / "agent" / "ui_chat_step_task" / "task.json"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=cp_step) as mocked:
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_step",
+                            "message": json.dumps(msg_payload, ensure_ascii=False),
+                            "options": {"catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                events = payload.get("events") if isinstance(payload.get("events"), list) else []
+                self.assertTrue(any((isinstance(e, dict) and e.get("stage") == "step") for e in events))
+                step_result = payload.get("step_result") if isinstance(payload.get("step_result"), dict) else {}
+                self.assertEqual(step_result.get("operation"), "clean_dataset")
+                self.assertEqual(step_result.get("status"), "success")
+                cmd = mocked.call_args.args[0]
+                self.assertIn("agent-run-step-json", cmd)
+                self.assertIn("--step-request-json", cmd)
+
     def test_ui_tasks_endpoint_lists_recent_runs(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

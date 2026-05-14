@@ -22,6 +22,16 @@ TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PROJECTS_DIR_REL = Path("runs/ui_sessions/projects")
 UPLOADS_DIR_REL = Path("runs/ui_sessions/uploads")
 MAX_PROJECT_HISTORY = 400
+STEP_OPERATIONS = (
+    "retrieve_candidate_data",
+    "clean_dataset",
+    "prepare_train_data",
+    "train_predictor",
+    "generate_candidates",
+    "score_candidates",
+    "filter_and_rank",
+    "make_report",
+)
 ARTIFACT_NAME_TO_FILE = {
     "plan": "plan.json",
     "execution": "execution.json",
@@ -241,7 +251,8 @@ HTML = """
         <div class=\"chat-log\" id=\"chat_log\"></div>
         <div class=\"chat-input\">
           <label>Chat with agent</label>
-          <textarea id=\"message_input\" placeholder=\"例如：设计470nm附近且高PLQY分子；或补充：{&quot;candidate_data&quot;:&quot;/abs/path/data.csv&quot;}\"></textarea>
+          <textarea id=\"message_input\" placeholder=\"例如：设计470nm附近且高PLQY分子；补充字段：{&quot;candidate_data&quot;:&quot;/abs/path/data.csv&quot;}；或单步：/step clean_dataset {&quot;input_csv&quot;:&quot;/abs/path/data.csv&quot;}\"></textarea>
+          <div class=\"muted\">Step mode: 支持 `/step <operation> {args_json}` 或直接发送 `{\"operation\":\"...\",\"args\":{...}}`。</div>
           <div class=\"btn-row\">
             <button class=\"primary\" onclick=\"sendChat(false)\">Send</button>
             <button onclick=\"loadHistory()\">Reload History</button>
@@ -1394,6 +1405,69 @@ def _parse_message_patch(text: str) -> Dict[str, Any]:
     return {}
 
 
+def _parse_step_intent(text: str) -> Optional[Dict[str, Any]]:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    # JSON inline style:
+    # {"operation":"clean_dataset","args":{"input_csv":"/abs/path.csv"}}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict) and str(payload.get("operation") or "").strip() in STEP_OPERATIONS:
+        op = str(payload.get("operation") or "").strip()
+        args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+        task = payload.get("task") if isinstance(payload.get("task"), dict) else None
+        return {"operation": op, "args": args, "task": task}
+
+    # Slash command style:
+    # /step clean_dataset {"input_csv":"/abs/path.csv"}
+    # /step {"operation":"clean_dataset","args":{"input_csv":"..."}}
+    if not raw.startswith("/step"):
+        return None
+    rest = raw[len("/step") :].strip()
+    if not rest:
+        return {"operation": "", "args": {}, "task": None, "error": "missing operation"}
+    if rest.startswith("{"):
+        try:
+            obj = json.loads(rest)
+        except json.JSONDecodeError as exc:
+            return {"operation": "", "args": {}, "task": None, "error": f"invalid json after /step: {exc}"}
+        if not isinstance(obj, dict):
+            return {"operation": "", "args": {}, "task": None, "error": "step json must be object"}
+        op = str(obj.get("operation") or "").strip()
+        args = obj.get("args") if isinstance(obj.get("args"), dict) else {}
+        task = obj.get("task") if isinstance(obj.get("task"), dict) else None
+        return {"operation": op, "args": args, "task": task}
+
+    parts = rest.split(" ", 1)
+    op = str(parts[0] or "").strip()
+    args: Dict[str, Any] = {}
+    if len(parts) > 1 and str(parts[1] or "").strip():
+        try:
+            parsed_args = json.loads(parts[1])
+            if isinstance(parsed_args, dict):
+                args = parsed_args
+            else:
+                return {"operation": op, "args": {}, "task": None, "error": "step args must be json object"}
+        except json.JSONDecodeError as exc:
+            return {"operation": op, "args": {}, "task": None, "error": f"invalid step args json: {exc}"}
+    return {"operation": op, "args": args, "task": None}
+
+
+def _load_project_task_payload(project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for key in ("task_json_path", "task_draft_path"):
+        p = _resolve_optional_path(project.get(key))
+        if p is None or not p.exists():
+            continue
+        payload = _load_json_path(p)
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
 def _merge_task_draft(draft: Dict[str, Any], patch: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
     updated: List[str] = []
     out = dict(draft)
@@ -1478,6 +1552,126 @@ def _assistant_cli_fail_text(stage: str, payload: Dict[str, Any]) -> str:
     return msg
 
 
+def _chat_run_single_step(*, project: Dict[str, Any], step_intent: Dict[str, Any], message: str) -> Dict[str, Any]:
+    options = _normalize_project_options(project.get("options"))
+    catalog = str(options.get("catalog_path") or DEFAULT_CATALOG)
+    operation = str(step_intent.get("operation") or "").strip()
+    if operation not in STEP_OPERATIONS:
+        _append_message(
+            project,
+            role="assistant",
+            kind="assistant",
+            content=f"无效 step operation: {operation or '(empty)'}。可选: {', '.join(STEP_OPERATIONS)}",
+        )
+        project = _save_project_state(project)
+        return {
+            "status": "fail",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "step", "status": "fail", "reason": "invalid_operation"}],
+        }
+
+    if str(step_intent.get("error") or "").strip():
+        _append_message(
+            project,
+            role="assistant",
+            kind="assistant",
+            content=f"/step 解析失败: {step_intent.get('error')}",
+        )
+        project = _save_project_state(project)
+        return {
+            "status": "fail",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "step", "status": "fail", "reason": "parse_error"}],
+        }
+
+    task_payload = step_intent.get("task") if isinstance(step_intent.get("task"), dict) else None
+    if not isinstance(task_payload, dict):
+        task_payload = _load_project_task_payload(project)
+    if not isinstance(task_payload, dict):
+        _append_message(
+            project,
+            role="assistant",
+            kind="assistant",
+            content=(
+                "当前项目没有可用 task 草案/已批准任务。"
+                "\n请先发送一个目标请求触发 intake，或在 /step JSON 里附带完整 task 字段。"
+            ),
+        )
+        project = _save_project_state(project)
+        return {
+            "status": "need_user_input",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "step", "status": "need_user_input"}],
+        }
+
+    task = dict(task_payload)
+    task["execution_mode"] = "single_step"
+    task["operation"] = operation
+    args = step_intent.get("args") if isinstance(step_intent.get("args"), dict) else {}
+
+    step_request = {"task": task, "operation": operation, "args": args}
+    started_at = datetime.now()
+    step_result = _run_agent_step_json(payload=step_request, catalog_path=catalog)
+    elapsed_ms = int((datetime.now() - started_at).total_seconds() * 1000)
+    if step_result.get("status") != "pass":
+        _append_message(
+            project,
+            role="assistant",
+            kind="assistant",
+            content=_assistant_cli_fail_text("agent-run-step-json", step_result),
+        )
+        project["last_runtime"] = {
+            "status": "failed",
+            "duration_ms": elapsed_ms,
+            "operation": operation,
+            "updated_at": _now_iso(),
+        }
+        project = _save_project_state(project)
+        return {
+            "status": "fail",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "step", "status": "fail", "operation": operation}],
+            "step_result": step_result.get("result"),
+        }
+
+    sr = step_result.get("result") if isinstance(step_result.get("result"), dict) else {}
+    status_text = str(sr.get("status") or "unknown")
+    project["current_task_id"] = str(sr.get("task_id") or project.get("current_task_id") or "")
+    task_path = _resolve_optional_path(sr.get("task_path"))
+    if task_path is not None:
+        project["task_json_path"] = str(task_path)
+    _append_message(
+        project,
+        role="assistant",
+        kind="assistant",
+        content=(
+            f"单步执行完成: operation={operation}, status={status_text}"
+            f"\nrun_label={sr.get('run_label', '')}"
+            f"\nexecution_path={sr.get('execution_path', '')}"
+        ),
+        meta={"step_result": sr, "source_message": message},
+    )
+    project["last_runtime"] = {
+        "status": status_text,
+        "duration_ms": elapsed_ms,
+        "operation": operation,
+        "run_label": str(sr.get("run_label") or ""),
+        "updated_at": _now_iso(),
+    }
+    project = _save_project_state(project)
+    return {
+        "status": "pass",
+        "project": _project_summary(project),
+        "messages": _recent_messages(project),
+        "events": [{"stage": "step", "status": status_text, "operation": operation}],
+        "step_result": sr,
+    }
+
+
 def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool) -> Dict[str, Any]:
     options = _normalize_project_options(project.get("options"))
     planner = str(options.get("planner_provider") or "rule_based_v1")
@@ -1494,6 +1688,10 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
 
     if message:
         _append_message(project, role="user", content=message, kind="chat")
+
+    step_intent = _parse_step_intent(message)
+    if isinstance(step_intent, dict):
+        return _chat_run_single_step(project=project, step_intent=step_intent, message=message)
 
     task_id = str(project.get("current_task_id") or "").strip()
     if not task_id:

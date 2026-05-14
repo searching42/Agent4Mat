@@ -8136,6 +8136,75 @@ class UiPrototypeTests(unittest.TestCase):
             called_payload = mocked_step.call_args.kwargs.get("payload") if mocked_step.call_args and mocked_step.call_args.kwargs else {}
             self.assertEqual(called_payload.get("args"), override_args)
 
+    def test_ui_retry_failed_step_endpoint_respects_failed_tool_name_filter(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_retry_target_failed_name"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "status": "failed",
+                        "records": [
+                            {"name": "train_predictor", "status": "failed", "args": {"predictor_id": "p1"}},
+                            {"name": "score_candidates", "status": "failed", "args": {"input_csv": "/tmp/scored.csv"}},
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "task.json").write_text(
+                json.dumps(
+                    {
+                        "version": "2.0",
+                        "task_id": task_id,
+                        "request_text": "retry targeted failed name",
+                        "execution_mode": "full_pipeline",
+                        "operation": "full_pipeline",
+                        "property": "plqy",
+                        "range": "60-100",
+                        "n_structures": 20,
+                        "constraints": {"mw_min": 150, "mw_max": 700, "domain_threshold": 0.2, "banned_alerts": []},
+                        "train_data": None,
+                        "candidate_data": "/tmp/candidates.csv",
+                        "prediction_model": "unimol_lambda_plqy_v1",
+                        "model_preferences": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                        "generation_input": {},
+                        "provenance": {},
+                        "status": "approved",
+                        "missing_fields": [],
+                        "questions": [],
+                        "compatibility_warnings": [],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                with mock.patch(
+                    "ui.app._run_agent_step_json",
+                    return_value={"status": "pass", "result": {"status": "success", "task_id": task_id}},
+                ) as mocked_step:
+                    resp = client.post(
+                        f"/api/task/{task_id}/retry-failed-step",
+                        json={"failed_tool_name": "train_predictor", "catalog_path": "configs/models/catalog.json"},
+                    )
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("failed_tool_name"), "train_predictor")
+            self.assertEqual(payload.get("retry_operation"), "train_predictor")
+            called_payload = mocked_step.call_args.kwargs.get("payload") if mocked_step.call_args and mocked_step.call_args.kwargs else {}
+            self.assertEqual(called_payload.get("operation"), "train_predictor")
+            self.assertEqual(called_payload.get("args"), {"predictor_id": "p1"})
+
     def test_ui_approve_rejects_missing_task_json_path(self) -> None:
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()

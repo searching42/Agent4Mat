@@ -34,6 +34,7 @@ Open: `http://127.0.0.1:8787`
 - chat transcript:
   - stores per-turn event trace messages (`event_trace`) to show stage timeline inline
   - includes grouped timeline board (Running / Completed / Failed) from `/api/task/<task_id>/timeline`
+  - failed-group items support inline Retry action (reuses row args by default, supports override args JSON)
 - compatibility:
   - legacy run/step/intake/approve/resume/task-inspector APIs remain available
 

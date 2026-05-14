@@ -597,20 +597,88 @@ HTML = """
         ele.textContent = txt;
       }
 
-      function setListItems(targetId, lines) {
+      function groupItemText(item) {
+        if (!item || typeof item !== 'object') return 'step';
+        const name = String(item.name || 'step');
+        const status = String(item.status || '-');
+        const dur = (typeof item.duration_ms === 'number') ? `${item.duration_ms}ms` : 'n/a';
+        return `${name} | status=${status} | dur=${dur}`;
+      }
+
+      async function retrySpecificFailedItem(item) {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const parsed = parseRetryArgsOptional();
+        if (!parsed.ok) {
+          renderJsonOut({status: 'fail', error: parsed.error});
+          return;
+        }
+        const body = {
+          catalog_path: document.getElementById('catalog').value,
+          failed_tool_name: String(item && item.name ? item.name : ''),
+        };
+        if (parsed.args && Object.keys(parsed.args).length > 0) {
+          body.args = parsed.args;
+        } else if (item && item.args && typeof item.args === 'object' && !Array.isArray(item.args)) {
+          body.args = item.args;
+        }
+        const r = await apiPost(`/api/task/${encodeURIComponent(tid)}/retry-failed-step`, body);
+        renderJsonOut(r.data);
+        const status = String((r.data && r.data.status) || 'unknown');
+        const op = String((r.data && r.data.retry_operation) || '');
+        renderEvents([{stage: 'retry_failed_item', status: status, operation: op || undefined}]);
+        await loadRunRuntime();
+      }
+
+      function setListItems(targetId, items) {
         const ul = document.getElementById(targetId);
         ul.innerHTML = '';
-        const arr = Array.isArray(lines) ? lines : [];
+        const arr = Array.isArray(items) ? items : [];
         if (arr.length < 1) {
           const li = document.createElement('li');
           li.textContent = '(empty)';
           ul.appendChild(li);
           return;
         }
-        for (const line of arr) {
+        for (const it of arr) {
           const li = document.createElement('li');
-          li.textContent = String(line || '');
+          li.textContent = groupItemText(it);
+          li.style.cursor = 'pointer';
+          li.title = 'Click to inspect details';
+          li.onclick = () => {
+            const detail = {
+              stage: 'timeline_item',
+              name: it && it.name ? it.name : '',
+              status: it && it.status ? it.status : '',
+              duration_ms: it && typeof it.duration_ms === 'number' ? it.duration_ms : null,
+              started_at: it && it.started_at ? it.started_at : '',
+              ended_at: it && it.ended_at ? it.ended_at : '',
+              adapter: it && it.adapter ? it.adapter : '',
+              error: it && it.error ? it.error : '',
+              result_summary: it && it.result_summary ? it.result_summary : {},
+            };
+            renderJsonOut({status: 'pass', item: detail});
+            if (it && it.is_failed && it.name) {
+              const op = (it.name === 'search_dataset') ? 'retrieve_candidate_data' : String(it.name);
+              if (op) {
+                document.getElementById('retry_failed_args_json').value = '{}';
+              }
+            }
+          };
           ul.appendChild(li);
+          if (it && it.is_failed) {
+            const btn = document.createElement('button');
+            btn.textContent = 'Retry';
+            btn.style.marginLeft = '6px';
+            btn.onclick = (evt) => {
+              evt.stopPropagation();
+              retrySpecificFailedItem(it);
+            };
+            li.appendChild(btn);
+          }
         }
       }
 
@@ -625,20 +693,17 @@ HTML = """
         const failed = [];
         for (const ev of events) {
           if (!ev || typeof ev !== 'object') continue;
-          const name = String(ev.name || 'step');
           const status = String(ev.status || '');
           const startedAt = String(ev.started_at || '');
-          const dur = (typeof ev.duration_ms === 'number') ? `${ev.duration_ms}ms` : 'n/a';
-          const text = `${name} | status=${status || '-'} | dur=${dur}`;
           if (String(status).toLowerCase() === 'running') {
-            running.push(text);
+            running.push(ev);
           } else if (Boolean(ev.is_failed)) {
-            failed.push(text);
+            failed.push(ev);
           } else {
-            completed.push(text);
+            completed.push(ev);
           }
           if (!status && startedAt && !ev.ended_at) {
-            running.push(`${name} | status=running | dur=n/a`);
+            running.push(ev);
           }
         }
         const total = Number(summary.total_steps || events.length || 0);
@@ -1385,6 +1450,23 @@ def _latest_failed_record(execution_payload: Dict[str, Any]) -> Optional[Dict[st
         if not isinstance(rec, dict):
             continue
         if str(rec.get("status") or "") != "success":
+            return rec
+    return None
+
+
+def _latest_failed_record_by_name(execution_payload: Dict[str, Any], tool_name: str) -> Optional[Dict[str, Any]]:
+    name = str(tool_name or "").strip()
+    if not name:
+        return _latest_failed_record(execution_payload)
+    records = execution_payload.get("records")
+    if not isinstance(records, list):
+        return None
+    for rec in reversed(records):
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("status") or "") == "success":
+            continue
+        if str(rec.get("name") or "").strip() == name:
             return rec
     return None
 
@@ -2966,10 +3048,13 @@ def api_task_retry_failed_step(task_id: str):
     if not run_dir.exists():
         return jsonify({"status": "missing", "task_id": tid, "error": "run_dir_missing"}), 404
 
+    body = request.get_json(silent=True) or {}
+    target_failed_tool_name = str(body.get("failed_tool_name") or "").strip()
+
     execution = _load_json_if_exists(run_dir / "execution.json")
     if not isinstance(execution, dict):
         return jsonify({"status": "fail", "task_id": tid, "error": "missing_or_invalid_execution"}), 200
-    failed_rec = _latest_failed_record(execution)
+    failed_rec = _latest_failed_record_by_name(execution, target_failed_tool_name)
     if not isinstance(failed_rec, dict):
         return jsonify({"status": "fail", "task_id": tid, "error": "no_failed_step"}), 200
 
@@ -2989,7 +3074,6 @@ def api_task_retry_failed_step(task_id: str):
     if not isinstance(task_payload, dict):
         return jsonify({"status": "fail", "task_id": tid, "error": "missing_task_payload_for_retry"}), 200
 
-    body = request.get_json(silent=True) or {}
     catalog = str(body.get("catalog_path") or DEFAULT_CATALOG)
     dry_run = bool(body.get("dry_run"))
     override_args = body.get("args")
@@ -3129,6 +3213,7 @@ def api_task_timeline(task_id: str):
         event: Dict[str, Any] = {
             "index": idx,
             "name": str(rec.get("name") or ""),
+            "args": rec.get("args") if isinstance(rec.get("args"), dict) else {},
             "status": str(rec.get("status") or ""),
             "started_at": rec.get("started_at"),
             "ended_at": rec.get("ended_at"),

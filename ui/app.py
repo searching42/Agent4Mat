@@ -180,6 +180,17 @@ HTML = """
         margin-top: 10px;
         background: #fbfcff;
       }
+      .pending-fields {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .pending-q {
+        margin: 6px 0 0 16px;
+        padding: 0;
+        color: #3b4455;
+        font-size: 0.84rem;
+      }
       pre {
         margin: 0;
         background: #0f1729;
@@ -259,6 +270,18 @@ HTML = """
             <button onclick=\"loadRunRuntime()\">Refresh Runtime</button>
           </div>
 
+          <div class=\"tool-box\" id=\"pending_input_box\" style=\"display:none;\">
+            <h3>Need Input</h3>
+            <div class=\"muted\" id=\"pending_stage_text\">stage: -</div>
+            <ul class=\"pending-q\" id=\"pending_questions\"></ul>
+            <div class=\"pending-fields\" id=\"pending_fields\"></div>
+            <div class=\"btn-row\">
+              <button class=\"primary\" onclick=\"sendPendingForm(false)\">Send Form Patch</button>
+              <button onclick=\"sendPendingForm(true)\">Send + Run</button>
+              <button onclick=\"clearPendingInput()\">Hide</button>
+            </div>
+          </div>
+
           <div class=\"tool-box\">
             <h3>File Input Entry</h3>
             <label>Local file path (recommended)</label>
@@ -320,6 +343,16 @@ HTML = """
     <script>
       const state = {
         project: null,
+        pendingInput: null,
+      };
+
+      const pendingFieldMeta = {
+        property: {label: 'property', placeholder: 'plqy / lambda_em / stability'},
+        range: {label: 'range', placeholder: '470+-12nm or 60-100'},
+        n_structures: {label: 'n_structures', placeholder: 'e.g. 500', type: 'number'},
+        prediction_model: {label: 'prediction_model', placeholder: 'e.g. unimol_lambda_plqy_v1'},
+        candidate_data: {label: 'candidate_data', placeholder: '/abs/path/to/candidates.csv'},
+        train_data: {label: 'train_data', placeholder: '/abs/path/to/train.csv'},
       };
 
       function nowIso() {
@@ -328,6 +361,86 @@ HTML = """
 
       function renderJsonOut(payload) {
         document.getElementById('out').textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function clearPendingInput() {
+        state.pendingInput = null;
+        document.getElementById('pending_input_box').style.display = 'none';
+        document.getElementById('pending_stage_text').textContent = 'stage: -';
+        document.getElementById('pending_questions').innerHTML = '';
+        document.getElementById('pending_fields').innerHTML = '';
+      }
+
+      function pendingFieldDefault(field) {
+        if (field === 'candidate_data') {
+          const p = (document.getElementById('attachment_path').value || '').trim();
+          if (p) return p;
+        }
+        return '';
+      }
+
+      function renderPendingInput(pending) {
+        if (!pending || typeof pending !== 'object') {
+          clearPendingInput();
+          return;
+        }
+        state.pendingInput = pending;
+        const box = document.getElementById('pending_input_box');
+        box.style.display = 'block';
+
+        const stage = String(pending.stage || '');
+        document.getElementById('pending_stage_text').textContent = `stage: ${stage || '-'}`;
+
+        const qList = document.getElementById('pending_questions');
+        qList.innerHTML = '';
+        const questions = Array.isArray(pending.questions) ? pending.questions : [];
+        for (const q of questions) {
+          const li = document.createElement('li');
+          li.textContent = String(q || '');
+          qList.appendChild(li);
+        }
+
+        const fieldsWrap = document.getElementById('pending_fields');
+        fieldsWrap.innerHTML = '';
+        const missing = Array.isArray(pending.missing_fields) ? pending.missing_fields : [];
+        for (const field of missing) {
+          const f = String(field || '').trim();
+          if (!f) continue;
+          const meta = pendingFieldMeta[f] || {label: f, placeholder: ''};
+          const row = document.createElement('div');
+          const label = document.createElement('label');
+          label.textContent = `${meta.label}`;
+          const input = document.createElement('input');
+          input.id = `pending_field_${f}`;
+          input.type = meta.type || 'text';
+          input.placeholder = meta.placeholder || '';
+          input.value = pendingFieldDefault(f);
+          row.appendChild(label);
+          row.appendChild(input);
+          fieldsWrap.appendChild(row);
+        }
+      }
+
+      function collectPendingPatch() {
+        const pending = state.pendingInput;
+        if (!pending || typeof pending !== 'object') return {};
+        const out = {};
+        const missing = Array.isArray(pending.missing_fields) ? pending.missing_fields : [];
+        for (const field of missing) {
+          const f = String(field || '').trim();
+          if (!f) continue;
+          const ele = document.getElementById(`pending_field_${f}`);
+          if (!ele) continue;
+          const raw = String(ele.value || '').trim();
+          if (!raw) continue;
+          if (f === 'n_structures') {
+            const n = Number(raw);
+            if (Number.isFinite(n) && n > 0) out[f] = Math.floor(n);
+            continue;
+          }
+          out[f] = raw;
+        }
+        return out;
       }
 
       function renderEvents(events) {
@@ -463,6 +576,7 @@ HTML = """
         if (project) {
           state.project = project;
           renderProjectMeta(project);
+          renderPendingInput(project.pending_input || null);
         }
         await refreshProjects();
         await loadHistory();
@@ -475,6 +589,7 @@ HTML = """
         if (r.data && r.data.project) {
           state.project = r.data.project;
           renderProjectMeta(r.data.project);
+          renderPendingInput(r.data.project.pending_input || null);
         }
         const messages = Array.isArray(r.data.messages) ? r.data.messages : [];
         renderChat(messages);
@@ -495,6 +610,10 @@ HTML = """
         });
         renderJsonOut(r.data);
         renderEvents(r.data && r.data.events ? r.data.events : []);
+        const pending = (r.data && r.data.pending_input)
+          ? r.data.pending_input
+          : ((r.data && r.data.project && r.data.project.pending_input) ? r.data.project.pending_input : null);
+        renderPendingInput(pending);
         if (r.data && r.data.project) {
           state.project = r.data.project;
           renderProjectMeta(r.data.project);
@@ -507,6 +626,18 @@ HTML = """
         }
         document.getElementById('message_input').value = '';
         await loadRunRuntime();
+      }
+
+      async function sendPendingForm(sendNow) {
+        const patch = collectPendingPatch();
+        if (!patch || Object.keys(patch).length < 1) {
+          renderJsonOut({status: 'fail', error: 'pending form has no values'});
+          return;
+        }
+        document.getElementById('message_input').value = JSON.stringify(patch, null, 2);
+        if (sendNow) {
+          await sendChat(false);
+        }
       }
 
       async function previewArtifact() {
@@ -1327,6 +1458,7 @@ def _new_project_state(project_id: str, *, title: str = "", options: Optional[Di
         "task_json_path": "",
         "request_path": "",
         "last_runtime": {},
+        "pending_input": {},
         "attachments": [],
         "messages": [],
     }
@@ -1347,6 +1479,7 @@ def _project_summary(project: Dict[str, Any]) -> Dict[str, Any]:
         "task_json_path": str(project.get("task_json_path") or ""),
         "request_path": str(project.get("request_path") or ""),
         "last_runtime": project.get("last_runtime") if isinstance(project.get("last_runtime"), dict) else {},
+        "pending_input": project.get("pending_input") if isinstance(project.get("pending_input"), dict) else {},
         "message_count": len(messages) if isinstance(messages, list) else 0,
         "attachment_count": len(attachments) if isinstance(attachments, list) else 0,
         "project_path": str(_project_file_path(pid)) if pid else "",
@@ -1369,6 +1502,8 @@ def _load_project_state(project_id: str) -> Optional[Dict[str, Any]]:
         payload["attachments"] = []
     if not isinstance(payload.get("messages"), list):
         payload["messages"] = []
+    if not isinstance(payload.get("pending_input"), dict):
+        payload["pending_input"] = {}
     return payload
 
 
@@ -1387,6 +1522,8 @@ def _save_project_state(project: Dict[str, Any]) -> Dict[str, Any]:
     if len(messages) > MAX_PROJECT_HISTORY:
         messages = messages[-MAX_PROJECT_HISTORY:]
     project["messages"] = messages
+    if not isinstance(project.get("pending_input"), dict):
+        project["pending_input"] = {}
     attachments = project.get("attachments")
     if not isinstance(attachments, list):
         attachments = []
@@ -1616,11 +1753,23 @@ def _assistant_cli_fail_text(stage: str, payload: Dict[str, Any]) -> str:
     return msg
 
 
+def _pending_input_payload(*, stage: str, missing_fields: Any, questions: Any, task_draft_path: Any = "") -> Dict[str, Any]:
+    missing = [str(x) for x in (missing_fields if isinstance(missing_fields, list) else []) if str(x).strip()]
+    qs = [str(x) for x in (questions if isinstance(questions, list) else []) if str(x).strip()]
+    return {
+        "stage": str(stage or ""),
+        "missing_fields": missing,
+        "questions": qs,
+        "task_draft_path": str(task_draft_path or ""),
+    }
+
+
 def _chat_run_single_step(*, project: Dict[str, Any], step_intent: Dict[str, Any], message: str) -> Dict[str, Any]:
     options = _normalize_project_options(project.get("options"))
     catalog = str(options.get("catalog_path") or DEFAULT_CATALOG)
     operation = str(step_intent.get("operation") or "").strip()
     if operation not in STEP_OPERATIONS:
+        project["pending_input"] = {}
         _append_message(
             project,
             role="assistant",
@@ -1636,6 +1785,7 @@ def _chat_run_single_step(*, project: Dict[str, Any], step_intent: Dict[str, Any
         }
 
     if str(step_intent.get("error") or "").strip():
+        project["pending_input"] = {}
         _append_message(
             project,
             role="assistant",
@@ -1654,6 +1804,12 @@ def _chat_run_single_step(*, project: Dict[str, Any], step_intent: Dict[str, Any
     if not isinstance(task_payload, dict):
         task_payload = _load_project_task_payload(project)
     if not isinstance(task_payload, dict):
+        pending = _pending_input_payload(
+            stage="step",
+            missing_fields=["task_context"],
+            questions=["请先提供任务目标触发 intake，或在 step JSON 中附带完整 task 对象。"],
+        )
+        project["pending_input"] = pending
         _append_message(
             project,
             role="assistant",
@@ -1669,6 +1825,7 @@ def _chat_run_single_step(*, project: Dict[str, Any], step_intent: Dict[str, Any
             "project": _project_summary(project),
             "messages": _recent_messages(project),
             "events": [{"stage": "step", "status": "need_user_input"}],
+            "pending_input": pending,
         }
 
     task = dict(task_payload)
@@ -1681,6 +1838,7 @@ def _chat_run_single_step(*, project: Dict[str, Any], step_intent: Dict[str, Any
     step_result = _run_agent_step_json(payload=step_request, catalog_path=catalog)
     elapsed_ms = int((datetime.now() - started_at).total_seconds() * 1000)
     if step_result.get("status") != "pass":
+        project["pending_input"] = {}
         _append_message(
             project,
             role="assistant",
@@ -1704,6 +1862,7 @@ def _chat_run_single_step(*, project: Dict[str, Any], step_intent: Dict[str, Any
 
     sr = step_result.get("result") if isinstance(step_result.get("result"), dict) else {}
     status_text = str(sr.get("status") or "unknown")
+    project["pending_input"] = {}
     project["current_task_id"] = str(sr.get("task_id") or project.get("current_task_id") or "")
     task_path = _resolve_optional_path(sr.get("task_path"))
     if task_path is not None:
@@ -1749,6 +1908,7 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
         project["task_json_path"] = ""
         project["request_path"] = ""
         project["last_runtime"] = {}
+        project["pending_input"] = {}
 
     if message:
         _append_message(project, role="user", content=message, kind="chat")
@@ -1768,6 +1928,7 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
     # Stage 1: intake (if no draft yet)
     if draft_path is None or not draft_path.exists():
         if not str(message or "").strip():
+            project["pending_input"] = {}
             _append_message(project, role="assistant", content="请先输入任务目标，然后我会自动做 intake。", kind="assistant")
             project = _save_project_state(project)
             return {"status": "pass", "project": _project_summary(project), "messages": _recent_messages(project), "events": []}
@@ -1779,11 +1940,19 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
         project["current_task_id"] = str(intake_result.get("task_id") or task_id)
 
         if intake.get("status") != "pass":
+            project["pending_input"] = {}
             _append_message(project, role="assistant", content=_assistant_cli_fail_text("agent-intake", intake), kind="assistant")
             project = _save_project_state(project)
             return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "intake", "status": "fail"}]}
 
         if str(intake_result.get("status") or "") == "need_user_input":
+            pending = _pending_input_payload(
+                stage="intake",
+                missing_fields=intake_result.get("missing_fields"),
+                questions=intake_result.get("questions"),
+                task_draft_path=intake_result.get("task_draft_path"),
+            )
+            project["pending_input"] = pending
             _append_message(
                 project,
                 role="assistant",
@@ -1796,15 +1965,18 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
                 "project": _project_summary(project),
                 "messages": _recent_messages(project),
                 "events": [{"stage": "intake", "status": "need_user_input"}],
+                "pending_input": pending,
             }
 
     if draft_path is None or not draft_path.exists():
+        project["pending_input"] = {}
         _append_message(project, role="assistant", content="intake 未生成可用 task.draft.json。", kind="assistant")
         project = _save_project_state(project)
         return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "intake", "status": "fail"}]}
 
     draft = _load_json_path(draft_path)
     if not isinstance(draft, dict):
+        project["pending_input"] = {}
         _append_message(project, role="assistant", content=f"draft 读取失败: {draft_path}", kind="assistant")
         project = _save_project_state(project)
         return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "draft_read", "status": "fail"}]}
@@ -1826,12 +1998,20 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
     approve = _run_agent_approve(task_json_path=draft_path, planner_provider=planner, catalog_path=catalog)
     approve_result = approve.get("result") if isinstance(approve.get("result"), dict) else {}
     if approve.get("status") != "pass":
+        project["pending_input"] = {}
         _append_message(project, role="assistant", content=_assistant_cli_fail_text("agent-approve", approve), kind="assistant")
         project = _save_project_state(project)
         return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "approve", "status": "fail"}]}
 
     approve_status = str(approve_result.get("status") or "")
     if approve_status == "need_user_input":
+        pending = _pending_input_payload(
+            stage="approve",
+            missing_fields=approve_result.get("missing_fields"),
+            questions=approve_result.get("questions"),
+            task_draft_path=str(draft_path),
+        )
+        project["pending_input"] = pending
         _append_message(
             project,
             role="assistant",
@@ -1844,8 +2024,10 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
             "project": _project_summary(project),
             "messages": _recent_messages(project),
             "events": [{"stage": "approve", "status": "need_user_input"}],
+            "pending_input": pending,
         }
     if approve_status != "approved":
+        project["pending_input"] = {}
         _append_message(project, role="assistant", content=f"agent-approve 返回未知状态: {approve_status}", kind="assistant")
         project = _save_project_state(project)
         return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "approve", "status": "fail"}]}
@@ -1859,12 +2041,14 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
     project["current_task_id"] = str(approve_result.get("task_id") or project.get("current_task_id") or "")
 
     if request_path is None or not request_path.exists():
+        project["pending_input"] = {}
         _append_message(project, role="assistant", content="approved 后未找到 request_path，无法执行 agent-run-json。", kind="assistant")
         project = _save_project_state(project)
         return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "approve", "status": "fail"}]}
 
     request_payload = _load_json_path(request_path)
     if not isinstance(request_payload, dict):
+        project["pending_input"] = {}
         _append_message(project, role="assistant", content=f"request_from_task.json 解析失败: {request_path}", kind="assistant")
         project = _save_project_state(project)
         return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "request_load", "status": "fail"}]}
@@ -1873,6 +2057,7 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
     elapsed_ms = int((datetime.now() - started_at).total_seconds() * 1000)
 
     if run_result.get("status") != "pass":
+        project["pending_input"] = {}
         _append_message(project, role="assistant", content=_assistant_cli_fail_text("agent-run-json", run_result), kind="assistant")
         project["last_runtime"] = {"status": "failed", "duration_ms": elapsed_ms, "updated_at": _now_iso()}
         project = _save_project_state(project)
@@ -1882,6 +2067,7 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
     run_label = str(rr.get("run_label") or "")
     result_dir = str(rr.get("result_dir") or "")
     status_text = str(rr.get("status") or "unknown")
+    project["pending_input"] = {}
     _append_message(
         project,
         role="assistant",

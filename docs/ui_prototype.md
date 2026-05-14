@@ -14,6 +14,7 @@ Open: `http://127.0.0.1:8787`
   - user sends natural-language messages
   - backend orchestrates `agent-intake -> agent-approve -> agent-run-json`
   - if info is missing, assistant returns structured clarification questions
+  - `need_user_input` 时会弹出缺失字段表单卡片，可直接填写并回传 patch
   - supports step mode in chat via `/step <operation> {args_json}` or JSON (`{"operation":"clean_dataset","args":{...}}`)
   - includes a built-in step panel (operation dropdown + args JSON) that sends step requests into chat
 - project/session memory:

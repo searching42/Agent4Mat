@@ -7414,6 +7414,10 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
                 payload = resp.get_json()
                 self.assertEqual(payload.get("status"), "need_user_input")
+                pending = payload.get("pending_input") if isinstance(payload.get("pending_input"), dict) else {}
+                self.assertEqual(pending.get("stage"), "intake")
+                missing_fields = pending.get("missing_fields") if isinstance(pending.get("missing_fields"), list) else []
+                self.assertIn("candidate_data", missing_fields)
                 messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
                 assistant_text = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
                 self.assertIn("candidate_data", assistant_text)
@@ -7611,6 +7615,28 @@ class UiPrototypeTests(unittest.TestCase):
                 cmd = mocked.call_args.args[0]
                 self.assertIn("agent-run-step-json", cmd)
                 self.assertIn("--step-request-json", cmd)
+
+    def test_ui_chat_send_step_command_without_task_returns_need_input(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_step_need_input", "title": "step need input"})
+                resp = client.post(
+                    "/api/chat/send",
+                    json={
+                        "project_id": "ui_chat_step_need_input",
+                        "message": "/step clean_dataset {\"input_csv\":\"/tmp/a.csv\"}",
+                    },
+                )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                pending = payload.get("pending_input") if isinstance(payload.get("pending_input"), dict) else {}
+                self.assertEqual(pending.get("stage"), "step")
+                missing_fields = pending.get("missing_fields") if isinstance(pending.get("missing_fields"), list) else []
+                self.assertIn("task_context", missing_fields)
 
     def test_ui_tasks_endpoint_lists_recent_runs(self) -> None:
         ui_app_mod = self._load_ui_module()

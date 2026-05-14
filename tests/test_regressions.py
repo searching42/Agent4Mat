@@ -7362,6 +7362,62 @@ class UiPrototypeTests(unittest.TestCase):
                 attachments = hist.get("attachments") if isinstance(hist.get("attachments"), list) else []
                 self.assertEqual(len(attachments), 1)
 
+    def test_ui_projects_summary_includes_runtime_health_from_current_task(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                create = client.post(
+                    "/api/projects",
+                    json={"project_id": "ui_proj_health", "title": "health"},
+                )
+                self.assertEqual(create.status_code, 200)
+                run_task_id = "ui_proj_health_t1"
+                run_dir = root / "runs" / "agent" / run_task_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "execution.json").write_text(
+                    json.dumps(
+                        {
+                            "task_id": run_task_id,
+                            "status": "failed",
+                            "records": [
+                                {"name": "search_dataset", "status": "success"},
+                                {"name": "score_candidates", "status": "failed"},
+                            ],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                project_path = root / "runs" / "ui_sessions" / "projects" / "ui_proj_health.json"
+                project_payload = json.loads(project_path.read_text(encoding="utf-8"))
+                project_payload["current_task_id"] = run_task_id
+                project_path.write_text(json.dumps(project_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+                list_resp = client.get("/api/projects?limit=20")
+                self.assertEqual(list_resp.status_code, 200)
+                payload = list_resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                projects = payload.get("projects") if isinstance(payload.get("projects"), list) else []
+                row = next((x for x in projects if isinstance(x, dict) and x.get("project_id") == "ui_proj_health"), {})
+                health = row.get("runtime_health") if isinstance(row.get("runtime_health"), dict) else {}
+                self.assertEqual(health.get("status"), "failed")
+                self.assertEqual(int(health.get("record_count") or 0), 2)
+                self.assertEqual(int(health.get("success_steps") or 0), 1)
+                self.assertEqual(int(health.get("failed_steps") or 0), 1)
+                self.assertEqual(health.get("latest_failed_step"), "score_candidates")
+
+    def test_ui_html_contains_project_runtime_health_field(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("project_runtime_health", html)
+        self.assertIn("formatRuntimeHealth(", html)
+
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

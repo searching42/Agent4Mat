@@ -315,6 +315,7 @@ HTML = """
 
         <div class=\"project-meta\" id=\"project_meta\">
           <div>task_id: <span id=\"current_task_id\">-</span></div>
+          <div>runtime_health: <span id=\"project_runtime_health\">-</span></div>
           <div>updated_at: <span id=\"project_updated_at\">-</span></div>
           <div>session_file: <span id=\"project_file\">-</span></div>
         </div>
@@ -849,8 +850,25 @@ HTML = """
       function renderProjectMeta(project) {
         if (!project) return;
         document.getElementById('current_task_id').textContent = project.current_task_id || '-';
+        document.getElementById('project_runtime_health').textContent = formatRuntimeHealth(project.runtime_health);
         document.getElementById('project_updated_at').textContent = project.updated_at || '-';
         document.getElementById('project_file').textContent = project.project_path || '-';
+      }
+
+      function formatRuntimeHealth(health) {
+        if (!health || typeof health !== 'object') return '-';
+        const status = String(health.status || 'none');
+        const taskId = String(health.task_id || '');
+        const failed = Number(health.failed_steps || 0);
+        const success = Number(health.success_steps || 0);
+        const latest = String(health.latest_failed_step || '');
+        if (status === 'none') {
+          return String(health.reason || 'none');
+        }
+        let txt = `${status} ${success}✓/${failed}✗`;
+        if (taskId) txt += ` @${taskId}`;
+        if (latest) txt += ` ${latest}`;
+        return txt;
       }
 
       function msgClass(role) {
@@ -948,7 +966,7 @@ HTML = """
         for (const p of projects) {
           const pid = String(p.project_id || '');
           if (!pid) continue;
-          const label = `${pid} [${String(p.current_task_id || '-')}]`;
+          const label = `${pid} [${String(p.current_task_id || '-')}] · ${formatRuntimeHealth(p.runtime_health)}`;
           const opt = document.createElement('option');
           opt.value = pid;
           opt.textContent = label;
@@ -2215,6 +2233,52 @@ def _project_summary(project: Dict[str, Any]) -> Dict[str, Any]:
         "message_count": len(messages) if isinstance(messages, list) else 0,
         "attachment_count": len(attachments) if isinstance(attachments, list) else 0,
         "project_path": str(_project_file_path(pid)) if pid else "",
+        "runtime_health": _project_runtime_health(project),
+    }
+
+
+def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
+    task_id = str(project.get("current_task_id") or "").strip()
+    if not _is_safe_task_id(task_id):
+        return {
+            "status": "none",
+            "reason": "no_current_task",
+            "record_count": 0,
+            "success_steps": 0,
+            "failed_steps": 0,
+            "latest_failed_step": "",
+        }
+    run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
+    execution = _load_json_if_exists(run_dir / "execution.json")
+    if not isinstance(execution, dict):
+        return {
+            "status": "none",
+            "reason": "missing_execution",
+            "task_id": task_id,
+            "record_count": 0,
+            "success_steps": 0,
+            "failed_steps": 0,
+            "latest_failed_step": "",
+        }
+    records = execution.get("records") if isinstance(execution.get("records"), list) else []
+    success_steps = 0
+    failed_steps = 0
+    latest_failed_step = ""
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("status") or "") == "success":
+            success_steps += 1
+        else:
+            failed_steps += 1
+            latest_failed_step = str(rec.get("name") or latest_failed_step)
+    return {
+        "status": str(execution.get("status") or "unknown"),
+        "task_id": task_id,
+        "record_count": len(records),
+        "success_steps": success_steps,
+        "failed_steps": failed_steps,
+        "latest_failed_step": latest_failed_step,
     }
 
 

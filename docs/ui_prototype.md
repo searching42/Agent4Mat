@@ -20,6 +20,7 @@ Open: `http://127.0.0.1:8787`
 - project/session memory:
   - each project persists independent chat history and runtime pointers
   - session file: `runs/ui_sessions/projects/<project_id>.json`
+  - project picker/meta now includes `runtime_health` snapshot from current task execution (`status`, success/failed steps, latest failed step)
 - file input entry:
   - register local absolute path as attachment reference
   - optional browser upload copy to `runs/ui_sessions/uploads/<project_id>/`

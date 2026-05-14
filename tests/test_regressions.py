@@ -5971,6 +5971,19 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("scripts/validate_run_artifacts.py", content)
         self.assertIn("--result-json runs/ci/agent_run_ci_smoke.json", content)
 
+    def test_oled_agent_ci_publishes_experiment_summary_artifacts(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("Generate experiment summary", content)
+        self.assertIn("scripts/summarize_experiments.py", content)
+        self.assertIn("runs/ci/experiment_summary.json", content)
+        self.assertIn("runs/ci/experiment_summary.md", content)
+        self.assertIn("Upload experiment-summary artifact", content)
+        self.assertIn("name: experiment-summary", content)
+        self.assertIn("Publish experiment summary", content)
+        self.assertIn("### Experiment Summary", content)
+
     def test_oled_agent_ci_has_new_intake_step_and_web_guard_jobs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)
@@ -6149,6 +6162,52 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(recent[0].get("task_id"), "exp_b")
             self.assertTrue(out_json.exists())
             self.assertTrue(out_md.exists())
+
+    def test_summarize_experiments_script_warns_and_skips_invalid_trace(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            exp_ok = td_path / "runs" / "agent" / "exp_ok" / "artifacts"
+            exp_bad = td_path / "runs" / "agent" / "exp_bad" / "artifacts"
+            exp_ok.mkdir(parents=True, exist_ok=True)
+            exp_bad.mkdir(parents=True, exist_ok=True)
+            (exp_ok / "experiment_trace.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "exp_ok",
+                        "run_label": "exp_ok-1",
+                        "generated_at": "2026-05-14T03:00:00+00:00",
+                        "execution_mode": "full_pipeline",
+                        "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                        "execution_summary": {"status": "success", "record_count": 2, "failed_count": 0},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (exp_bad / "experiment_trace.json").write_text("{not-json}\n", encoding="utf-8")
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/summarize_experiments.py",
+                    "--workspace-root",
+                    str(td_path),
+                ],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+            self.assertIn("[WARN] skip invalid experiment trace:", cp.stderr)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(int(payload.get("count") or 0), 1)
+            recent = payload.get("recent") if isinstance(payload.get("recent"), list) else []
+            self.assertEqual(len(recent), 1)
+            self.assertEqual(recent[0].get("task_id"), "exp_ok")
 
     def test_plan_progress_docs_exist(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

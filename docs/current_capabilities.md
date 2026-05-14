@@ -145,6 +145,7 @@ Implemented stages:
   - `scripts/summarize_experiments.py`
   - `make experiment-summary`
   - outputs aggregated status/model/mode counters and recent run list from experiment traces
+  - CI `agent4mat-ci` publishes `runs/ci/experiment_summary.json` + `runs/ci/experiment_summary.md` as artifact and step summary
 - real-chain reproducibility baseline (3 consecutive strict runs):
   - `scripts/run_real_chain_baseline.sh`
   - `make real-chain-baseline`

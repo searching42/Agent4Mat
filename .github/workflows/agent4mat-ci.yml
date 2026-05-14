@@ -293,6 +293,40 @@ jobs:
             --workspace-root . \
             --result-json runs/ci/agent_run_ci_smoke.json
 
+      - name: Generate experiment summary
+        run: |
+          mkdir -p runs/ci
+          python3 scripts/summarize_experiments.py \
+            --workspace-root . \
+            --limit 50 \
+            --json-out runs/ci/experiment_summary.json \
+            --md-out runs/ci/experiment_summary.md \
+            > runs/ci/experiment_summary_stdout.json
+
+      - name: Upload experiment-summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: experiment-summary
+          path: |
+            runs/ci/experiment_summary.json
+            runs/ci/experiment_summary.md
+            runs/ci/experiment_summary_stdout.json
+          if-no-files-found: warn
+
+      - name: Publish experiment summary
+        if: always()
+        run: |
+          echo "### Experiment Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f runs/ci/experiment_summary.md ]; then
+            cat runs/ci/experiment_summary.md >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f runs/ci/experiment_summary.json ]; then
+            cat runs/ci/experiment_summary.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "experiment summary output file is missing (likely upstream step failed)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   external-chain-acceptance:
     name: acceptance external-adapter (optional)
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_external_acceptance == 'true'

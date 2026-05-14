@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
@@ -115,7 +116,11 @@ def main() -> int:
             try:
                 trace = _load_json(trace_path)
                 rows.append(_row(trace, trace_path))
-            except Exception:
+            except Exception as exc:
+                print(
+                    f"[WARN] skip invalid experiment trace: {trace_path}: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
                 continue
     payload = _summary(rows, limit=max(1, int(args.limit)), workspace_root=root)
     if str(args.json_out).strip():
@@ -132,4 +137,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

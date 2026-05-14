@@ -297,6 +297,8 @@ HTML = """
         <h2>Outputs</h2>
         <h3>Runtime + artifacts</h3>
         <div class=\"runtime\" id=\"runtime_box\">runtime: (waiting)</div>
+        <label>Recent Events</label>
+        <pre id=\"event_out\">(no events)</pre>
         <label>Artifact</label>
         <select id=\"artifact_name\">
           <option value=\"plan\">plan</option>
@@ -326,6 +328,27 @@ HTML = """
 
       function renderJsonOut(payload) {
         document.getElementById('out').textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function renderEvents(events) {
+        const arr = Array.isArray(events) ? events : [];
+        if (arr.length < 1) {
+          document.getElementById('event_out').textContent = '(no events)';
+          return;
+        }
+        const lines = [];
+        for (const e of arr) {
+          if (!e || typeof e !== 'object') continue;
+          const stage = String(e.stage || 'stage');
+          const status = String(e.status || 'unknown');
+          const op = String(e.operation || '');
+          const reason = String(e.reason || '');
+          let line = `${stage}: ${status}`;
+          if (op) line += ` | op=${op}`;
+          if (reason) line += ` | reason=${reason}`;
+          lines.push(line);
+        }
+        document.getElementById('event_out').textContent = lines.length > 0 ? lines.join('\n') : '(no events)';
       }
 
       function taskId() {
@@ -471,6 +494,7 @@ HTML = """
           new_task: Boolean(newTask),
         });
         renderJsonOut(r.data);
+        renderEvents(r.data && r.data.events ? r.data.events : []);
         if (r.data && r.data.project) {
           state.project = r.data.project;
           renderProjectMeta(r.data.project);

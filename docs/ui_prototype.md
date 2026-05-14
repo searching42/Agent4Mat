@@ -24,6 +24,7 @@ Open: `http://127.0.0.1:8787`
   - optional browser upload copy to `runs/ui_sessions/uploads/<project_id>/`
 - output panel:
   - runtime summary (status / record_count / duration)
+  - recent stage events (intake/approve/run/step)
   - artifact preview and timeline / validation shortcuts
 - compatibility:
   - legacy run/step/intake/approve/resume/task-inspector APIs remain available

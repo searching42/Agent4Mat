@@ -141,6 +141,7 @@ HTML = """
         <button onclick=\"showTimeline()\">Show Timeline</button>
         <button onclick=\"validateTask()\">Validate Task</button>
         <button onclick=\"compareTask()\">Compare Runs</button>
+        <button onclick=\"diffArtifact()\">Diff Artifact</button>
         <label>Timeline tool filter (optional)</label>
         <input id=\"timeline_tool_filter\" value=\"\" placeholder=\"e.g. score_candidates\" />
         <label>Timeline status filter</label>
@@ -159,6 +160,15 @@ HTML = """
         <label>Compare picker</label>
         <select id=\"compare_other_task_picker\" onchange=\"pickCompareTask()\">
           <option value=\"\">(select)</option>
+        </select>
+        <label>Diff artifact</label>
+        <select id=\"compare_artifact_name\">
+          <option value=\"decision_summary\">decision_summary</option>
+          <option value=\"task_state\">task_state</option>
+          <option value=\"plan\">plan</option>
+          <option value=\"execution\">execution</option>
+          <option value=\"tool_state\">tool_state</option>
+          <option value=\"web_evidence\">web_evidence</option>
         </select>
         <label>Compare with task id</label>
         <input id=\"compare_other_task_id\" value=\"ui_task_step_demo\" placeholder=\"task id to compare against\" />
@@ -338,6 +348,21 @@ HTML = """
         const tasks = Array.isArray(data.tasks) ? data.tasks : [];
         fillTaskPicker('inspect_task_picker', tasks, inspectNow);
         fillTaskPicker('compare_other_task_picker', tasks, compareNow);
+        out.textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function diffArtifact() {
+        const out = document.getElementById('out');
+        out.textContent = 'diffing artifact...';
+        const taskId = document.getElementById('inspect_task_id').value;
+        const other = (document.getElementById('compare_other_task_id').value || '').trim();
+        const artifact = document.getElementById('compare_artifact_name').value;
+        const params = new URLSearchParams();
+        if (other) params.set('other_task_id', other);
+        if (artifact) params.set('artifact', artifact);
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/artifact-diff${suffix}`);
+        const data = await resp.json();
         out.textContent = JSON.stringify(data, null, 2);
       }
     </script>
@@ -806,6 +831,109 @@ def _task_compare_lines(primary: Dict[str, Any], other: Dict[str, Any], diff: Di
     return out
 
 
+def _normalize_diff_leaf(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, str) and len(value) > 240:
+            return value[:240] + "...(truncated)"
+        return value
+    if isinstance(value, dict):
+        return f"<dict:{len(value)}>"
+    if isinstance(value, list):
+        return f"<list:{len(value)}>"
+    return str(value)
+
+
+def _flatten_json_paths(
+    payload: Any,
+    *,
+    out: Dict[str, Any],
+    prefix: str = "",
+    depth: int = 0,
+    max_depth: int = 4,
+    max_items: int = 60,
+    max_nodes: int = 1800,
+) -> None:
+    if len(out) >= max_nodes:
+        return
+    if depth >= max_depth:
+        key = prefix or "$"
+        out[key] = "<max_depth>"
+        return
+    if isinstance(payload, dict):
+        if not payload:
+            out[prefix or "$"] = "<empty_dict>"
+            return
+        keys = sorted(payload.keys(), key=lambda x: str(x))
+        for idx, key in enumerate(keys):
+            if idx >= max_items:
+                out[(prefix + "." if prefix else "") + "__truncated_keys__"] = len(keys) - max_items
+                return
+            k = str(key)
+            next_prefix = f"{prefix}.{k}" if prefix else k
+            _flatten_json_paths(
+                payload.get(key),
+                out=out,
+                prefix=next_prefix,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_items=max_items,
+                max_nodes=max_nodes,
+            )
+            if len(out) >= max_nodes:
+                return
+        return
+    if isinstance(payload, list):
+        if not payload:
+            out[prefix or "$"] = "<empty_list>"
+            return
+        limit = min(len(payload), max_items)
+        for idx in range(limit):
+            next_prefix = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+            _flatten_json_paths(
+                payload[idx],
+                out=out,
+                prefix=next_prefix,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_items=max_items,
+                max_nodes=max_nodes,
+            )
+            if len(out) >= max_nodes:
+                return
+        if len(payload) > limit:
+            out[(prefix or "$") + ".__truncated_items__"] = len(payload) - limit
+        return
+    out[prefix or "$"] = _normalize_diff_leaf(payload)
+
+
+def _artifact_diff_payload(primary_payload: Any, other_payload: Any) -> Dict[str, Any]:
+    primary_flat: Dict[str, Any] = {}
+    other_flat: Dict[str, Any] = {}
+    _flatten_json_paths(primary_payload, out=primary_flat)
+    _flatten_json_paths(other_payload, out=other_flat)
+
+    primary_keys = set(primary_flat.keys())
+    other_keys = set(other_flat.keys())
+    only_primary = sorted(primary_keys - other_keys)
+    only_other = sorted(other_keys - primary_keys)
+    common = sorted(primary_keys & other_keys)
+    changed: List[Dict[str, Any]] = []
+    for key in common:
+        if primary_flat.get(key) != other_flat.get(key):
+            changed.append({"path": key, "primary": primary_flat.get(key), "other": other_flat.get(key)})
+
+    return {
+        "only_in_primary_count": len(only_primary),
+        "only_in_other_count": len(only_other),
+        "changed_count": len(changed),
+        "only_in_primary": only_primary[:200],
+        "only_in_other": only_other[:200],
+        "changed": changed[:300],
+        "primary_paths_total": len(primary_flat),
+        "other_paths_total": len(other_flat),
+    }
+
+
 def _is_safe_task_id(task_id: str) -> bool:
     tid = str(task_id or "").strip()
     if not tid:
@@ -1103,6 +1231,62 @@ def api_task_compare(task_id: str):
             "other": other_summary,
             "diff": diff,
             "compare_lines": _task_compare_lines(primary, other_summary, diff),
+        }
+    )
+
+
+@app.get("/api/task/<task_id>/artifact-diff")
+def api_task_artifact_diff(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    other = str(request.args.get("other_task_id") or "").strip()
+    if not other:
+        return jsonify({"status": "fail", "error": "missing other_task_id"}), 400
+    if not _is_safe_task_id(other):
+        return jsonify({"status": "fail", "error": "invalid other_task_id"}), 400
+    if other == tid:
+        return jsonify({"status": "fail", "error": "other_task_id must differ from task_id"}), 400
+    artifact = str(request.args.get("artifact") or "decision_summary").strip()
+    if artifact not in ARTIFACT_NAME_TO_FILE:
+        return jsonify({"status": "fail", "error": "invalid artifact"}), 400
+
+    primary_path = _task_artifact_paths(tid).get(artifact)
+    other_path = _task_artifact_paths(other).get(artifact)
+    if primary_path is None or other_path is None:
+        return jsonify({"status": "fail", "error": "internal_artifact_resolution_error"}), 500
+    if not primary_path.exists() or not other_path.exists():
+        return jsonify(
+            {
+                "status": "missing",
+                "task_id": tid,
+                "other_task_id": other,
+                "artifact": artifact,
+                "primary_exists": primary_path.exists(),
+                "other_exists": other_path.exists(),
+                "primary_path": str(primary_path),
+                "other_path": str(other_path),
+            }
+        ), 200
+
+    try:
+        primary_payload = json.loads(primary_path.read_text(encoding="utf-8"))
+        other_payload = json.loads(other_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return jsonify({"status": "fail", "error": f"invalid_json: {type(exc).__name__}: {exc}"}), 200
+
+    diff = _artifact_diff_payload(primary_payload, other_payload)
+    return jsonify(
+        {
+            "status": "pass",
+            "task_id": tid,
+            "other_task_id": other,
+            "artifact": artifact,
+            "primary_path": str(primary_path),
+            "other_path": str(other_path),
+            "diff": diff,
         }
     )
 

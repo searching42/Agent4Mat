@@ -32,6 +32,7 @@ Open: `http://127.0.0.1:8787`
   - timeline supports failed-step highlight, tool filter, and duration sort
   - supports recent-task picker (quick fill for inspect/compare task ids)
   - supports run-to-run compare (`task_id` vs `other_task_id`) with key deltas (records/failures/adapters/duration/evidence)
+  - supports artifact key-path diff (`decision_summary/task_state/plan/...`)
 
 ## API endpoints
 - `GET /api/health`
@@ -48,6 +49,8 @@ Open: `http://127.0.0.1:8787`
   - query params: `tool`, `status_filter=all|failed|success`, `sort=original|duration_desc|duration_asc|name_asc`
 - `GET /api/task/<task_id>/compare`
   - query params: `other_task_id`
+- `GET /api/task/<task_id>/artifact-diff`
+  - query params: `other_task_id`, `artifact`
 - `GET /api/task/<task_id>/validate`
 
 ## Non-goals

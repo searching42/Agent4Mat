@@ -7504,6 +7504,62 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertEqual(payload3.get("status"), "fail")
         self.assertEqual(payload3.get("error"), "other_task_id must differ from task_id")
 
+    def test_ui_task_artifact_diff_returns_changed_paths(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_a = "ui_diff_a"
+            task_b = "ui_diff_b"
+            run_a = root / "runs" / "agent" / task_a
+            run_b = root / "runs" / "agent" / task_b
+            run_a.mkdir(parents=True, exist_ok=True)
+            run_b.mkdir(parents=True, exist_ok=True)
+            (run_a / "decision_summary.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": task_a,
+                        "score_step": {"used_fallback": False, "adapter": "unimol_score_adapter_v1"},
+                        "selected_models": {"predictor_id": "unimol_lambda_plqy_v1"},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_b / "decision_summary.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": task_b,
+                        "score_step": {"used_fallback": True, "adapter": "template_score_cmd"},
+                        "selected_models": {"predictor_id": "template_predictor_v1"},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_a}/artifact-diff?other_task_id={task_b}&artifact=decision_summary")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("artifact"), "decision_summary")
+            diff = payload.get("diff") if isinstance(payload.get("diff"), dict) else {}
+            self.assertGreater(int(diff.get("changed_count") or 0), 0)
+            changed = diff.get("changed") if isinstance(diff.get("changed"), list) else []
+            changed_paths = [str(item.get("path") or "") for item in changed if isinstance(item, dict)]
+            self.assertIn("score_step.used_fallback", changed_paths)
+
+    def test_ui_task_artifact_diff_rejects_invalid_artifact(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/task/ui_demo/artifact-diff?other_task_id=ui_other&artifact=not_exists")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid artifact")
+
     def test_ui_task_validate_handles_missing_run_dir(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

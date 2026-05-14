@@ -345,6 +345,7 @@ HTML = """
         <h2>Outputs</h2>
         <h3>Runtime + artifacts</h3>
         <div class=\"runtime\" id=\"runtime_box\">runtime: (waiting)</div>
+        <div class=\"muted\" id=\"runtime_stage_text\">stage: -</div>
         <div class=\"progress-wrap\"><div class=\"progress-bar\" id=\"runtime_progress_bar\"></div></div>
         <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
         <div class=\"btn-row\">
@@ -509,6 +510,23 @@ HTML = """
         const ratio = Math.max(0, Math.min(1, success / total));
         bar.style.width = `${(ratio * 100).toFixed(1)}%`;
         text.textContent = `progress: ${success}/${total} success, failed=${failed}`;
+      }
+
+      function renderRuntimeStage(summaryPayload, timelinePayload) {
+        const ele = document.getElementById('runtime_stage_text');
+        const taskState = (summaryPayload && summaryPayload.task_state && typeof summaryPayload.task_state === 'object')
+          ? summaryPayload.task_state
+          : {};
+        const stage = String(taskState.current_stage || taskState.currentState || '-');
+        const status = String(taskState.status || '-');
+        const events = Array.isArray(timelinePayload && timelinePayload.events) ? timelinePayload.events : [];
+        const failed = events.find((e) => e && typeof e === 'object' && Boolean(e.is_failed));
+        let txt = `stage: ${stage} | task_state: ${status}`;
+        if (failed) {
+          const name = String(failed.name || '');
+          txt += ` | latest_failed_step: ${name || '-'}`;
+        }
+        ele.textContent = txt;
       }
 
       function taskId() {
@@ -863,6 +881,7 @@ HTML = """
         const tid = taskId();
         if (!tid || tid === '-') {
           document.getElementById('runtime_box').textContent = 'runtime: no active task';
+          document.getElementById('runtime_stage_text').textContent = 'stage: -';
           renderRuntimeProgress(null);
           return;
         }
@@ -884,6 +903,7 @@ HTML = """
         }
         const text = lines.join(' | ');
         document.getElementById('runtime_box').textContent = text;
+        renderRuntimeStage(s, tl);
         renderRuntimeProgress(tl.summary || null);
       }
 

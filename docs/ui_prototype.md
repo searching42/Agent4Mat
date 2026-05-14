@@ -25,6 +25,7 @@ Open: `http://127.0.0.1:8787`
   - optional browser upload copy to `runs/ui_sessions/uploads/<project_id>/`
 - output panel:
   - runtime summary (status / record_count / duration)
+  - task stage summary (`task_state.current_stage/status`) + latest failed step hint
   - progress bar from timeline summary (`success_steps / total_steps`)
   - one-click retry current task via `agent-resume`
   - one-click retry latest failed step via `agent-run-step-json`

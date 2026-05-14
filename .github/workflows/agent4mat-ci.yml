@@ -73,6 +73,24 @@ jobs:
       - name: Run web evidence guard
         run: make web-evidence-guard
 
+  experiment-trace-guard:
+    name: experiment trace guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install CPU profile
+        run: ./scripts/install_profile.sh cpu
+
+      - name: Run experiment trace guard
+        run: make experiment-trace-guard
+
   real-no-fallback-gate:
     name: real no fallback gate (manual)
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_real_chain_acceptance == 'true'

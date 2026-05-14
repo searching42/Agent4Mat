@@ -5978,10 +5978,12 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("intake-contract-guard:", content)
         self.assertIn("step-mode-guard:", content)
         self.assertIn("web-evidence-guard:", content)
+        self.assertIn("experiment-trace-guard:", content)
         self.assertIn("real-no-fallback-gate:", content)
         self.assertIn("make intake-contract-guard", content)
         self.assertIn("make step-mode-guard", content)
         self.assertIn("make web-evidence-guard", content)
+        self.assertIn("make experiment-trace-guard", content)
         self.assertIn("make real-no-fallback-gate", content)
 
 
@@ -6045,7 +6047,9 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("intake-contract-guard:", content)
         self.assertIn("step-mode-guard:", content)
         self.assertIn("web-evidence-guard:", content)
+        self.assertIn("experiment-trace-guard:", content)
         self.assertIn("real-no-fallback-gate:", content)
+        self.assertIn("scripts/check_experiment_trace.py", content)
 
 
 class PlanProgressAssetsTests(unittest.TestCase):
@@ -6058,6 +6062,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "collect_real_chain_evidence.py",
             repo_root / "scripts" / "archive_real_chain_baseline.py",
             repo_root / "scripts" / "validate_step_request_examples.py",
+            repo_root / "scripts" / "check_experiment_trace.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_real.sh",

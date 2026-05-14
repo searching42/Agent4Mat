@@ -137,6 +137,10 @@ Implemented stages:
   - `scripts/run_real_chain_acceptance_real.sh`
   - `make real-chain-acceptance-real`
   - enforces `--require-real-adapters` and persists `strict_acceptance_summary.json`
+- experiment trace guard:
+  - `scripts/check_experiment_trace.py`
+  - `make experiment-trace-guard`
+  - verifies full-pipeline and single-step runs both emit valid `experiment_trace` artifacts (run/logging/result)
 - real-chain reproducibility baseline (3 consecutive strict runs):
   - `scripts/run_real_chain_baseline.sh`
   - `make real-chain-baseline`

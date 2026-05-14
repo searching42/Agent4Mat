@@ -50,6 +50,7 @@ Make targets:
 - `make intake-contract-guard`
 - `make step-mode-guard`
 - `make web-evidence-guard`
+- `make experiment-trace-guard`
 - `make real-no-fallback-gate`
 - `make quickstart`
 - `make doctor`

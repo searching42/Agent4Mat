@@ -272,6 +272,24 @@ HTML = """
             <button onclick=\"uploadFileRef()\">Upload File To Session</button>
             <div class=\"muted\">上传文件将保存到 runs/ui_sessions/uploads/&lt;project_id&gt;/，并记录到项目会话。</div>
           </div>
+
+          <div class=\"tool-box\">
+            <h3>Single Step Runner</h3>
+            <label>Operation</label>
+            <select id=\"step_operation\">
+              <option value=\"retrieve_candidate_data\">retrieve_candidate_data</option>
+              <option value=\"clean_dataset\">clean_dataset</option>
+              <option value=\"prepare_train_data\">prepare_train_data</option>
+              <option value=\"train_predictor\">train_predictor</option>
+              <option value=\"generate_candidates\">generate_candidates</option>
+              <option value=\"score_candidates\">score_candidates</option>
+              <option value=\"filter_and_rank\">filter_and_rank</option>
+              <option value=\"make_report\">make_report</option>
+            </select>
+            <label>Args JSON</label>
+            <textarea id=\"step_args_json\" rows=\"4\">{}</textarea>
+            <button onclick=\"runStepPanel()\">Run Step From Panel</button>
+          </div>
         </div>
       </section>
 
@@ -543,6 +561,28 @@ HTML = """
           document.getElementById('attachment_path').value = String(data.attachment.path);
         }
         await loadHistory();
+      }
+
+      async function runStepPanel() {
+        const op = String(document.getElementById('step_operation').value || '').trim();
+        const argsText = String(document.getElementById('step_args_json').value || '').trim();
+        let args = {};
+        if (argsText) {
+          try {
+            const parsed = JSON.parse(argsText);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              args = parsed;
+            } else {
+              renderJsonOut({status: 'fail', error: 'step args must be JSON object'});
+              return;
+            }
+          } catch (e) {
+            renderJsonOut({status: 'fail', error: `invalid step args json: ${String(e)}`});
+            return;
+          }
+        }
+        document.getElementById('message_input').value = JSON.stringify({operation: op, args: args}, null, 2);
+        await sendChat(false);
       }
 
       async function loadRunRuntime() {

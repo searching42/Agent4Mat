@@ -15,6 +15,7 @@ Open: `http://127.0.0.1:8787`
   - backend orchestrates `agent-intake -> agent-approve -> agent-run-json`
   - if info is missing, assistant returns structured clarification questions
   - supports step mode in chat via `/step <operation> {args_json}` or JSON (`{"operation":"clean_dataset","args":{...}}`)
+  - includes a built-in step panel (operation dropdown + args JSON) that sends step requests into chat
 - project/session memory:
   - each project persists independent chat history and runtime pointers
   - session file: `runs/ui_sessions/projects/<project_id>.json`

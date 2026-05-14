@@ -1032,6 +1032,15 @@ class RegressionTests(unittest.TestCase):
             self.assertTrue((logging_dir / "model_report.json").exists())
             self.assertTrue((logging_dir / "filtering_report.json").exists())
             self.assertTrue((result_dir / "metadata.json").exists())
+            self.assertIn("experiment_trace_path", out)
+            trace_path = Path(out["experiment_trace_path"])
+            self.assertTrue(trace_path.exists())
+            trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+            self.assertEqual(trace_payload.get("task_id"), "task_decision_summary")
+            self.assertEqual(trace_payload.get("execution_mode"), "full_pipeline")
+            self.assertIn("fingerprints", trace_payload)
+            self.assertIn("execution_summary", trace_payload)
+            self.assertIn("source_artifacts", trace_payload)
 
     def test_external_preflight_warns_when_workspace_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2500,12 +2509,18 @@ class RegressionTests(unittest.TestCase):
                 "tool_state_path",
                 "decision_summary_path",
                 "task_state_path",
+                "experiment_trace_path",
                 "logging_data_report_path",
                 "logging_model_report_path",
                 "logging_filtering_report_path",
+                "logging_experiment_trace_path",
                 "result_metadata_path",
+                "result_experiment_trace_path",
             ):
                 self.assertTrue(Path(payload[key]).exists(), msg=f"missing artifact: {key}")
+            trace_payload = json.loads(Path(payload["experiment_trace_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(trace_payload.get("task_id"), "task_step_happy")
+            self.assertEqual(trace_payload.get("execution_mode"), "single_step")
 
     def test_agent_run_step_failure_path_returns_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as td:

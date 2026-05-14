@@ -38,6 +38,7 @@ Implemented stages:
 - `agent-run`:
   - executes tool calls in sequence
   - saves `plan.json`, `execution.json`, `tool_state.json`, `task_state.json`
+  - saves `artifacts/experiment_trace.json` with run fingerprint/model+adapter/data lineage snapshot
   - saves machine-readable `decision_summary.json` (fallback usage/error code/retryability)
   - supports planner-provider routing and persists provider metadata in `design_spec.metadata`
   - mirrors normalized artifacts into:

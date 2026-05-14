@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from oled_agent.agent.experiment_trace import build_experiment_trace
 from oled_agent.agent.request_contract import validate_step_request_payload, validate_task_v2_payload
 from oled_agent.agent.task_v2 import task_v2_to_request_payload
 from oled_agent.agent.tools import ToolContext, execute_tool
@@ -137,6 +138,7 @@ def _write_logging_and_result(
     task_payload: Dict[str, Any],
     execution: Dict[str, Any],
     tool_state: Dict[str, Any],
+    experiment_trace_path: Optional[Path],
 ) -> Dict[str, str]:
     logging_dir = (workspace_root / DEFAULT_LOGGING_OUT / run_label).resolve()
     result_dir = (workspace_root / DEFAULT_RESULT_OUT / run_label).resolve()
@@ -153,6 +155,8 @@ def _write_logging_and_result(
         encoding="utf-8",
     )
     (logging_dir / "execution.log").write_text(json.dumps(execution, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    logging_experiment_trace_path = logging_dir / "experiment_trace.json"
+    _copy_if_exists(experiment_trace_path, logging_experiment_trace_path)
 
     exec_status = _ensure_status(execution.get("status"))
     data_report = {
@@ -215,6 +219,8 @@ def _write_logging_and_result(
     if final_output:
         src_report = _rel_or_abs(final_output, workspace_root)
         _copy_if_exists(src_report, report_md_out)
+    result_experiment_trace_path = result_dir / "experiment_trace.json"
+    _copy_if_exists(experiment_trace_path, result_experiment_trace_path)
 
     metadata = {
         "schema_version": "1.0.0",
@@ -229,6 +235,7 @@ def _write_logging_and_result(
         "outputs": {
             "target_structures_csv": str(target_structures_csv) if copied else "",
             "report_md": str(report_md_out) if report_md_out.exists() else "",
+            "experiment_trace_json": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
         },
     }
     metadata_path = result_dir / "metadata.json"
@@ -242,8 +249,10 @@ def _write_logging_and_result(
         "logging_data_report_path": str(logging_dir / "data_report.json"),
         "logging_model_report_path": str(logging_dir / "model_report.json"),
         "logging_filtering_report_path": str(logging_dir / "filtering_report.json"),
+        "logging_experiment_trace_path": str(logging_experiment_trace_path) if logging_experiment_trace_path.exists() else "",
         "result_metadata_path": str(metadata_path),
         "result_target_structures_csv_path": str(target_structures_csv) if copied else "",
+        "result_experiment_trace_path": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
     }
 
 
@@ -392,12 +401,39 @@ def run_step(
         ),
     )
     run_label = _build_run_label(task_id)
+    artifact_dir = out_dir / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    experiment_trace_path = artifact_dir / "experiment_trace.json"
+    artifact_paths: Dict[str, Path] = {
+        "execution": execution_path,
+        "tool_state": tool_state_path,
+        "task_step": task_path,
+        "decision_summary": decision_summary_path,
+        "task_state": task_state_path,
+    }
+    web_evidence_path = artifact_dir / "web_evidence.json"
+    if web_evidence_path.exists():
+        artifact_paths["web_evidence"] = web_evidence_path
+    _write_json(
+        experiment_trace_path,
+        build_experiment_trace(
+            task_id=task_id,
+            run_label=run_label,
+            workspace_root=workspace_root.resolve(),
+            execution_mode="single_step",
+            task_payload=task_payload,
+            execution_payload=execution,
+            tool_state=tool_state,
+            artifact_paths=artifact_paths,
+        ),
+    )
     mirror = _write_logging_and_result(
         workspace_root=workspace_root.resolve(),
         run_label=run_label,
         task_payload=task_payload,
         execution=execution,
         tool_state=tool_state,
+        experiment_trace_path=experiment_trace_path,
     )
 
     return {
@@ -410,6 +446,7 @@ def run_step(
         "decision_summary_path": str(decision_summary_path),
         "task_state_path": str(task_state_path),
         "task_path": str(task_path),
+        "experiment_trace_path": str(experiment_trace_path),
         "run_label": run_label,
         **mirror,
         "result": result,

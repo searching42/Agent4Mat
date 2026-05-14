@@ -201,7 +201,7 @@ UI prototype API coverage:
 - `POST /api/approve` -> `agent-approve` (task.v2 draft approval)
 - `POST /api/resume` -> `agent-resume` (idempotent task resume)
 - `GET /api/task/<task_id>/summary` -> artifact/status preview
-- `GET /api/task/<task_id>/artifact/<artifact_name>` -> artifact content preview (`plan|execution|tool_state|decision_summary|task_state|web_evidence`)
+- `GET /api/task/<task_id>/artifact/<artifact_name>` -> artifact content preview (`plan|execution|tool_state|decision_summary|task_state|web_evidence|experiment_trace`)
 - `GET /api/task/<task_id>/timeline` -> step timeline with duration/status/adapter summary (supports `tool`, `status_filter`, `sort`)
 - `GET /api/task/<task_id>/compare` -> run-to-run diff vs `other_task_id` (records/failures/adapters/duration/evidence deltas)
 - `GET /api/task/<task_id>/artifact-diff` -> key-path diff for one artifact vs `other_task_id` (`artifact=decision_summary|task_state|plan|execution|tool_state|web_evidence`)

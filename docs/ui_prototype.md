@@ -27,7 +27,7 @@ Open: `http://127.0.0.1:8787`
   - invokes `agent-resume`
 - task inspector panel:
   - reads `runs/agent/<task_id>` artifacts
-  - previews `execution/task_state/decision_summary/web_evidence`
+  - previews `execution/task_state/decision_summary/web_evidence/experiment_trace`
   - supports one-click artifact preview, timeline, and core validation
   - timeline supports failed-step highlight, tool filter, and duration sort
   - supports recent-task picker (quick fill for inspect/compare task ids)

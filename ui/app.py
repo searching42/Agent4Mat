@@ -24,6 +24,7 @@ ARTIFACT_NAME_TO_FILE = {
     "decision_summary": "decision_summary.json",
     "task_state": "task_state.json",
     "web_evidence": "artifacts/web_evidence.json",
+    "experiment_trace": "artifacts/experiment_trace.json",
 }
 
 
@@ -136,6 +137,7 @@ HTML = """
           <option value=\"task_state\">task_state</option>
           <option value=\"tool_state\">tool_state</option>
           <option value=\"web_evidence\">web_evidence</option>
+          <option value=\"experiment_trace\">experiment_trace</option>
         </select>
         <button onclick=\"previewArtifact()\">Preview Artifact</button>
         <button onclick=\"showTimeline()\">Show Timeline</button>
@@ -169,6 +171,7 @@ HTML = """
           <option value=\"execution\">execution</option>
           <option value=\"tool_state\">tool_state</option>
           <option value=\"web_evidence\">web_evidence</option>
+          <option value=\"experiment_trace\">experiment_trace</option>
         </select>
         <label>Compare with task id</label>
         <input id=\"compare_other_task_id\" value=\"ui_task_step_demo\" placeholder=\"task id to compare against\" />

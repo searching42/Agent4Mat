@@ -399,7 +399,7 @@ HTML = """
           <div class=\"tool-box\">
             <h3>Single Step Runner</h3>
             <label>Operation</label>
-            <select id=\"step_operation\">
+            <select id=\"step_operation\" onchange=\"applyStepArgsTemplate(false)\">
               <option value=\"retrieve_candidate_data\">retrieve_candidate_data</option>
               <option value=\"clean_dataset\">clean_dataset</option>
               <option value=\"prepare_train_data\">prepare_train_data</option>
@@ -411,7 +411,10 @@ HTML = """
             </select>
             <label>Args JSON</label>
             <textarea id=\"step_args_json\" rows=\"4\">{}</textarea>
-            <button onclick=\"runStepPanel()\">Run Step From Panel</button>
+            <div class=\"btn-row\">
+              <button onclick=\"applyStepArgsTemplate(true)\">Load Args Template</button>
+              <button onclick=\"runStepPanel()\">Run Step From Panel</button>
+            </div>
           </div>
         </div>
       </section>
@@ -423,9 +426,12 @@ HTML = """
         <div class=\"muted\" id=\"runtime_stage_text\">stage: -</div>
         <div class=\"progress-wrap\"><div class=\"progress-bar\" id=\"runtime_progress_bar\"></div></div>
         <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
+        <label>Failed Tool Name (optional)</label>
+        <input id=\"retry_failed_tool_name\" placeholder=\"e.g. score_candidates (empty = latest failed step)\" />
         <label>Retry Args JSON (optional override)</label>
         <textarea id=\"retry_failed_args_json\" rows=\"3\">{}</textarea>
         <div class=\"btn-row\">
+          <button onclick=\"loadSuggestedRetryArgs()\">Load Suggested Retry Args</button>
           <button onclick=\"previewRetryFailedStep()\">Preview Failed-Step Retry</button>
           <button onclick=\"retryFailedStep()\">Retry Latest Failed Step</button>
           <button onclick=\"retryCurrentTask()\">Retry Current Task (resume)</button>
@@ -463,6 +469,52 @@ HTML = """
         prediction_model: {label: 'prediction_model', placeholder: 'e.g. unimol_lambda_plqy_v1'},
         candidate_data: {label: 'candidate_data', placeholder: '/abs/path/to/candidates.csv'},
         train_data: {label: 'train_data', placeholder: '/abs/path/to/train.csv'},
+      };
+
+      const stepArgsTemplates = {
+        retrieve_candidate_data: {
+          candidate_data: "/abs/path/to/candidate_source.csv"
+        },
+        clean_dataset: {
+          input_csv: "/abs/path/to/candidates.csv",
+          constraints: {
+            mw_min: 150,
+            mw_max: 700,
+            domain_threshold: 0.2,
+            banned_alerts: []
+          }
+        },
+        prepare_train_data: {
+          train_data: "/abs/path/to/train.csv"
+        },
+        train_predictor: {
+          predictor_id: "unimol_lambda_plqy_v1",
+          targets: ["plqy"]
+        },
+        generate_candidates: {
+          generator_id: "reinvent4_lambda_em_v2",
+          max_candidates: 300,
+          constraints: {
+            mw_min: 150,
+            mw_max: 700,
+            domain_threshold: 0.2,
+            banned_alerts: []
+          },
+          input_csv: "/abs/path/to/candidates.csv"
+        },
+        score_candidates: {
+          predictor_id: "unimol_lambda_plqy_v1",
+          targets: ["plqy"],
+          input_csv: "/abs/path/to/generated.csv"
+        },
+        filter_and_rank: {
+          topn: 10,
+          target_specs: [
+            {"property_name": "lambda_em", "weight": 0.65},
+            {"property_name": "plqy", "weight": 0.25}
+          ]
+        },
+        make_report: {}
       };
 
       function nowIso() {
@@ -643,6 +695,42 @@ HTML = """
         await loadRunRuntime();
       }
 
+      function selectedRetryFailedToolName() {
+        const raw = document.getElementById('retry_failed_tool_name');
+        return String(raw && raw.value ? raw.value : '').trim();
+      }
+
+      async function loadSuggestedRetryArgs() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const body = {
+          catalog_path: document.getElementById('catalog').value,
+          dry_run: true,
+        };
+        const failedToolName = selectedRetryFailedToolName();
+        if (failedToolName) {
+          body.failed_tool_name = failedToolName;
+        }
+        const r = await apiPost(`/api/task/${encodeURIComponent(tid)}/retry-failed-step`, body);
+        renderJsonOut(r.data);
+        const args = (r.data && r.data.retry_args && typeof r.data.retry_args === 'object' && !Array.isArray(r.data.retry_args))
+          ? r.data.retry_args
+          : null;
+        if (args) {
+          document.getElementById('retry_failed_args_json').value = JSON.stringify(args, null, 2);
+        }
+        const failedName = String((r.data && r.data.failed_tool_name) || '');
+        if (failedName) {
+          document.getElementById('retry_failed_tool_name').value = failedName;
+        }
+        const status = String((r.data && r.data.status) || 'unknown');
+        const op = String((r.data && r.data.retry_operation) || '');
+        renderEvents([{stage: 'load_retry_args', status: status, operation: op || undefined}]);
+      }
+
       function setListItems(targetId, items) {
         const ul = document.getElementById(targetId);
         ul.innerHTML = '';
@@ -669,13 +757,13 @@ HTML = """
               adapter: it && it.adapter ? it.adapter : '',
               error: it && it.error ? it.error : '',
               result_summary: it && it.result_summary ? it.result_summary : {},
+              args: it && it.args ? it.args : {},
             };
             renderJsonOut({status: 'pass', item: detail});
             if (it && it.is_failed && it.name) {
-              const op = (it.name === 'search_dataset') ? 'retrieve_candidate_data' : String(it.name);
-              if (op) {
-                document.getElementById('retry_failed_args_json').value = '{}';
-              }
+              document.getElementById('retry_failed_tool_name').value = String(it.name);
+              const args = (it.args && typeof it.args === 'object' && !Array.isArray(it.args)) ? it.args : {};
+              document.getElementById('retry_failed_args_json').value = JSON.stringify(args, null, 2);
             }
           };
           ul.appendChild(li);
@@ -1092,6 +1180,18 @@ HTML = """
         await sendChat(false);
       }
 
+      function applyStepArgsTemplate(forceOverwrite) {
+        const op = String(document.getElementById('step_operation').value || '').trim();
+        const area = document.getElementById('step_args_json');
+        if (!area) return;
+        const current = String(area.value || '').trim();
+        if (!forceOverwrite && current && current !== '{}') {
+          return;
+        }
+        const tpl = stepArgsTemplates[op] || {};
+        area.value = JSON.stringify(tpl, null, 2);
+      }
+
       async function retryCurrentTask() {
         const tid = taskId();
         if (!tid || tid === '-') {
@@ -1146,6 +1246,10 @@ HTML = """
           catalog_path: document.getElementById('catalog').value,
           dry_run: Boolean(dryRun),
         };
+        const failedToolName = selectedRetryFailedToolName();
+        if (failedToolName) {
+          body.failed_tool_name = failedToolName;
+        }
         if (parsed.args && Object.keys(parsed.args).length > 0) {
           body.args = parsed.args;
         }
@@ -1195,6 +1299,7 @@ HTML = """
       }
 
       async function boot() {
+        applyStepArgsTemplate(true);
         await refreshProjects();
         await saveProject();
         await loadRunRuntime();

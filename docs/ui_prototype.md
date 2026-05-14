@@ -28,7 +28,8 @@ Open: `http://127.0.0.1:8787`
   - task stage summary (`task_state.current_stage/status`) + latest failed step hint
   - progress bar from timeline summary (`success_steps / total_steps`)
   - one-click retry current task via `agent-resume`
-  - one-click retry latest failed step via `agent-run-step-json` (supports args override and dry-run preview)
+  - one-click retry latest failed step via `agent-run-step-json` (supports args override, target failed_tool_name, and dry-run preview)
+  - `Load Suggested Retry Args` can auto-fill retry args from dry-run replay suggestion
   - recent stage events (intake/approve/run/step)
   - artifact preview and timeline / validation shortcuts
 - chat transcript:
@@ -38,6 +39,8 @@ Open: `http://127.0.0.1:8787`
     - `current_task`: current task grouped timeline
     - `recent_tasks`: aggregate grouped timeline across recent N tasks
   - failed-group items support inline Retry action (reuses row args by default, supports override args JSON)
+- step panel:
+  - operation dropdown includes `Load Args Template` to auto-fill operation-specific args skeleton
 - compatibility:
   - legacy run/step/intake/approve/resume/task-inspector APIs remain available
 

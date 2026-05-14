@@ -6,7 +6,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from flask import Flask, jsonify, render_template_string, request
 
@@ -92,6 +92,22 @@ HTML = """
       </div>
 
       <div class=\"card\">
+        <h2>Task Approve</h2>
+        <p>Run <code>agent-approve</code> from intake draft task JSON.</p>
+        <label>Task JSON path</label>
+        <input id=\"approve_task_json_path\" value=\"runs/agent/ui_intake_demo/task.draft.json\" />
+        <button onclick=\"runApprove()\">Run Approve</button>
+      </div>
+
+      <div class=\"card\">
+        <h2>Task Resume</h2>
+        <p>Run <code>agent-resume</code> for resumable task runs.</p>
+        <label>Task ID</label>
+        <input id=\"resume_task_id\" value=\"ui_task_demo\" />
+        <button onclick=\"runResume()\">Run Resume</button>
+      </div>
+
+      <div class=\"card\">
         <h2>Task Inspector</h2>
         <p>Preview key artifacts under <code>runs/agent/&lt;task_id&gt;</code>.</p>
         <label>Task ID</label>
@@ -141,6 +157,32 @@ HTML = """
         const requestText = document.getElementById('intake_request').value;
         const webTopk = Number(document.getElementById('intake_web_topk').value || 5);
         const r = await postJSON('/api/intake', {task_id: taskId, request_text: requestText, web_topk: webTopk});
+        const result = r.data && r.data.result ? r.data.result : null;
+        if (result && result.task_draft_path) {
+          document.getElementById('approve_task_json_path').value = result.task_draft_path;
+        }
+        document.getElementById('inspect_task_id').value = taskId;
+        document.getElementById('resume_task_id').value = taskId;
+        out.textContent = JSON.stringify(r.data, null, 2);
+      }
+
+      async function runApprove() {
+        const out = document.getElementById('out');
+        out.textContent = 'running approve...';
+        const taskJsonPath = document.getElementById('approve_task_json_path').value;
+        const planner = document.getElementById('planner').value;
+        const catalog = document.getElementById('catalog').value;
+        const r = await postJSON('/api/approve', {task_json_path: taskJsonPath, planner_provider: planner, catalog_path: catalog});
+        out.textContent = JSON.stringify(r.data, null, 2);
+      }
+
+      async function runResume() {
+        const out = document.getElementById('out');
+        out.textContent = 'running resume...';
+        const taskId = document.getElementById('resume_task_id').value;
+        const planner = document.getElementById('planner').value;
+        const catalog = document.getElementById('catalog').value;
+        const r = await postJSON('/api/resume', {task_id: taskId, planner_provider: planner, catalog_path: catalog});
         out.textContent = JSON.stringify(r.data, null, 2);
       }
 
@@ -215,6 +257,33 @@ def _run_cli_with_json_payload(
         }
 
 
+def _run_cli_command(*, cli_args: List[str], ok_returncodes: Optional[List[int]] = None) -> Dict[str, Any]:
+    cmd = [
+        os.environ.get("PYTHON", "python3"),
+        "-m",
+        "oled_agent.cli",
+        *cli_args,
+    ]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    cp = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
+    raw = str(cp.stdout or "").strip()
+    parsed: Any = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+    allowed = set(ok_returncodes or [0])
+    return {
+        "status": "pass" if cp.returncode in allowed else "fail",
+        "returncode": cp.returncode,
+        "command": cmd,
+        "result": parsed if parsed is not None else {"raw_stdout": cp.stdout},
+        "stderr": cp.stderr,
+    }
+
+
 def _run_agent_run_json(*, payload: Dict[str, Any], planner_provider: str, catalog_path: str) -> Dict[str, Any]:
     catalog = _resolve_catalog(catalog_path)
     return _run_cli_with_json_payload(
@@ -250,41 +319,56 @@ def _run_agent_step_json(*, payload: Dict[str, Any], catalog_path: str) -> Dict[
 
 
 def _run_agent_intake(*, task_id: str, request_text: str, web_topk: int) -> Dict[str, Any]:
-    cmd = [
-        os.environ.get("PYTHON", "python3"),
-        "-m",
-        "oled_agent.cli",
-        "agent-intake",
-        "--workspace-root",
-        str(REPO_ROOT),
-        "--task-id",
-        task_id,
-        "--request",
-        request_text,
-        "--web-topk",
-        str(max(1, int(web_topk))),
-    ]
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
-    cp = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
-    payload_out: Dict[str, Any] = {}
-    raw = str(cp.stdout or "").strip()
-    if raw:
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                payload_out = parsed
-            else:
-                payload_out = {"raw_stdout": raw}
-        except json.JSONDecodeError:
-            payload_out = {"raw_stdout": raw}
-    return {
-        "status": "pass" if cp.returncode in (0, 2) else "fail",
-        "returncode": cp.returncode,
-        "command": cmd,
-        "result": payload_out,
-        "stderr": cp.stderr,
-    }
+    return _run_cli_command(
+        cli_args=[
+            "agent-intake",
+            "--workspace-root",
+            str(REPO_ROOT),
+            "--task-id",
+            task_id,
+            "--request",
+            request_text,
+            "--web-topk",
+            str(max(1, int(web_topk))),
+        ],
+        ok_returncodes=[0, 2],
+    )
+
+
+def _run_agent_approve(*, task_json_path: Path, planner_provider: str, catalog_path: str) -> Dict[str, Any]:
+    catalog = _resolve_catalog(catalog_path)
+    return _run_cli_command(
+        cli_args=[
+            "agent-approve",
+            "--workspace-root",
+            str(REPO_ROOT),
+            "--task-json",
+            str(task_json_path),
+            "--planner-provider",
+            str(planner_provider or "rule_based_v1"),
+            "--catalog",
+            str(catalog),
+        ],
+        ok_returncodes=[0, 2],
+    )
+
+
+def _run_agent_resume(*, task_id: str, planner_provider: str, catalog_path: str) -> Dict[str, Any]:
+    catalog = _resolve_catalog(catalog_path)
+    return _run_cli_command(
+        cli_args=[
+            "agent-resume",
+            "--workspace-root",
+            str(REPO_ROOT),
+            "--task-id",
+            task_id,
+            "--planner-provider",
+            str(planner_provider or "rule_based_v1"),
+            "--catalog",
+            str(catalog),
+        ],
+        ok_returncodes=[0],
+    )
 
 
 def _task_artifact_path(task_id: str, filename: str) -> Path:
@@ -359,6 +443,35 @@ def api_intake():
     if not request_text:
         return jsonify({"status": "fail", "error": "missing request_text"}), 400
     return jsonify(_run_agent_intake(task_id=task_id, request_text=request_text, web_topk=web_topk))
+
+
+@app.post("/api/approve")
+def api_approve():
+    body = request.get_json(silent=True) or {}
+    task_json_path = str(body.get("task_json_path") or "").strip()
+    planner = str(body.get("planner_provider") or "rule_based_v1")
+    catalog = str(body.get("catalog_path") or DEFAULT_CATALOG)
+    if not task_json_path:
+        return jsonify({"status": "fail", "error": "missing task_json_path"}), 400
+    task_path = Path(task_json_path)
+    if not task_path.is_absolute():
+        task_path = (REPO_ROOT / task_path).resolve()
+    else:
+        task_path = task_path.resolve()
+    return jsonify(_run_agent_approve(task_json_path=task_path, planner_provider=planner, catalog_path=catalog))
+
+
+@app.post("/api/resume")
+def api_resume():
+    body = request.get_json(silent=True) or {}
+    task_id = str(body.get("task_id") or "").strip()
+    planner = str(body.get("planner_provider") or "rule_based_v1")
+    catalog = str(body.get("catalog_path") or DEFAULT_CATALOG)
+    if not task_id:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(task_id):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    return jsonify(_run_agent_resume(task_id=task_id, planner_provider=planner, catalog_path=catalog))
 
 
 @app.get("/api/task/<task_id>/summary")

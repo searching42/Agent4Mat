@@ -7102,6 +7102,69 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("agent-run-step-json", cmd)
         self.assertIn("--step-request-json", cmd)
 
+    def test_ui_approve_endpoint_shells_out_to_agent_approve(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        fake_result = {"status": "approved", "task_id": "ui_intake_demo"}
+        fake_cp = subprocess.CompletedProcess(
+            args=["python3", "-m", "oled_agent.cli", "agent-approve"],
+            returncode=0,
+            stdout=json.dumps(fake_result, ensure_ascii=False),
+            stderr="",
+        )
+        with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+            resp = client.post(
+                "/api/approve",
+                json={
+                    "task_json_path": "runs/agent/ui_intake_demo/task.draft.json",
+                    "planner_provider": "rule_based_v1",
+                    "catalog_path": "configs/models/catalog.json",
+                },
+            )
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "pass")
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        self.assertEqual(result.get("status"), "approved")
+        cmd = mocked.call_args.args[0]
+        self.assertIn("agent-approve", cmd)
+        self.assertIn("--task-json", cmd)
+
+    def test_ui_resume_endpoint_shells_out_to_agent_resume(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        fake_result = {"status": "success", "task_id": "ui_resume_demo"}
+        fake_cp = subprocess.CompletedProcess(
+            args=["python3", "-m", "oled_agent.cli", "agent-resume"],
+            returncode=0,
+            stdout=json.dumps(fake_result, ensure_ascii=False),
+            stderr="",
+        )
+        with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+            resp = client.post(
+                "/api/resume",
+                json={
+                    "task_id": "ui_resume_demo",
+                    "planner_provider": "rule_based_v1",
+                    "catalog_path": "configs/models/catalog.json",
+                },
+            )
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "pass")
+        cmd = mocked.call_args.args[0]
+        self.assertIn("agent-resume", cmd)
+        self.assertIn("ui_resume_demo", cmd)
+
+    def test_ui_approve_rejects_missing_task_json_path(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.post("/api/approve", json={})
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "missing task_json_path")
+
     def test_ui_task_summary_reads_artifacts(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -7145,6 +7208,15 @@ class UiPrototypeTests(unittest.TestCase):
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()
         resp = client.get("/api/task/bad..id/summary")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid task_id")
+
+    def test_ui_resume_rejects_invalid_task_id(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.post("/api/resume", json={"task_id": "bad..id"})
         self.assertEqual(resp.status_code, 400)
         payload = resp.get_json()
         self.assertEqual(payload.get("status"), "fail")

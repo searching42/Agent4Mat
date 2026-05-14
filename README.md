@@ -197,6 +197,8 @@ UI prototype API coverage:
 - `POST /api/run` -> `agent-run-json` (full pipeline)
 - `POST /api/run-step` -> `agent-run-step-json` (single operation)
 - `POST /api/intake` -> `agent-intake` (task clarification + evidence)
+- `POST /api/approve` -> `agent-approve` (task.v2 draft approval)
+- `POST /api/resume` -> `agent-resume` (idempotent task resume)
 - `GET /api/task/<task_id>/summary` -> artifact/status preview
 
 ## CLI commands

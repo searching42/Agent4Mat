@@ -19,6 +19,12 @@ Open: `http://127.0.0.1:8787`
 - intake panel:
   - task id + request text + web topk
   - invokes `agent-intake`
+- approve panel:
+  - task draft json path
+  - invokes `agent-approve`
+- resume panel:
+  - task id + planner
+  - invokes `agent-resume`
 - task inspector panel:
   - reads `runs/agent/<task_id>` artifacts
   - previews `execution/task_state/decision_summary/web_evidence`
@@ -28,6 +34,8 @@ Open: `http://127.0.0.1:8787`
 - `POST /api/run`
 - `POST /api/run-step`
 - `POST /api/intake`
+- `POST /api/approve`
+- `POST /api/resume`
 - `GET /api/task/<task_id>/summary`
 
 ## Non-goals

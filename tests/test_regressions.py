@@ -7250,6 +7250,22 @@ class UiPrototypeTests(unittest.TestCase):
                 json.dumps({"results": [{"title": "n", "url": "https://nature.com/a"}]}, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
+            (run_dir / "artifacts" / "experiment_trace.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "task_id": task_id,
+                        "run_label": "ui_summary_case-20260514-000001",
+                        "execution_mode": "full_pipeline",
+                        "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                        "execution_summary": {"status": "success", "record_count": 1},
+                        "source_artifacts": {"candidate_csv": {"exists": False}},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
                 client = ui_app_mod.app.test_client()
                 resp = client.get(f"/api/task/{task_id}/summary")
@@ -7261,6 +7277,9 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(execution_summary.get("record_count"), 1)
             preview = payload.get("web_evidence_preview") if isinstance(payload.get("web_evidence_preview"), list) else []
             self.assertEqual(len(preview), 1)
+            trace_preview = payload.get("experiment_trace_preview") if isinstance(payload.get("experiment_trace_preview"), dict) else {}
+            self.assertEqual(trace_preview.get("execution_mode"), "full_pipeline")
+            self.assertEqual(trace_preview.get("run_label"), "ui_summary_case-20260514-000001")
 
     def test_ui_task_summary_rejects_invalid_task_id(self) -> None:
         ui_app_mod = self._load_ui_module()

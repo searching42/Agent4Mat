@@ -628,6 +628,16 @@ def _preview_payload(payload: Any, *, artifact_name: str) -> Any:
             lite["results"] = results[:8]
             lite["result_count"] = len(results)
             return lite
+    if artifact_name == "experiment_trace" and isinstance(payload, dict):
+        return {
+            "schema_version": payload.get("schema_version", ""),
+            "task_id": payload.get("task_id", ""),
+            "run_label": payload.get("run_label", ""),
+            "execution_mode": payload.get("execution_mode", ""),
+            "model_choice": payload.get("model_choice", {}),
+            "execution_summary": payload.get("execution_summary", {}),
+            "source_artifacts": payload.get("source_artifacts", {}),
+        }
     return payload
 
 
@@ -1079,12 +1089,14 @@ def api_task_summary(task_id: str):
         "decision_summary_path": by_name["decision_summary"],
         "task_state_path": by_name["task_state"],
         "web_evidence_path": by_name["web_evidence"],
+        "experiment_trace_path": by_name["experiment_trace"],
     }
     files = {k: {"path": str(v), "exists": v.exists()} for k, v in artifacts.items()}
     execution = _load_json_if_exists(artifacts["execution_path"])
     task_state = _load_json_if_exists(artifacts["task_state_path"])
     decision = _load_json_if_exists(artifacts["decision_summary_path"])
     web_evidence = _load_json_if_exists(artifacts["web_evidence_path"])
+    experiment_trace = _load_json_if_exists(artifacts["experiment_trace_path"])
     return jsonify(
         {
             "status": "pass" if run_dir.exists() else "missing",
@@ -1102,6 +1114,11 @@ def api_task_summary(task_id: str):
                 web_evidence.get("results", [])[:5]
                 if isinstance(web_evidence, dict) and isinstance(web_evidence.get("results"), list)
                 else []
+            ),
+            "experiment_trace_preview": (
+                _preview_payload(experiment_trace, artifact_name="experiment_trace")
+                if isinstance(experiment_trace, dict)
+                else {}
             ),
         }
     )

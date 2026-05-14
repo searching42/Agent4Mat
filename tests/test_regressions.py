@@ -7243,6 +7243,61 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertEqual(payload.get("status"), "fail")
         self.assertEqual(payload.get("error"), "invalid artifact_name")
 
+    def test_ui_task_timeline_reads_execution_records(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_timeline_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            execution_payload = {
+                "task_id": task_id,
+                "status": "success",
+                "started_at": "2026-05-14T00:00:00+00:00",
+                "ended_at": "2026-05-14T00:00:05+00:00",
+                "records": [
+                    {
+                        "name": "search_dataset",
+                        "status": "success",
+                        "started_at": "2026-05-14T00:00:00+00:00",
+                        "ended_at": "2026-05-14T00:00:01+00:00",
+                        "result": {"status": "success"},
+                        "error": "",
+                    },
+                    {
+                        "name": "score_candidates",
+                        "status": "success",
+                        "started_at": "2026-05-14T00:00:01+00:00",
+                        "ended_at": "2026-05-14T00:00:03+00:00",
+                        "result": {"status": "success", "adapter": "unimol_score_adapter_v1"},
+                        "error": "",
+                    },
+                ],
+            }
+            (run_dir / "execution.json").write_text(json.dumps(execution_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/timeline")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            self.assertEqual(summary.get("total_steps"), 2)
+            self.assertEqual(summary.get("failed_steps"), 0)
+            events = payload.get("events") if isinstance(payload.get("events"), list) else []
+            self.assertEqual(len(events), 2)
+            self.assertEqual(events[1].get("adapter"), "unimol_score_adapter_v1")
+            self.assertEqual(events[0].get("duration_ms"), 1000)
+
+    def test_ui_task_timeline_rejects_invalid_task_id(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/task/bad..id/timeline")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid task_id")
+
     def test_ui_task_validate_handles_missing_run_dir(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

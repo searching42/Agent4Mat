@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -132,6 +133,7 @@ HTML = """
           <option value=\"web_evidence\">web_evidence</option>
         </select>
         <button onclick=\"previewArtifact()\">Preview Artifact</button>
+        <button onclick=\"showTimeline()\">Show Timeline</button>
         <button onclick=\"validateTask()\">Validate Task</button>
       </div>
 
@@ -221,6 +223,15 @@ HTML = """
         const taskId = document.getElementById('inspect_task_id').value;
         const artifact = document.getElementById('inspect_artifact_name').value;
         const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/artifact/${encodeURIComponent(artifact)}?max_chars=20000`);
+        const data = await resp.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function showTimeline() {
+        const out = document.getElementById('out');
+        out.textContent = 'loading timeline...';
+        const taskId = document.getElementById('inspect_task_id').value;
+        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/timeline`);
         const data = await resp.json();
         out.textContent = JSON.stringify(data, null, 2);
       }
@@ -489,6 +500,42 @@ def _artifact_preview(*, artifact_name: str, path: Path, max_chars: int) -> Dict
     }
 
 
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _duration_ms(started_at: Any, ended_at: Any) -> Optional[int]:
+    started = _parse_iso_datetime(started_at)
+    ended = _parse_iso_datetime(ended_at)
+    if started is None or ended is None:
+        return None
+    return int((ended - started).total_seconds() * 1000)
+
+
+def _timeline_result_summary(result: Any) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for key in ["status", "adapter", "count", "rows", "output_csv", "final_output", "report_path"]:
+        if key in result:
+            out[key] = result.get(key)
+    if "models" in result and isinstance(result.get("models"), list):
+        out["models_count"] = len(result.get("models", []))
+    if "results" in result and isinstance(result.get("results"), list):
+        out["results_count"] = len(result.get("results", []))
+    if "topn" in result:
+        out["topn"] = result.get("topn")
+    return out
+
+
 def _is_safe_task_id(task_id: str) -> bool:
     tid = str(task_id or "").strip()
     if not tid:
@@ -637,6 +684,66 @@ def api_task_artifact(task_id: str, artifact_name: str):
     paths = _task_artifact_paths(tid)
     payload = _artifact_preview(artifact_name=name, path=paths[name], max_chars=max_chars)
     return jsonify(payload)
+
+
+@app.get("/api/task/<task_id>/timeline")
+def api_task_timeline(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    if not run_dir.exists():
+        return jsonify({"status": "missing", "task_id": tid, "error": "run_dir_missing"}), 200
+    execution_path = _task_artifact_path(tid, "execution.json")
+    if not execution_path.exists():
+        return jsonify({"status": "fail", "task_id": tid, "error": "missing_execution_json"}), 200
+    try:
+        execution = json.loads(execution_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return jsonify({"status": "fail", "task_id": tid, "error": f"invalid_execution_json: {type(exc).__name__}: {exc}"}), 200
+
+    records = execution.get("records", []) if isinstance(execution, dict) else []
+    events: List[Dict[str, Any]] = []
+    for idx, rec in enumerate(records, start=1):
+        if not isinstance(rec, dict):
+            continue
+        result = rec.get("result")
+        event: Dict[str, Any] = {
+            "index": idx,
+            "name": str(rec.get("name") or ""),
+            "status": str(rec.get("status") or ""),
+            "started_at": rec.get("started_at"),
+            "ended_at": rec.get("ended_at"),
+            "duration_ms": _duration_ms(rec.get("started_at"), rec.get("ended_at")),
+            "error": str(rec.get("error") or ""),
+            "result_summary": _timeline_result_summary(result),
+        }
+        if isinstance(result, dict) and result.get("adapter"):
+            event["adapter"] = result.get("adapter")
+        events.append(event)
+
+    total_ms = _duration_ms(execution.get("started_at"), execution.get("ended_at")) if isinstance(execution, dict) else None
+    success_n = sum(1 for e in events if e.get("status") == "success")
+    fail_n = sum(1 for e in events if e.get("status") != "success")
+    return jsonify(
+        {
+            "status": "pass",
+            "task_id": tid,
+            "run_dir": str(run_dir),
+            "execution_status": execution.get("status") if isinstance(execution, dict) else "",
+            "started_at": execution.get("started_at") if isinstance(execution, dict) else "",
+            "ended_at": execution.get("ended_at") if isinstance(execution, dict) else "",
+            "total_duration_ms": total_ms,
+            "summary": {
+                "total_steps": len(events),
+                "success_steps": success_n,
+                "failed_steps": fail_n,
+            },
+            "events": events,
+        }
+    )
 
 
 @app.get("/api/task/<task_id>/validate")

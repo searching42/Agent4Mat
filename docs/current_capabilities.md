@@ -143,5 +143,5 @@ Implemented stages:
 - lightweight UI prototype smoke:
   - `ui/app.py`
   - supports full pipeline / single-step / intake / approve / resume / task artifact summary panels
-  - task inspector supports artifact preview and one-click core artifact validation
+  - task inspector supports artifact preview, timeline view, and one-click core artifact validation
   - `make ui-smoke`

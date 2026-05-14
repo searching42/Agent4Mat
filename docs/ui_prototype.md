@@ -28,7 +28,7 @@ Open: `http://127.0.0.1:8787`
 - task inspector panel:
   - reads `runs/agent/<task_id>` artifacts
   - previews `execution/task_state/decision_summary/web_evidence`
-  - supports one-click artifact preview and core validation
+  - supports one-click artifact preview, timeline, and core validation
 
 ## API endpoints
 - `GET /api/health`
@@ -39,6 +39,7 @@ Open: `http://127.0.0.1:8787`
 - `POST /api/resume`
 - `GET /api/task/<task_id>/summary`
 - `GET /api/task/<task_id>/artifact/<artifact_name>`
+- `GET /api/task/<task_id>/timeline`
 - `GET /api/task/<task_id>/validate`
 
 ## Non-goals

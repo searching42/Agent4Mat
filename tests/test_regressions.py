@@ -6032,6 +6032,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("ui-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
+        self.assertIn("scripts/summarize_experiments.py", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/archive_real_chain_baseline.py", content)
         self.assertIn("scripts/check_real_chain_release_bundle.py", content)
@@ -6043,6 +6044,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("check_real_chain_release_bundle.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --require-tar-gz", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
+        self.assertIn("experiment-summary:", content)
         self.assertIn("scripts/run_molscribe_input_smoke.sh", content)
         self.assertIn("intake-contract-guard:", content)
         self.assertIn("step-mode-guard:", content)
@@ -6063,6 +6065,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "archive_real_chain_baseline.py",
             repo_root / "scripts" / "validate_step_request_examples.py",
             repo_root / "scripts" / "check_experiment_trace.py",
+            repo_root / "scripts" / "summarize_experiments.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_real.sh",
@@ -6071,6 +6074,81 @@ class PlanProgressAssetsTests(unittest.TestCase):
         for script in expected_scripts:
             self.assertTrue(script.exists(), msg=f"missing script: {script}")
             self.assertTrue(os.access(script, os.X_OK), msg=f"script is not executable: {script}")
+
+    def test_summarize_experiments_script_outputs_aggregate_payload(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            exp_a = td_path / "runs" / "agent" / "exp_a" / "artifacts"
+            exp_b = td_path / "runs" / "agent" / "exp_b" / "artifacts"
+            exp_a.mkdir(parents=True, exist_ok=True)
+            exp_b.mkdir(parents=True, exist_ok=True)
+            (exp_a / "experiment_trace.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "exp_a",
+                        "run_label": "exp_a-1",
+                        "generated_at": "2026-05-14T01:00:00+00:00",
+                        "execution_mode": "full_pipeline",
+                        "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                        "execution_summary": {"status": "success", "record_count": 3, "failed_count": 0},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (exp_b / "experiment_trace.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "exp_b",
+                        "run_label": "exp_b-1",
+                        "generated_at": "2026-05-14T02:00:00+00:00",
+                        "execution_mode": "single_step",
+                        "model_choice": {"predictor_id": "p2", "generator_id": "g2"},
+                        "execution_summary": {"status": "failed", "record_count": 1, "failed_count": 1},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            out_json = td_path / "summary.json"
+            out_md = td_path / "summary.md"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/summarize_experiments.py",
+                    "--workspace-root",
+                    str(td_path),
+                    "--limit",
+                    "1",
+                    "--json-out",
+                    str(out_json),
+                    "--md-out",
+                    str(out_md),
+                ],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stdout + cp.stderr)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(int(payload.get("count") or 0), 2)
+            self.assertEqual(int(payload.get("limit") or 0), 1)
+            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            by_status = summary.get("by_status") if isinstance(summary.get("by_status"), dict) else {}
+            self.assertEqual(int(by_status.get("success") or 0), 1)
+            self.assertEqual(int(by_status.get("failed") or 0), 1)
+            recent = payload.get("recent") if isinstance(payload.get("recent"), list) else []
+            self.assertEqual(len(recent), 1)
+            self.assertEqual(recent[0].get("task_id"), "exp_b")
+            self.assertTrue(out_json.exists())
+            self.assertTrue(out_md.exists())
 
     def test_plan_progress_docs_exist(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

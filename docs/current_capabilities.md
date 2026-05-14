@@ -141,6 +141,10 @@ Implemented stages:
   - `scripts/check_experiment_trace.py`
   - `make experiment-trace-guard`
   - verifies full-pipeline and single-step runs both emit valid `experiment_trace` artifacts (run/logging/result)
+- experiment summary:
+  - `scripts/summarize_experiments.py`
+  - `make experiment-summary`
+  - outputs aggregated status/model/mode counters and recent run list from experiment traces
 - real-chain reproducibility baseline (3 consecutive strict runs):
   - `scripts/run_real_chain_baseline.sh`
   - `make real-chain-baseline`

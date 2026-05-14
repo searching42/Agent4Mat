@@ -47,6 +47,7 @@ Make targets:
 - `make request-templates-validate`
 - `make step-request-templates-validate`
 - `make input-smoke`
+- `make experiment-summary`
 - `make intake-contract-guard`
 - `make step-mode-guard`
 - `make web-evidence-guard`

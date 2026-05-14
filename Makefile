@@ -5,7 +5,7 @@ TASK_ID ?= make_quickstart
 RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
-.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke
+.PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke experiment-summary
 .PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard real-no-fallback-gate
 .PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run
 
@@ -19,6 +19,7 @@ help:
 	@echo "  make request-templates-validate - validate request templates against request schema"
 	@echo "  make step-request-templates-validate - validate step request templates against step_request schema"
 	@echo "  make input-smoke         - run MolScribe image/pdf input smoke acceptance"
+	@echo "  make experiment-summary  - summarize experiment trace artifacts (JSON)"
 	@echo "  make intake-contract-guard - validate task.v2 + step_request contracts"
 	@echo "  make step-mode-guard     - smoke check agent-run-step and agent-run-step-json"
 	@echo "  make web-evidence-guard  - smoke check intake web evidence artifact"
@@ -101,6 +102,9 @@ step-request-templates-validate:
 
 input-smoke:
 	@./scripts/run_molscribe_input_smoke.sh "input_smoke"
+
+experiment-summary:
+	@$(PYTHON) scripts/summarize_experiments.py --workspace-root "$(WORKSPACE_ROOT)"
 
 intake-contract-guard:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_intake_contracts.py

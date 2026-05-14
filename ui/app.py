@@ -9,12 +9,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from flask import Flask, jsonify, render_template_string, request
+from oled_agent.agent.request_contract import validate_decision_summary_payload, validate_task_state_payload
 
 
 app = Flask(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG = "scripts/adapters/real_adapters_catalog.json"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+ARTIFACT_NAME_TO_FILE = {
+    "plan": "plan.json",
+    "execution": "execution.json",
+    "tool_state": "tool_state.json",
+    "decision_summary": "decision_summary.json",
+    "task_state": "task_state.json",
+    "web_evidence": "artifacts/web_evidence.json",
+}
 
 
 HTML = """
@@ -113,6 +122,17 @@ HTML = """
         <label>Task ID</label>
         <input id=\"inspect_task_id\" value=\"ui_task_demo\" />
         <button onclick=\"inspectTask()\">Load</button>
+        <label>Artifact</label>
+        <select id=\"inspect_artifact_name\">
+          <option value=\"plan\">plan</option>
+          <option value=\"execution\">execution</option>
+          <option value=\"decision_summary\">decision_summary</option>
+          <option value=\"task_state\">task_state</option>
+          <option value=\"tool_state\">tool_state</option>
+          <option value=\"web_evidence\">web_evidence</option>
+        </select>
+        <button onclick=\"previewArtifact()\">Preview Artifact</button>
+        <button onclick=\"validateTask()\">Validate Task</button>
       </div>
 
       <div class=\"card full\">
@@ -191,6 +211,25 @@ HTML = """
         out.textContent = 'loading...';
         const taskId = document.getElementById('inspect_task_id').value;
         const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/summary`);
+        const data = await resp.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function previewArtifact() {
+        const out = document.getElementById('out');
+        out.textContent = 'loading artifact...';
+        const taskId = document.getElementById('inspect_task_id').value;
+        const artifact = document.getElementById('inspect_artifact_name').value;
+        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/artifact/${encodeURIComponent(artifact)}?max_chars=20000`);
+        const data = await resp.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function validateTask() {
+        const out = document.getElementById('out');
+        out.textContent = 'validating...';
+        const taskId = document.getElementById('inspect_task_id').value;
+        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/validate`);
         const data = await resp.json();
         out.textContent = JSON.stringify(data, null, 2);
       }
@@ -375,6 +414,13 @@ def _task_artifact_path(task_id: str, filename: str) -> Path:
     return (REPO_ROOT / "runs" / "agent" / task_id / filename).resolve()
 
 
+def _task_artifact_paths(task_id: str) -> Dict[str, Path]:
+    out: Dict[str, Path] = {}
+    for name, rel in ARTIFACT_NAME_TO_FILE.items():
+        out[name] = _task_artifact_path(task_id, rel)
+    return out
+
+
 def _load_json_if_exists(path: Path) -> Any:
     if not path.exists():
         return None
@@ -382,6 +428,65 @@ def _load_json_if_exists(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _preview_payload(payload: Any, *, artifact_name: str) -> Any:
+    if artifact_name == "execution" and isinstance(payload, dict):
+        records = payload.get("records")
+        if isinstance(records, list):
+            return {
+                "task_id": payload.get("task_id"),
+                "status": payload.get("status"),
+                "started_at": payload.get("started_at"),
+                "ended_at": payload.get("ended_at"),
+                "record_count": len(records),
+                "records_head": records[:8],
+            }
+    if artifact_name == "web_evidence" and isinstance(payload, dict):
+        results = payload.get("results")
+        if isinstance(results, list):
+            lite = dict(payload)
+            lite["results"] = results[:8]
+            lite["result_count"] = len(results)
+            return lite
+    return payload
+
+
+def _artifact_preview(*, artifact_name: str, path: Path, max_chars: int) -> Dict[str, Any]:
+    if not path.exists():
+        return {
+            "status": "missing",
+            "artifact": artifact_name,
+            "path": str(path),
+            "exists": False,
+        }
+    text = path.read_text(encoding="utf-8", errors="replace")
+    truncated = len(text) > max_chars
+    text_preview = text if not truncated else text[:max_chars]
+    payload = None
+    parse_error = ""
+    try:
+        payload = json.loads(text)
+    except Exception as exc:
+        parse_error = f"{type(exc).__name__}: {exc}"
+    return {
+        "status": "pass",
+        "artifact": artifact_name,
+        "path": str(path),
+        "exists": True,
+        "size_bytes": path.stat().st_size,
+        "truncated": truncated,
+        "text_preview": text_preview,
+        "json_preview": _preview_payload(payload, artifact_name=artifact_name) if payload is not None else None,
+        "json_parse_error": parse_error,
+    }
 
 
 def _is_safe_task_id(task_id: str) -> bool:
@@ -482,13 +587,14 @@ def api_task_summary(task_id: str):
     if not _is_safe_task_id(tid):
         return jsonify({"status": "fail", "error": "invalid task_id"}), 400
     run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    by_name = _task_artifact_paths(tid)
     artifacts = {
-        "plan_path": _task_artifact_path(tid, "plan.json"),
-        "execution_path": _task_artifact_path(tid, "execution.json"),
-        "tool_state_path": _task_artifact_path(tid, "tool_state.json"),
-        "decision_summary_path": _task_artifact_path(tid, "decision_summary.json"),
-        "task_state_path": _task_artifact_path(tid, "task_state.json"),
-        "web_evidence_path": _task_artifact_path(tid, "artifacts/web_evidence.json"),
+        "plan_path": by_name["plan"],
+        "execution_path": by_name["execution"],
+        "tool_state_path": by_name["tool_state"],
+        "decision_summary_path": by_name["decision_summary"],
+        "task_state_path": by_name["task_state"],
+        "web_evidence_path": by_name["web_evidence"],
     }
     files = {k: {"path": str(v), "exists": v.exists()} for k, v in artifacts.items()}
     execution = _load_json_if_exists(artifacts["execution_path"])
@@ -513,6 +619,86 @@ def api_task_summary(task_id: str):
                 if isinstance(web_evidence, dict) and isinstance(web_evidence.get("results"), list)
                 else []
             ),
+        }
+    )
+
+
+@app.get("/api/task/<task_id>/artifact/<artifact_name>")
+def api_task_artifact(task_id: str, artifact_name: str):
+    tid = str(task_id or "").strip()
+    name = str(artifact_name or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    if name not in ARTIFACT_NAME_TO_FILE:
+        return jsonify({"status": "fail", "error": "invalid artifact_name"}), 400
+    max_chars = max(2000, min(_as_int(request.args.get("max_chars"), 12000), 200000))
+    paths = _task_artifact_paths(tid)
+    payload = _artifact_preview(artifact_name=name, path=paths[name], max_chars=max_chars)
+    return jsonify(payload)
+
+
+@app.get("/api/task/<task_id>/validate")
+def api_task_validate(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    if not run_dir.exists():
+        return jsonify({"status": "missing", "task_id": tid, "error": "run_dir_missing"}), 200
+
+    checks: List[Dict[str, str]] = []
+    loaded: Dict[str, Any] = {}
+    required = ["plan", "execution", "tool_state", "decision_summary", "task_state"]
+    by_name = _task_artifact_paths(tid)
+
+    for name in required:
+        path = by_name[name]
+        if not path.exists():
+            checks.append({"name": name, "status": "fail", "message": f"missing file: {path}"})
+            continue
+        try:
+            loaded[name] = json.loads(path.read_text(encoding="utf-8"))
+            checks.append({"name": name, "status": "pass", "message": "json parse ok"})
+        except Exception as exc:
+            checks.append({"name": name, "status": "fail", "message": f"json parse failed: {type(exc).__name__}: {exc}"})
+
+    execution = loaded.get("execution")
+    if isinstance(execution, dict) and isinstance(execution.get("records"), list) and len(execution.get("records", [])) > 0:
+        checks.append({"name": "execution_records", "status": "pass", "message": "records list is non-empty"})
+    else:
+        checks.append({"name": "execution_records", "status": "fail", "message": "records list missing or empty"})
+
+    decision = loaded.get("decision_summary")
+    if isinstance(decision, dict):
+        try:
+            validate_decision_summary_payload(decision, REPO_ROOT)
+            checks.append({"name": "decision_summary_schema", "status": "pass", "message": "schema valid"})
+        except Exception as exc:
+            checks.append({"name": "decision_summary_schema", "status": "fail", "message": str(exc)})
+
+    task_state = loaded.get("task_state")
+    if isinstance(task_state, dict):
+        try:
+            validate_task_state_payload(task_state, REPO_ROOT)
+            checks.append({"name": "task_state_schema", "status": "pass", "message": "schema valid"})
+        except Exception as exc:
+            checks.append({"name": "task_state_schema", "status": "fail", "message": str(exc)})
+
+    pass_n = sum(1 for c in checks if c.get("status") == "pass")
+    fail_n = sum(1 for c in checks if c.get("status") == "fail")
+    overall = "pass" if fail_n == 0 else "fail"
+    return jsonify(
+        {
+            "status": overall,
+            "task_id": tid,
+            "run_dir": str(run_dir),
+            "summary": {"pass": pass_n, "fail": fail_n},
+            "checks": checks,
+            "blocking_checks": [c.get("name") for c in checks if c.get("status") == "fail"],
         }
     )
 

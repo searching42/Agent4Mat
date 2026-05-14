@@ -7213,6 +7213,64 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertEqual(payload.get("status"), "fail")
         self.assertEqual(payload.get("error"), "invalid task_id")
 
+    def test_ui_task_artifact_preview_reads_json(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_artifact_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "plan.json").write_text(
+                json.dumps({"summary": "demo", "tool_calls": [{"name": "list_models", "args": {}}]}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/artifact/plan")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("artifact"), "plan")
+            preview = payload.get("json_preview") if isinstance(payload.get("json_preview"), dict) else {}
+            self.assertEqual(preview.get("summary"), "demo")
+
+    def test_ui_task_artifact_rejects_invalid_artifact_name(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/task/ui_task_demo/artifact/not_exists")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid artifact_name")
+
+    def test_ui_task_validate_handles_missing_run_dir(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get("/api/task/ui_missing_case/validate")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "missing")
+            self.assertEqual(payload.get("error"), "run_dir_missing")
+
+    def test_ui_task_validate_fails_when_required_files_missing(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_validate_case"
+            (root / "runs" / "agent" / task_id).mkdir(parents=True, exist_ok=True)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/validate")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "fail")
+            blocking = payload.get("blocking_checks") if isinstance(payload.get("blocking_checks"), list) else []
+            self.assertIn("plan", blocking)
+            self.assertIn("execution_records", blocking)
+
     def test_ui_resume_rejects_invalid_task_id(self) -> None:
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()

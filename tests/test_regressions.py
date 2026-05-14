@@ -7288,6 +7288,57 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(len(events), 2)
             self.assertEqual(events[1].get("adapter"), "unimol_score_adapter_v1")
             self.assertEqual(events[0].get("duration_ms"), 1000)
+            lines = payload.get("timeline_lines") if isinstance(payload.get("timeline_lines"), list) else []
+            self.assertEqual(len(lines), 2)
+            self.assertIn("[PASS]", lines[0])
+
+    def test_ui_task_timeline_filters_and_sorts(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_timeline_filter_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            execution_payload = {
+                "task_id": task_id,
+                "status": "success",
+                "started_at": "2026-05-14T00:00:00+00:00",
+                "ended_at": "2026-05-14T00:00:10+00:00",
+                "records": [
+                    {
+                        "name": "search_dataset",
+                        "status": "success",
+                        "started_at": "2026-05-14T00:00:00+00:00",
+                        "ended_at": "2026-05-14T00:00:03+00:00",
+                        "result": {"status": "success"},
+                        "error": "",
+                    },
+                    {
+                        "name": "score_candidates",
+                        "status": "failed",
+                        "started_at": "2026-05-14T00:00:03+00:00",
+                        "ended_at": "2026-05-14T00:00:09+00:00",
+                        "result": {"status": "failed", "adapter": "x"},
+                        "error": "boom",
+                    },
+                ],
+            }
+            (run_dir / "execution.json").write_text(json.dumps(execution_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/timeline?tool=score&status_filter=failed&sort=duration_desc")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            self.assertEqual(summary.get("total_steps_before_filter"), 2)
+            self.assertEqual(summary.get("total_steps"), 1)
+            self.assertEqual(summary.get("failed_steps"), 1)
+            events = payload.get("events") if isinstance(payload.get("events"), list) else []
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].get("name"), "score_candidates")
+            self.assertTrue(bool(events[0].get("is_failed")))
+            self.assertEqual(events[0].get("highlight"), "fail")
 
     def test_ui_task_timeline_rejects_invalid_task_id(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -7297,6 +7348,20 @@ class UiPrototypeTests(unittest.TestCase):
         payload = resp.get_json()
         self.assertEqual(payload.get("status"), "fail")
         self.assertEqual(payload.get("error"), "invalid task_id")
+
+    def test_ui_task_timeline_rejects_invalid_filters(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/task/ui_task_demo/timeline?status_filter=weird")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid status_filter")
+        resp2 = client.get("/api/task/ui_task_demo/timeline?sort=bad")
+        self.assertEqual(resp2.status_code, 400)
+        payload2 = resp2.get_json()
+        self.assertEqual(payload2.get("status"), "fail")
+        self.assertEqual(payload2.get("error"), "invalid sort")
 
     def test_ui_task_validate_handles_missing_run_dir(self) -> None:
         ui_app_mod = self._load_ui_module()

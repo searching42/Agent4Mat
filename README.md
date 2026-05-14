@@ -201,7 +201,7 @@ UI prototype API coverage:
 - `POST /api/resume` -> `agent-resume` (idempotent task resume)
 - `GET /api/task/<task_id>/summary` -> artifact/status preview
 - `GET /api/task/<task_id>/artifact/<artifact_name>` -> artifact content preview (`plan|execution|tool_state|decision_summary|task_state|web_evidence`)
-- `GET /api/task/<task_id>/timeline` -> step timeline with duration/status/adapter summary
+- `GET /api/task/<task_id>/timeline` -> step timeline with duration/status/adapter summary (supports `tool`, `status_filter`, `sort`)
 - `GET /api/task/<task_id>/validate` -> one-click core artifact validation
 
 ## CLI commands

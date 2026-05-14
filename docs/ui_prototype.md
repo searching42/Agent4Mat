@@ -29,6 +29,7 @@ Open: `http://127.0.0.1:8787`
   - reads `runs/agent/<task_id>` artifacts
   - previews `execution/task_state/decision_summary/web_evidence`
   - supports one-click artifact preview, timeline, and core validation
+  - timeline supports failed-step highlight, tool filter, and duration sort
 
 ## API endpoints
 - `GET /api/health`
@@ -40,6 +41,7 @@ Open: `http://127.0.0.1:8787`
 - `GET /api/task/<task_id>/summary`
 - `GET /api/task/<task_id>/artifact/<artifact_name>`
 - `GET /api/task/<task_id>/timeline`
+  - query params: `tool`, `status_filter=all|failed|success`, `sort=original|duration_desc|duration_asc|name_asc`
 - `GET /api/task/<task_id>/validate`
 
 ## Non-goals

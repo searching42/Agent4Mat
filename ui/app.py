@@ -135,6 +135,21 @@ HTML = """
         <button onclick=\"previewArtifact()\">Preview Artifact</button>
         <button onclick=\"showTimeline()\">Show Timeline</button>
         <button onclick=\"validateTask()\">Validate Task</button>
+        <label>Timeline tool filter (optional)</label>
+        <input id=\"timeline_tool_filter\" value=\"\" placeholder=\"e.g. score_candidates\" />
+        <label>Timeline status filter</label>
+        <select id=\"timeline_status_filter\">
+          <option value=\"all\">all</option>
+          <option value=\"failed\">failed</option>
+          <option value=\"success\">success</option>
+        </select>
+        <label>Timeline sort</label>
+        <select id=\"timeline_sort\">
+          <option value=\"original\">original</option>
+          <option value=\"duration_desc\">duration_desc</option>
+          <option value=\"duration_asc\">duration_asc</option>
+          <option value=\"name_asc\">name_asc</option>
+        </select>
       </div>
 
       <div class=\"card full\">
@@ -231,7 +246,15 @@ HTML = """
         const out = document.getElementById('out');
         out.textContent = 'loading timeline...';
         const taskId = document.getElementById('inspect_task_id').value;
-        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/timeline`);
+        const tool = (document.getElementById('timeline_tool_filter').value || '').trim();
+        const statusFilter = document.getElementById('timeline_status_filter').value;
+        const sort = document.getElementById('timeline_sort').value;
+        const params = new URLSearchParams();
+        if (tool) params.set('tool', tool);
+        if (statusFilter) params.set('status_filter', statusFilter);
+        if (sort) params.set('sort', sort);
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const resp = await fetch(`/api/task/${encodeURIComponent(taskId)}/timeline${suffix}`);
         const data = await resp.json();
         out.textContent = JSON.stringify(data, null, 2);
       }
@@ -536,6 +559,47 @@ def _timeline_result_summary(result: Any) -> Dict[str, Any]:
     return out
 
 
+def _filter_timeline_events(*, events: List[Dict[str, Any]], tool_filter: str, status_filter: str) -> List[Dict[str, Any]]:
+    out = list(events)
+    tf = str(tool_filter or "").strip().lower()
+    sf = str(status_filter or "all").strip().lower()
+    if tf:
+        out = [e for e in out if tf in str(e.get("name") or "").lower()]
+    if sf == "failed":
+        out = [e for e in out if bool(e.get("is_failed"))]
+    elif sf == "success":
+        out = [e for e in out if not bool(e.get("is_failed"))]
+    return out
+
+
+def _sort_timeline_events(*, events: List[Dict[str, Any]], sort_key: str) -> List[Dict[str, Any]]:
+    key = str(sort_key or "original").strip().lower()
+    out = list(events)
+    if key == "duration_desc":
+        out.sort(key=lambda e: int(e.get("duration_ms") or -1), reverse=True)
+        return out
+    if key == "duration_asc":
+        out.sort(key=lambda e: int(e.get("duration_ms") or 10**15))
+        return out
+    if key == "name_asc":
+        out.sort(key=lambda e: str(e.get("name") or ""))
+        return out
+    return out
+
+
+def _timeline_line(event: Dict[str, Any]) -> str:
+    idx = int(event.get("index") or 0)
+    name = str(event.get("name") or "")
+    status = str(event.get("status") or "")
+    dur = event.get("duration_ms")
+    dur_text = f"{dur}ms" if isinstance(dur, int) and dur >= 0 else "n/a"
+    adapter = str(event.get("adapter") or "")
+    marker = "[FAIL]" if bool(event.get("is_failed")) else "[PASS]"
+    if adapter:
+        return f"{idx:02d} {marker} {name} status={status} duration={dur_text} adapter={adapter}"
+    return f"{idx:02d} {marker} {name} status={status} duration={dur_text}"
+
+
 def _is_safe_task_id(task_id: str) -> bool:
     tid = str(task_id or "").strip()
     if not tid:
@@ -693,6 +757,13 @@ def api_task_timeline(task_id: str):
         return jsonify({"status": "fail", "error": "missing task_id"}), 400
     if not _is_safe_task_id(tid):
         return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    tool_filter = str(request.args.get("tool") or "").strip()
+    status_filter = str(request.args.get("status_filter") or "all").strip().lower()
+    sort = str(request.args.get("sort") or "original").strip().lower()
+    if status_filter not in {"all", "failed", "success"}:
+        return jsonify({"status": "fail", "error": "invalid status_filter"}), 400
+    if sort not in {"original", "duration_desc", "duration_asc", "name_asc"}:
+        return jsonify({"status": "fail", "error": "invalid sort"}), 400
     run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
     if not run_dir.exists():
         return jsonify({"status": "missing", "task_id": tid, "error": "run_dir_missing"}), 200
@@ -719,14 +790,20 @@ def api_task_timeline(task_id: str):
             "duration_ms": _duration_ms(rec.get("started_at"), rec.get("ended_at")),
             "error": str(rec.get("error") or ""),
             "result_summary": _timeline_result_summary(result),
+            "is_failed": str(rec.get("status") or "") != "success",
         }
         if isinstance(result, dict) and result.get("adapter"):
             event["adapter"] = result.get("adapter")
+        event["highlight"] = "fail" if bool(event.get("is_failed")) else "normal"
         events.append(event)
 
+    filtered = _filter_timeline_events(events=events, tool_filter=tool_filter, status_filter=status_filter)
+    sorted_events = _sort_timeline_events(events=filtered, sort_key=sort)
+    timeline_lines = [_timeline_line(e) for e in sorted_events]
+
     total_ms = _duration_ms(execution.get("started_at"), execution.get("ended_at")) if isinstance(execution, dict) else None
-    success_n = sum(1 for e in events if e.get("status") == "success")
-    fail_n = sum(1 for e in events if e.get("status") != "success")
+    success_n = sum(1 for e in sorted_events if not bool(e.get("is_failed")))
+    fail_n = sum(1 for e in sorted_events if bool(e.get("is_failed")))
     return jsonify(
         {
             "status": "pass",
@@ -737,11 +814,16 @@ def api_task_timeline(task_id: str):
             "ended_at": execution.get("ended_at") if isinstance(execution, dict) else "",
             "total_duration_ms": total_ms,
             "summary": {
-                "total_steps": len(events),
+                "total_steps_before_filter": len(events),
+                "total_steps": len(sorted_events),
                 "success_steps": success_n,
                 "failed_steps": fail_n,
+                "tool_filter": tool_filter,
+                "status_filter": status_filter,
+                "sort": sort,
             },
-            "events": events,
+            "events": sorted_events,
+            "timeline_lines": timeline_lines,
         }
     )
 

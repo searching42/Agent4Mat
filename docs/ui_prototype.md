@@ -34,6 +34,8 @@ Open: `http://127.0.0.1:8787`
   - supports recent-task picker (quick fill for inspect/compare task ids)
   - supports run-to-run compare (`task_id` vs `other_task_id`) with key deltas (records/failures/adapters/duration/evidence)
   - supports artifact key-path diff (`decision_summary/task_state/plan/...`)
+- experiments quick panel:
+  - list `experiment_trace` records with filters (`prefix/predictor/generator/status/execution_mode`)
 
 ## API endpoints
 - `GET /api/health`

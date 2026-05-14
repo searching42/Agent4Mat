@@ -179,6 +179,24 @@ HTML = """
 
       <div class=\"card full\">
         <h2>Result</h2>
+        <label>Experiments prefix (optional)</label>
+        <input id=\"exp_prefix\" value=\"\" placeholder=\"task id prefix\" />
+        <label>Experiments predictor_id (optional)</label>
+        <input id=\"exp_predictor\" value=\"\" placeholder=\"e.g. unimol_lambda_plqy_v1\" />
+        <label>Experiments generator_id (optional)</label>
+        <input id=\"exp_generator\" value=\"\" placeholder=\"e.g. reinvent4_lambda_em_v2\" />
+        <label>Experiments status</label>
+        <select id=\"exp_status\">
+          <option value=\"\">(all)</option>
+          <option value=\"success\">success</option>
+          <option value=\"failed\">failed</option>
+        </select>
+        <label>Experiments mode</label>
+        <select id=\"exp_mode\">
+          <option value=\"\">(all)</option>
+          <option value=\"full_pipeline\">full_pipeline</option>
+          <option value=\"single_step\">single_step</option>
+        </select>
         <button onclick=\"listExperiments()\">List Experiments</button>
         <pre id=\"out\">(waiting)</pre>
       </div>
@@ -373,7 +391,19 @@ HTML = """
       async function listExperiments() {
         const out = document.getElementById('out');
         out.textContent = 'loading experiments...';
-        const resp = await fetch('/api/experiments?limit=120');
+        const params = new URLSearchParams();
+        params.set('limit', '120');
+        const prefix = (document.getElementById('exp_prefix').value || '').trim();
+        const predictor = (document.getElementById('exp_predictor').value || '').trim();
+        const generator = (document.getElementById('exp_generator').value || '').trim();
+        const status = document.getElementById('exp_status').value || '';
+        const mode = document.getElementById('exp_mode').value || '';
+        if (prefix) params.set('prefix', prefix);
+        if (predictor) params.set('predictor_id', predictor);
+        if (generator) params.set('generator_id', generator);
+        if (status) params.set('status', status);
+        if (mode) params.set('execution_mode', mode);
+        const resp = await fetch(`/api/experiments?${params.toString()}`);
         const data = await resp.json();
         out.textContent = JSON.stringify(data, null, 2);
       }

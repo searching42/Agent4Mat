@@ -7382,6 +7382,52 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertTrue(path.exists())
                 self.assertIn("runs/ui_sessions/uploads/ui_upload_case", str(path))
 
+    def test_ui_project_export_import_roundtrip(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={"project_id": "ui_proj_export_src", "title": "src", "options": {"planner_provider": "rule_based_v1"}},
+                )
+                client.post(
+                    "/api/projects/ui_proj_export_src/upload-ref",
+                    json={"path": "/tmp/src.csv", "label": "src_path", "kind": "path_ref"},
+                )
+                exp_resp = client.get("/api/projects/ui_proj_export_src/export")
+                self.assertEqual(exp_resp.status_code, 200)
+                exp_payload = exp_resp.get_json()
+                self.assertEqual(exp_payload.get("status"), "pass")
+                project_blob = exp_payload.get("project") if isinstance(exp_payload.get("project"), dict) else {}
+                self.assertEqual(project_blob.get("project_id"), "ui_proj_export_src")
+
+                import_resp = client.post(
+                    "/api/projects/import",
+                    json={"project": project_blob, "project_id": "ui_proj_export_dst", "override": False},
+                )
+                self.assertEqual(import_resp.status_code, 200)
+                imported = import_resp.get_json()
+                self.assertEqual(imported.get("status"), "pass")
+                proj_summary = imported.get("project") if isinstance(imported.get("project"), dict) else {}
+                self.assertEqual(proj_summary.get("project_id"), "ui_proj_export_dst")
+
+                hist_resp = client.get("/api/projects/ui_proj_export_dst/history")
+                self.assertEqual(hist_resp.status_code, 200)
+                hist_payload = hist_resp.get_json()
+                self.assertEqual(hist_payload.get("status"), "pass")
+                attachments = hist_payload.get("attachments") if isinstance(hist_payload.get("attachments"), list) else []
+                self.assertGreaterEqual(len(attachments), 1)
+
+                conflict_resp = client.post(
+                    "/api/projects/import",
+                    json={"project": project_blob, "project_id": "ui_proj_export_dst", "override": False},
+                )
+                self.assertEqual(conflict_resp.status_code, 409)
+                conflict_payload = conflict_resp.get_json()
+                self.assertEqual(conflict_payload.get("error"), "project_exists")
+
     def test_ui_chat_send_need_user_input_path(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

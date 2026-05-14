@@ -36,6 +36,8 @@ Open: `http://127.0.0.1:8787`
 - project/chat/session:
   - `GET /api/projects`
   - `POST /api/projects`
+  - `GET /api/projects/<project_id>/export`
+  - `POST /api/projects/import`
   - `GET /api/projects/<project_id>/history`
   - `POST /api/projects/<project_id>/upload-ref`
   - `POST /api/chat/send`

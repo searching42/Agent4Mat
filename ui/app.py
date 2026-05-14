@@ -270,6 +270,17 @@ HTML = """
           <div>updated_at: <span id=\"project_updated_at\">-</span></div>
           <div>session_file: <span id=\"project_file\">-</span></div>
         </div>
+
+        <div class=\"tool-box\">
+          <h3>Project Import/Export</h3>
+          <div class=\"btn-row\">
+            <button onclick=\"exportProject()\">Export Project JSON</button>
+            <button onclick=\"importProject(false)\">Import JSON</button>
+            <button onclick=\"importProject(true)\">Import JSON (override)</button>
+          </div>
+          <label>Import JSON payload</label>
+          <textarea id=\"project_import_json\" rows=\"6\" placeholder='{"project": {...}}'></textarea>
+        </div>
       </section>
 
       <section class=\"panel chat-wrap\">
@@ -612,6 +623,45 @@ HTML = """
           state.project = project;
           renderProjectMeta(project);
           renderPendingInput(project.pending_input || null);
+        }
+        await refreshProjects();
+        await loadHistory();
+      }
+
+      async function exportProject() {
+        const pid = selectedProjectId();
+        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/export`);
+        renderJsonOut(r.data);
+        if (r.data && r.data.project) {
+          document.getElementById('project_import_json').value = JSON.stringify({project: r.data.project}, null, 2);
+        }
+      }
+
+      async function importProject(override) {
+        const text = String(document.getElementById('project_import_json').value || '').trim();
+        if (!text) {
+          renderJsonOut({status: 'fail', error: 'empty import json'});
+          return;
+        }
+        let payload = null;
+        try {
+          payload = JSON.parse(text);
+        } catch (e) {
+          renderJsonOut({status: 'fail', error: `invalid import json: ${String(e)}`});
+          return;
+        }
+        const r = await apiPost('/api/projects/import', {
+          project: (payload && typeof payload === 'object' && payload.project && typeof payload.project === 'object')
+            ? payload.project
+            : payload,
+          project_id: selectedProjectId(),
+          override: Boolean(override),
+        });
+        renderJsonOut(r.data);
+        if (r.data && r.data.project) {
+          state.project = r.data.project;
+          renderProjectMeta(r.data.project);
+          renderPendingInput(r.data.project.pending_input || null);
         }
         await refreshProjects();
         await loadHistory();
@@ -1590,6 +1640,51 @@ def _save_project_state(project: Dict[str, Any]) -> Dict[str, Any]:
     return project
 
 
+def _normalize_import_project(raw: Dict[str, Any], *, project_id: str) -> Dict[str, Any]:
+    base = _new_project_state(project_id, title=str(raw.get("title") or project_id), options=raw.get("options") if isinstance(raw.get("options"), dict) else {})
+    if str(raw.get("created_at") or "").strip():
+        base["created_at"] = str(raw.get("created_at"))
+    for key in ("current_task_id", "task_draft_path", "task_json_path", "request_path"):
+        base[key] = str(raw.get(key) or "")
+    if isinstance(raw.get("last_runtime"), dict):
+        base["last_runtime"] = dict(raw.get("last_runtime") or {})
+    if isinstance(raw.get("pending_input"), dict):
+        base["pending_input"] = dict(raw.get("pending_input") or {})
+    if isinstance(raw.get("attachments"), list):
+        cleaned_attachments: List[Dict[str, Any]] = []
+        for item in raw.get("attachments") or []:
+            if not isinstance(item, dict):
+                continue
+            cleaned_attachments.append(
+                {
+                    "id": str(item.get("id") or str(uuid.uuid4())),
+                    "kind": str(item.get("kind") or "path_ref"),
+                    "label": str(item.get("label") or ""),
+                    "name": str(item.get("name") or ""),
+                    "path": str(item.get("path") or ""),
+                    "created_at": str(item.get("created_at") or _now_iso()),
+                }
+            )
+        base["attachments"] = cleaned_attachments[-120:]
+    if isinstance(raw.get("messages"), list):
+        cleaned_messages: List[Dict[str, Any]] = []
+        for item in raw.get("messages") or []:
+            if not isinstance(item, dict):
+                continue
+            cleaned_messages.append(
+                {
+                    "id": str(item.get("id") or str(uuid.uuid4())),
+                    "role": str(item.get("role") or "system"),
+                    "kind": str(item.get("kind") or "text"),
+                    "content": str(item.get("content") or ""),
+                    "created_at": str(item.get("created_at") or _now_iso()),
+                    "meta": item.get("meta") if isinstance(item.get("meta"), dict) else {},
+                }
+            )
+        base["messages"] = cleaned_messages[-MAX_PROJECT_HISTORY:]
+    return base
+
+
 def _append_message(
     project: Dict[str, Any],
     *,
@@ -2229,6 +2324,40 @@ def api_project_history(project_id: str):
             "attachments": project.get("attachments") if isinstance(project.get("attachments"), list) else [],
         }
     )
+
+
+@app.get("/api/projects/<project_id>/export")
+def api_project_export(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    return jsonify({"status": "pass", "project": project, "project_summary": _project_summary(project)})
+
+
+@app.post("/api/projects/import")
+def api_project_import():
+    body = request.get_json(silent=True) or {}
+    raw_project = body.get("project")
+    if not isinstance(raw_project, dict):
+        return jsonify({"status": "fail", "error": "missing project object"}), 400
+    target_id = str(body.get("project_id") or raw_project.get("project_id") or "").strip()
+    if not target_id:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(target_id):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    override = bool(body.get("override"))
+    existing = _load_project_state(target_id)
+    if isinstance(existing, dict) and not override:
+        return jsonify({"status": "fail", "error": "project_exists", "project_id": target_id}), 409
+    normalized = _normalize_import_project(raw_project, project_id=target_id)
+    normalized["project_id"] = target_id
+    saved = _save_project_state(normalized)
+    return jsonify({"status": "pass", "project": _project_summary(saved), "messages": _recent_messages(saved)})
 
 
 @app.post("/api/projects/<project_id>/upload-ref")

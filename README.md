@@ -198,6 +198,8 @@ Open: `http://127.0.0.1:8787`
 UI prototype API coverage:
 - `GET /api/projects` -> list persisted chat projects
 - `POST /api/projects` -> create/update one project session
+- `GET /api/projects/<project_id>/export` -> export full project session JSON
+- `POST /api/projects/import` -> import session JSON into target project id
 - `GET /api/projects/<project_id>/history` -> chat history + attachments
 - `POST /api/projects/<project_id>/upload-ref` -> register local file path or upload copy
 - `POST /api/chat/send` -> chat orchestration (`intake -> approve -> run`) + step-mode command (`/step ...`)

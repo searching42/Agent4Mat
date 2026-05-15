@@ -7362,6 +7362,28 @@ class UiPrototypeTests(unittest.TestCase):
                 attachments = hist.get("attachments") if isinstance(hist.get("attachments"), list) else []
                 self.assertEqual(len(attachments), 1)
 
+    def test_ui_project_history_roundtrip_preserves_project_identity(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                create_resp = client.post(
+                    "/api/projects",
+                    json={"project_id": "ui_proj_switch", "title": "switch target"},
+                )
+                self.assertEqual(create_resp.status_code, 200)
+                created = create_resp.get_json()
+                self.assertEqual(created.get("status"), "pass")
+
+                hist_resp = client.get("/api/projects/ui_proj_switch/history?limit=20")
+                self.assertEqual(hist_resp.status_code, 200)
+                hist = hist_resp.get_json()
+                self.assertEqual(hist.get("status"), "pass")
+                proj = hist.get("project") if isinstance(hist.get("project"), dict) else {}
+                self.assertEqual(proj.get("project_id"), "ui_proj_switch")
+                self.assertEqual(proj.get("title"), "switch target")
+
     def test_ui_projects_summary_includes_runtime_health_from_current_task(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

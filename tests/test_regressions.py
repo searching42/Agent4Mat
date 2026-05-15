@@ -7520,6 +7520,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("persistBatchPayload(", html)
         self.assertIn("loadBatchHistory()", html)
         self.assertIn("replayLatestBatchAction()", html)
+        self.assertIn("viewBatchExportById()", html)
+        self.assertIn("replayBatchExportById()", html)
+        self.assertIn("deleteBatchExportById()", html)
+        self.assertIn("batch_export_id", html)
         self.assertIn("session_batch_limit", html)
         self.assertIn("project_batch_history_summary", html)
         self.assertIn("project_batch_history", html)
@@ -7555,6 +7559,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("/batch-export", html)
         self.assertIn("/batch-exports", html)
         self.assertIn("/batch-exports/replay-latest", html)
+        self.assertIn("/batch-exports/${encodeURIComponent(eid)}", html)
+        self.assertIn("/batch-exports/${encodeURIComponent(eid)}/replay", html)
         self.assertIn("Summary", html)
         self.assertIn("showProjectSummary(", html)
         self.assertIn("Validate", html)
@@ -7692,6 +7698,24 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(listed.get("status"), "pass")
                 exports = listed.get("exports") if isinstance(listed.get("exports"), list) else []
                 self.assertGreaterEqual(len(exports), 1)
+                export_id = str(exports[0].get("export_id") or "")
+                self.assertTrue(export_id)
+
+                detail_resp = client.get(f"/api/projects/ui_proj_batch/batch-exports/{export_id}")
+                self.assertEqual(detail_resp.status_code, 200)
+                detail_payload = detail_resp.get_json()
+                self.assertEqual(detail_payload.get("status"), "pass")
+                detail_entry = detail_payload.get("batch_export") if isinstance(detail_payload.get("batch_export"), dict) else {}
+                self.assertEqual(str(detail_entry.get("export_id") or ""), export_id)
+
+                replay_by_id_resp = client.post(f"/api/projects/ui_proj_batch/batch-exports/{export_id}/replay", json={})
+                self.assertEqual(replay_by_id_resp.status_code, 200)
+                replay_by_id_payload = replay_by_id_resp.get_json()
+                self.assertEqual(replay_by_id_payload.get("status"), "pass")
+                replay_by_id_entry = replay_by_id_payload.get("batch_export") if isinstance(replay_by_id_payload.get("batch_export"), dict) else {}
+                self.assertEqual(replay_by_id_payload.get("source_export_id"), export_id)
+                replay_by_id_path = Path(str(replay_by_id_entry.get("path") or ""))
+                self.assertTrue(replay_by_id_path.exists())
 
                 replay_resp = client.post("/api/projects/ui_proj_batch/batch-exports/replay-latest", json={})
                 self.assertEqual(replay_resp.status_code, 200)
@@ -7701,6 +7725,14 @@ class UiPrototypeTests(unittest.TestCase):
                 replay_path = Path(str(replay_entry.get("path") or ""))
                 self.assertTrue(replay_path.exists())
                 self.assertEqual(replayed.get("action"), "batch_summary")
+
+                delete_resp = client.delete(f"/api/projects/ui_proj_batch/batch-exports/{export_id}")
+                self.assertEqual(delete_resp.status_code, 200)
+                delete_payload = delete_resp.get_json()
+                self.assertEqual(delete_payload.get("status"), "pass")
+
+                detail_after_delete = client.get(f"/api/projects/ui_proj_batch/batch-exports/{export_id}")
+                self.assertEqual(detail_after_delete.status_code, 404)
 
     def test_ui_chat_send_need_user_input_path(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -43,6 +43,7 @@ Open: `http://127.0.0.1:8787`
   - batch actions are persisted to `runs/ui_sessions/exports/<project_id>/` via API
   - supports batch history panel (`Load Batch History`) with latest export summary
   - supports `Replay Latest Batch` to rerun latest exported batch action (`batch_summary` / `batch_validate` / `batch_retry_failed`)
+  - supports export-id actions: `View Export By ID`, `Replay Export By ID`, `Delete Export By ID`
   - session card provides quick `Summary` and `Validate` actions for current task
   - runtime health now includes `success_ratio` and `recent_duration_ms` for smarter priority sorting
   - session file: `runs/ui_sessions/projects/<project_id>.json`
@@ -85,6 +86,9 @@ Open: `http://127.0.0.1:8787`
   - `POST /api/projects/<project_id>/batch-export`
   - `GET /api/projects/<project_id>/batch-exports`
   - `POST /api/projects/<project_id>/batch-exports/replay-latest`
+  - `GET /api/projects/<project_id>/batch-exports/<export_id>`
+  - `POST /api/projects/<project_id>/batch-exports/<export_id>/replay`
+  - `DELETE /api/projects/<project_id>/batch-exports/<export_id>`
   - `POST /api/chat/send`
 - existing execution and inspector APIs:
   - `GET /api/health`

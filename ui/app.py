@@ -631,7 +631,11 @@ HTML = """
           <div class=\"btn-row\" style=\"margin: 0 0 6px 0;\">
             <button type=\"button\" onclick=\"loadBatchHistory()\">Load Batch History</button>
             <button type=\"button\" onclick=\"replayLatestBatchAction()\">Replay Latest Batch</button>
+            <button type=\"button\" onclick=\"viewBatchExportById()\">View Export By ID</button>
+            <button type=\"button\" onclick=\"replayBatchExportById()\">Replay Export By ID</button>
+            <button type=\"button\" onclick=\"deleteBatchExportById()\">Delete Export By ID</button>
           </div>
+          <input id=\"batch_export_id\" placeholder=\"batch export id\" />
           <div class=\"project-board-summary\" id=\"project_batch_history_summary\">batch_history: -</div>
           <pre id=\"project_batch_history\" style=\"margin: 0 0 8px 0; max-height: 180px; overflow: auto;\">(none)</pre>
           <div class=\"project-session-list\" id=\"project_session_list\">
@@ -859,6 +863,7 @@ HTML = """
         pendingInput: null,
         promptHistory: [],
         projects: [],
+        batchHistory: [],
         sessionBoard: {
           filterText: '',
           health: 'all',
@@ -1563,6 +1568,12 @@ HTML = """
         return {status: resp.status, data};
       }
 
+      async function apiDelete(url) {
+        const resp = await fetch(url, {method: 'DELETE'});
+        const data = await resp.json();
+        return {status: resp.status, data};
+      }
+
       function selectedProjectId() {
         const v = (document.getElementById('project_id').value || '').trim();
         return v || 'demo_chat_project';
@@ -1990,8 +2001,10 @@ HTML = """
         }
         const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports?limit=20`);
         const items = Array.isArray(r.data && r.data.exports) ? r.data.exports : [];
+        state.batchHistory = items;
         const head = document.getElementById('project_batch_history_summary');
         const box = document.getElementById('project_batch_history');
+        const exportIdEle = document.getElementById('batch_export_id');
         if (head) {
           const latest = items.length > 0 ? items[0] : null;
           head.textContent = latest
@@ -2001,7 +2014,19 @@ HTML = """
         if (box) {
           box.textContent = items.length > 0 ? JSON.stringify(items.slice(0, 20), null, 2) : '(none)';
         }
+        if (exportIdEle && items.length > 0) {
+          const current = String(exportIdEle.value || '').trim();
+          if (!current) {
+            exportIdEle.value = String(items[0].export_id || '');
+          }
+        }
         return r;
+      }
+
+      function readBatchExportId() {
+        const ele = document.getElementById('batch_export_id');
+        const eid = String((ele && ele.value) || '').trim();
+        return eid;
       }
 
       async function replayLatestBatchAction() {
@@ -2014,6 +2039,54 @@ HTML = """
         renderJsonOut(r.data);
         await loadBatchHistory();
         await refreshProjects();
+      }
+
+      async function viewBatchExportById() {
+        const pid = selectedProjectId();
+        const eid = readBatchExportId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!eid) {
+          renderJsonOut({status: 'fail', error: 'missing export_id'});
+          return;
+        }
+        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports/${encodeURIComponent(eid)}`);
+        renderJsonOut(r.data);
+      }
+
+      async function replayBatchExportById() {
+        const pid = selectedProjectId();
+        const eid = readBatchExportId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!eid) {
+          renderJsonOut({status: 'fail', error: 'missing export_id'});
+          return;
+        }
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/batch-exports/${encodeURIComponent(eid)}/replay`, {});
+        renderJsonOut(r.data);
+        await loadBatchHistory();
+        await refreshProjects();
+      }
+
+      async function deleteBatchExportById() {
+        const pid = selectedProjectId();
+        const eid = readBatchExportId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!eid) {
+          renderJsonOut({status: 'fail', error: 'missing export_id'});
+          return;
+        }
+        const r = await apiDelete(`/api/projects/${encodeURIComponent(pid)}/batch-exports/${encodeURIComponent(eid)}`);
+        renderJsonOut(r.data);
+        await loadBatchHistory();
       }
 
       function attachSessionCard(parent, row, pinnedIds, activeId) {
@@ -3801,6 +3874,17 @@ def _is_safe_project_id(project_id: str) -> bool:
     return _is_safe_task_id(project_id)
 
 
+def _is_safe_export_id(export_id: str) -> bool:
+    eid = str(export_id or "").strip()
+    if not eid:
+        return False
+    if not TASK_ID_PATTERN.fullmatch(eid):
+        return False
+    if ".." in eid or "/" in eid or "\\" in eid:
+        return False
+    return True
+
+
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -4043,6 +4127,32 @@ def _batch_export_entry_path(project_id: str, export_id: str) -> Path:
     return (_ui_batch_exports_root(project_id) / f"{safe_export_id}.json").resolve()
 
 
+def _load_batch_export_entry(project_id: str, export_id: str) -> Optional[Dict[str, Any]]:
+    if not _is_safe_project_id(project_id) or not _is_safe_export_id(export_id):
+        return None
+    path = _batch_export_entry_path(project_id, export_id)
+    payload = _load_json_if_exists(path)
+    if not isinstance(payload, dict):
+        return None
+    payload["path"] = str(path)
+    payload["export_id"] = str(payload.get("export_id") or export_id)
+    payload["project_id"] = str(payload.get("project_id") or project_id)
+    return payload
+
+
+def _delete_batch_export_entry(project_id: str, export_id: str) -> bool:
+    if not _is_safe_project_id(project_id) or not _is_safe_export_id(export_id):
+        return False
+    path = _batch_export_entry_path(project_id, export_id)
+    if not path.exists():
+        return False
+    try:
+        path.unlink()
+        return True
+    except Exception:
+        return False
+
+
 def _list_batch_export_entries(project_id: str, *, limit: int = 20) -> List[Dict[str, Any]]:
     root = _ui_batch_exports_root(project_id)
     rows: List[Dict[str, Any]] = []
@@ -4100,6 +4210,122 @@ def _extract_response_json_and_status(resp: Any) -> Tuple[int, Dict[str, Any]]:
     if not isinstance(data, dict):
         data = {}
     return status, data
+
+
+def _replay_batch_export_payload(
+    *,
+    project_id: str,
+    payload: Dict[str, Any],
+    source_export_id: str,
+) -> Dict[str, Any]:
+    source_batch = payload.get("batch_result") if isinstance(payload.get("batch_result"), dict) else payload
+    action = str(source_batch.get("action") or "").strip()
+    rows = source_batch.get("rows") if isinstance(source_batch.get("rows"), list) else []
+    replay_limit = max(1, min(_as_int(source_batch.get("limit"), len(rows) if rows else 5), 20))
+    replay_rows = rows[:replay_limit]
+    if not replay_rows:
+        derived: List[Dict[str, Any]] = []
+        results = source_batch.get("results") if isinstance(source_batch.get("results"), list) else []
+        retries = source_batch.get("retries") if isinstance(source_batch.get("retries"), list) else []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            tid = str(item.get("task_id") or "").strip()
+            if tid:
+                derived.append({"task_id": tid, "project_id": str(item.get("project_id") or project_id)})
+        for item in retries:
+            if not isinstance(item, dict):
+                continue
+            tid = str(item.get("task_id") or "").strip()
+            if tid:
+                derived.append(
+                    {
+                        "task_id": tid,
+                        "project_id": str(item.get("project_id") or project_id),
+                        "latest_failed_step": str(item.get("failed_tool_name") or ""),
+                    }
+                )
+        replay_rows = derived[:replay_limit]
+
+    replay_results: List[Dict[str, Any]] = []
+    if action == "batch_summary":
+        for row in replay_rows:
+            if not isinstance(row, dict):
+                continue
+            tid = str(row.get("task_id") or "").strip()
+            if not _is_safe_task_id(tid):
+                replay_results.append({"task_id": tid, "status": "skipped", "reason": "invalid_task_id"})
+                continue
+            status_code, data = _extract_response_json_and_status(api_task_summary(tid))
+            replay_results.append({"task_id": tid, "http_status": status_code, "data": data})
+        out: Dict[str, Any] = {
+            "status": "pass",
+            "action": "batch_summary",
+            "limit": replay_limit,
+            "count": len(replay_results),
+            "rows": replay_rows,
+            "results": replay_results,
+            "replayed_from_export_id": source_export_id,
+            "created_at": _now_iso(),
+        }
+        return out
+
+    if action == "batch_validate":
+        for row in replay_rows:
+            if not isinstance(row, dict):
+                continue
+            tid = str(row.get("task_id") or "").strip()
+            if not _is_safe_task_id(tid):
+                replay_results.append({"task_id": tid, "status": "skipped", "reason": "invalid_task_id"})
+                continue
+            status_code, data = _extract_response_json_and_status(api_task_validate(tid))
+            replay_results.append({"task_id": tid, "http_status": status_code, "data": data})
+        return {
+            "status": "pass",
+            "action": "batch_validate",
+            "limit": replay_limit,
+            "count": len(replay_results),
+            "rows": replay_rows,
+            "results": replay_results,
+            "replayed_from_export_id": source_export_id,
+            "created_at": _now_iso(),
+        }
+
+    if action == "batch_retry_failed":
+        for row in replay_rows:
+            if not isinstance(row, dict):
+                continue
+            tid = str(row.get("task_id") or "").strip()
+            failed_step = str(row.get("latest_failed_step") or "").strip()
+            if not _is_safe_task_id(tid):
+                replay_results.append({"task_id": tid, "status": "skipped", "reason": "invalid_task_id"})
+                continue
+            with app.test_request_context(
+                f"/api/task/{tid}/retry-failed-step",
+                method="POST",
+                json={"failed_tool_name": failed_step, "catalog_path": DEFAULT_CATALOG},
+            ):
+                status_code, data = _extract_response_json_and_status(api_task_retry_failed_step(tid))
+            replay_results.append(
+                {
+                    "task_id": tid,
+                    "failed_tool_name": failed_step,
+                    "http_status": status_code,
+                    "data": data,
+                }
+            )
+        return {
+            "status": "pass",
+            "action": "batch_retry_failed",
+            "limit": replay_limit,
+            "count": len(replay_results),
+            "rows": replay_rows,
+            "retries": replay_results,
+            "replayed_from_export_id": source_export_id,
+            "created_at": _now_iso(),
+        }
+
+    return {"status": "fail", "error": "unsupported_batch_export_action", "action": action}
 
 
 def _normalize_import_project(raw: Dict[str, Any], *, project_id: str) -> Dict[str, Any]:
@@ -4940,117 +5166,82 @@ def api_project_batch_exports_replay_latest(project_id: str):
     if not exports:
         return jsonify({"status": "missing", "error": "no_batch_export", "project_id": pid}), 200
     latest = exports[0]
-    path = Path(str(latest.get("path") or "")).resolve()
-    payload = _load_json_if_exists(path)
+    export_id = str(latest.get("export_id") or "").strip()
+    payload = _load_batch_export_entry(pid, export_id)
     if not isinstance(payload, dict):
-        return jsonify({"status": "fail", "error": "invalid_batch_export", "path": str(path)}), 200
-    source_batch = payload.get("batch_result") if isinstance(payload.get("batch_result"), dict) else payload
-    action = str(source_batch.get("action") or "").strip()
-    rows = source_batch.get("rows") if isinstance(source_batch.get("rows"), list) else []
-    replay_limit = max(1, min(_as_int(source_batch.get("limit"), len(rows) if rows else 5), 20))
-    replay_rows = rows[:replay_limit]
-    if not replay_rows:
-        derived: List[Dict[str, Any]] = []
-        results = source_batch.get("results") if isinstance(source_batch.get("results"), list) else []
-        retries = source_batch.get("retries") if isinstance(source_batch.get("retries"), list) else []
-        for item in results:
-            if not isinstance(item, dict):
-                continue
-            tid = str(item.get("task_id") or "").strip()
-            if tid:
-                derived.append({"task_id": tid, "project_id": str(item.get("project_id") or pid)})
-        for item in retries:
-            if not isinstance(item, dict):
-                continue
-            tid = str(item.get("task_id") or "").strip()
-            if tid:
-                derived.append(
-                    {
-                        "task_id": tid,
-                        "project_id": str(item.get("project_id") or pid),
-                        "latest_failed_step": str(item.get("failed_tool_name") or ""),
-                    }
-                )
-        replay_rows = derived[:replay_limit]
+        return jsonify({"status": "fail", "error": "invalid_batch_export", "project_id": pid, "export_id": export_id}), 200
+    out = _replay_batch_export_payload(project_id=pid, payload=payload, source_export_id=str(payload.get("export_id") or export_id))
+    if str(out.get("status") or "") != "pass":
+        return jsonify(out), 200
+    replay_entry = _save_batch_export_entry(
+        pid,
+        {
+            **out,
+            "replayed_at": _now_iso(),
+            "source_export_id": str(payload.get("export_id") or export_id),
+        },
+    )
+    return jsonify(
+        {
+            "status": "pass",
+            "project_id": pid,
+            "source": latest,
+            "batch_export": replay_entry,
+            "action": str(out.get("action") or ""),
+        }
+    )
 
-    replay_results: List[Dict[str, Any]] = []
-    if action == "batch_summary":
-        for row in replay_rows:
-            if not isinstance(row, dict):
-                continue
-            tid = str(row.get("task_id") or "").strip()
-            if not _is_safe_task_id(tid):
-                replay_results.append({"task_id": tid, "status": "skipped", "reason": "invalid_task_id"})
-                continue
-            status_code, data = _extract_response_json_and_status(api_task_summary(tid))
-            replay_results.append({"task_id": tid, "http_status": status_code, "data": data})
-        out: Dict[str, Any] = {
-            "status": "pass",
-            "action": "batch_summary",
-            "limit": replay_limit,
-            "count": len(replay_results),
-            "rows": replay_rows,
-            "results": replay_results,
-            "replayed_from_export_id": str(payload.get("export_id") or ""),
-            "created_at": _now_iso(),
-        }
-    elif action == "batch_validate":
-        for row in replay_rows:
-            if not isinstance(row, dict):
-                continue
-            tid = str(row.get("task_id") or "").strip()
-            if not _is_safe_task_id(tid):
-                replay_results.append({"task_id": tid, "status": "skipped", "reason": "invalid_task_id"})
-                continue
-            status_code, data = _extract_response_json_and_status(api_task_validate(tid))
-            replay_results.append({"task_id": tid, "http_status": status_code, "data": data})
-        out = {
-            "status": "pass",
-            "action": "batch_validate",
-            "limit": replay_limit,
-            "count": len(replay_results),
-            "rows": replay_rows,
-            "results": replay_results,
-            "replayed_from_export_id": str(payload.get("export_id") or ""),
-            "created_at": _now_iso(),
-        }
-    elif action == "batch_retry_failed":
-        for row in replay_rows:
-            if not isinstance(row, dict):
-                continue
-            tid = str(row.get("task_id") or "").strip()
-            failed_step = str(row.get("latest_failed_step") or "").strip()
-            if not _is_safe_task_id(tid):
-                replay_results.append({"task_id": tid, "status": "skipped", "reason": "invalid_task_id"})
-                continue
-            with app.test_request_context(
-                f"/api/task/{tid}/retry-failed-step",
-                method="POST",
-                json={"failed_tool_name": failed_step, "catalog_path": DEFAULT_CATALOG},
-            ):
-                status_code, data = _extract_response_json_and_status(api_task_retry_failed_step(tid))
-            replay_results.append(
-                {
-                    "task_id": tid,
-                    "failed_tool_name": failed_step,
-                    "http_status": status_code,
-                    "data": data,
-                }
-            )
-        out = {
-            "status": "pass",
-            "action": "batch_retry_failed",
-            "limit": replay_limit,
-            "count": len(replay_results),
-            "rows": replay_rows,
-            "retries": replay_results,
-            "replayed_from_export_id": str(payload.get("export_id") or ""),
-            "created_at": _now_iso(),
-        }
-    else:
-        return jsonify({"status": "fail", "error": "unsupported_batch_export_action", "action": action}), 200
-    replay_entry = _save_batch_export_entry(pid, {**out, "replayed_at": _now_iso(), "source_export_id": str(payload.get("export_id") or "")})
-    return jsonify({"status": "pass", "project_id": pid, "source": latest, "batch_export": replay_entry, "action": action})
+
+@app.get("/api/projects/<project_id>/batch-exports/<export_id>")
+def api_project_batch_export_detail(project_id: str, export_id: str):
+    pid = str(project_id or "").strip()
+    eid = str(export_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    if not _is_safe_export_id(eid):
+        return jsonify({"status": "fail", "error": "invalid export_id"}), 400
+    payload = _load_batch_export_entry(pid, eid)
+    if not isinstance(payload, dict):
+        return jsonify({"status": "missing", "error": "batch_export_not_found", "project_id": pid, "export_id": eid}), 404
+    return jsonify({"status": "pass", "project_id": pid, "export_id": eid, "batch_export": payload})
+
+
+@app.post("/api/projects/<project_id>/batch-exports/<export_id>/replay")
+def api_project_batch_export_replay(project_id: str, export_id: str):
+    pid = str(project_id or "").strip()
+    eid = str(export_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    if not _is_safe_export_id(eid):
+        return jsonify({"status": "fail", "error": "invalid export_id"}), 400
+    payload = _load_batch_export_entry(pid, eid)
+    if not isinstance(payload, dict):
+        return jsonify({"status": "missing", "error": "batch_export_not_found", "project_id": pid, "export_id": eid}), 404
+    out = _replay_batch_export_payload(project_id=pid, payload=payload, source_export_id=eid)
+    if str(out.get("status") or "") != "pass":
+        return jsonify(out), 200
+    replay_entry = _save_batch_export_entry(pid, {**out, "replayed_at": _now_iso(), "source_export_id": eid})
+    return jsonify({"status": "pass", "project_id": pid, "source_export_id": eid, "batch_export": replay_entry, "action": str(out.get("action") or "")})
+
+
+@app.delete("/api/projects/<project_id>/batch-exports/<export_id>")
+def api_project_batch_export_delete(project_id: str, export_id: str):
+    pid = str(project_id or "").strip()
+    eid = str(export_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    if not _is_safe_export_id(eid):
+        return jsonify({"status": "fail", "error": "invalid export_id"}), 400
+    deleted = _delete_batch_export_entry(pid, eid)
+    if not deleted:
+        return jsonify({"status": "missing", "error": "batch_export_not_found", "project_id": pid, "export_id": eid}), 404
+    return jsonify({"status": "pass", "project_id": pid, "export_id": eid, "deleted": True})
 
 
 @app.post("/api/chat/send")

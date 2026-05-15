@@ -7520,6 +7520,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("persistBatchPayload(", html)
         self.assertIn("loadBatchHistory()", html)
         self.assertIn("replayLatestBatchAction()", html)
+        self.assertIn("replayFailedLatestBatchAction()", html)
         self.assertIn("readBatchHistoryControls()", html)
         self.assertIn("resetBatchHistoryOffsetAndReload()", html)
         self.assertIn("prevBatchHistoryPage()", html)
@@ -7527,15 +7528,24 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("renderBatchHistoryList(", html)
         self.assertIn("viewBatchExportById()", html)
         self.assertIn("replayBatchExportById()", html)
+        self.assertIn("replayFailedBatchExportById()", html)
         self.assertIn("deleteBatchExportById()", html)
         self.assertIn("compareBatchExportsById()", html)
         self.assertIn("downloadBatchExportById('json')", html)
         self.assertIn("downloadBatchExportById('csv')", html)
         self.assertIn("readBatchCompareExportId()", html)
         self.assertIn("readBatchReplayOptions()", html)
+        self.assertIn("renderBatchHistoryMetrics(", html)
+        self.assertIn("applyReplayPreset('safe')", html)
+        self.assertIn("applyReplayPreset('fast')", html)
+        self.assertIn("applyReplayPreset('dryrun')", html)
+        self.assertIn("saveReplayDefaultsToProject()", html)
+        self.assertIn("applyBatchReplayOptions(", html)
+        self.assertIn("batch_replay_defaults", html)
         self.assertIn("batch_export_id", html)
         self.assertIn("batch_export_compare_id", html)
         self.assertIn("batch_replay_dry_run", html)
+        self.assertIn("batch_replay_failed_only", html)
         self.assertIn("batch_replay_retry_max", html)
         self.assertIn("batch_replay_retry_backoff_ms", html)
         self.assertIn("batch_replay_max_concurrency", html)
@@ -7545,6 +7555,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("batch_history_offset", html)
         self.assertIn("session_batch_limit", html)
         self.assertIn("project_batch_history_summary", html)
+        self.assertIn("project_batch_history_metrics", html)
         self.assertIn("project_batch_history", html)
         self.assertIn("project_batch_history_list", html)
         self.assertIn("clearSessionBoardControls()", html)
@@ -7585,6 +7596,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("/batch-exports/${encodeURIComponent(eid)}/download", html)
         self.assertIn("/batch-exports/${encodeURIComponent(eid)}/replay", html)
         self.assertIn("options: readBatchReplayOptions()", html)
+        self.assertIn("readBatchReplayOptions(true)", html)
         self.assertIn("Summary", html)
         self.assertIn("showProjectSummary(", html)
         self.assertIn("Validate", html)
@@ -7634,6 +7646,10 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(exp_payload.get("status"), "pass")
                 project_blob = exp_payload.get("project") if isinstance(exp_payload.get("project"), dict) else {}
                 self.assertEqual(project_blob.get("project_id"), "ui_proj_export_src")
+                src_options = project_blob.get("options") if isinstance(project_blob.get("options"), dict) else {}
+                replay_defaults = src_options.get("batch_replay_defaults") if isinstance(src_options.get("batch_replay_defaults"), dict) else {}
+                self.assertIn("dry_run", replay_defaults)
+                self.assertIn("failed_only", replay_defaults)
 
                 import_resp = client.post(
                     "/api/projects/import",
@@ -7700,10 +7716,26 @@ class UiPrototypeTests(unittest.TestCase):
                         "payload": {
                             "status": "pass",
                             "action": "batch_summary",
-                            "limit": 1,
-                            "count": 1,
-                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
-                            "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "limit": 2,
+                            "count": 2,
+                            "rows": [
+                                {"task_id": task_id, "project_id": "ui_proj_batch"},
+                                {"task_id": "ui_proj_batch_missing", "project_id": "ui_proj_batch"},
+                            ],
+                            "results": [
+                                {
+                                    "task_id": task_id,
+                                    "project_id": "ui_proj_batch",
+                                    "http_status": 200,
+                                    "data": {"status": "pass"},
+                                },
+                                {
+                                    "task_id": "ui_proj_batch_missing",
+                                    "project_id": "ui_proj_batch",
+                                    "http_status": 404,
+                                    "data": {"status": "missing"},
+                                },
+                            ],
                             "created_at": "2026-05-15T10:00:00+08:00",
                         }
                     },
@@ -7827,7 +7859,7 @@ class UiPrototypeTests(unittest.TestCase):
 
                 replay_by_id_resp = client.post(
                     f"/api/projects/ui_proj_batch/batch-exports/{export_id}/replay",
-                    json={"options": {"dry_run": True, "retry_max": 2, "retry_backoff_ms": 10, "max_concurrency": 3}},
+                    json={"options": {"dry_run": True, "failed_only": True, "retry_max": 2, "retry_backoff_ms": 10, "max_concurrency": 3}},
                 )
                 self.assertEqual(replay_by_id_resp.status_code, 200)
                 replay_by_id_payload = replay_by_id_resp.get_json()
@@ -7839,9 +7871,14 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertTrue(replay_by_id_path.exists())
                 replay_options = replay_by_id_entry.get("replay_options") if isinstance(replay_by_id_entry.get("replay_options"), dict) else {}
                 self.assertEqual(bool(replay_options.get("dry_run")), True)
+                self.assertEqual(bool(replay_options.get("failed_only")), True)
                 replay_metrics = replay_by_id_entry.get("replay_metrics") if isinstance(replay_by_id_entry.get("replay_metrics"), dict) else {}
                 self.assertGreaterEqual(int(replay_metrics.get("dry_run_count") or 0), 1)
                 self.assertEqual(int(replay_metrics.get("max_concurrency_requested") or 0), 3)
+                self.assertEqual(int(replay_metrics.get("failed_only") or 0), 1)
+                self.assertGreaterEqual(int(replay_metrics.get("failed_source_count") or 0), 1)
+                self.assertEqual(int(replay_metrics.get("base_rows_count") or 0), 2)
+                self.assertEqual(int(replay_metrics.get("effective_rows_count") or 0), 1)
 
                 replay_resp = client.post(
                     "/api/projects/ui_proj_batch/batch-exports/replay-latest",

@@ -666,8 +666,10 @@ HTML = """
           <div class=\"btn-row\" style=\"margin: 0 0 6px 0;\">
             <button type=\"button\" onclick=\"loadBatchHistory()\">Load Batch History</button>
             <button type=\"button\" onclick=\"replayLatestBatchAction()\">Replay Latest Batch</button>
+            <button type=\"button\" onclick=\"replayFailedLatestBatchAction()\">Replay Failed Latest</button>
             <button type=\"button\" onclick=\"viewBatchExportById()\">View Export By ID</button>
             <button type=\"button\" onclick=\"replayBatchExportById()\">Replay Export By ID</button>
+            <button type=\"button\" onclick=\"replayFailedBatchExportById()\">Replay Failed By ID</button>
             <button type=\"button\" onclick=\"deleteBatchExportById()\">Delete Export By ID</button>
             <button type=\"button\" onclick=\"compareBatchExportsById()\">Compare Export IDs</button>
             <button type=\"button\" onclick=\"downloadBatchExportById('json')\">Download Export JSON</button>
@@ -677,6 +679,7 @@ HTML = """
           <input id=\"batch_export_compare_id\" placeholder=\"compare export id\" />
           <div class=\"project-batch-history-controls\">
             <label><input id=\"batch_replay_dry_run\" type=\"checkbox\" /> replay dry-run</label>
+            <label><input id=\"batch_replay_failed_only\" type=\"checkbox\" /> replay failed-only</label>
             <select id=\"batch_replay_retry_max\">
               <option value=\"0\" selected>retry max: 0</option>
               <option value=\"1\">retry max: 1</option>
@@ -685,6 +688,10 @@ HTML = """
             </select>
             <input id=\"batch_replay_retry_backoff_ms\" type=\"number\" min=\"0\" max=\"5000\" step=\"50\" value=\"150\" placeholder=\"retry backoff ms\" />
             <input id=\"batch_replay_max_concurrency\" type=\"number\" min=\"1\" max=\"8\" step=\"1\" value=\"2\" placeholder=\"max concurrency\" />
+            <button type=\"button\" onclick=\"applyReplayPreset('safe')\">Preset Safe</button>
+            <button type=\"button\" onclick=\"applyReplayPreset('fast')\">Preset Fast</button>
+            <button type=\"button\" onclick=\"applyReplayPreset('dryrun')\">Preset DryRun</button>
+            <button type=\"button\" onclick=\"saveReplayDefaultsToProject()\">Save Replay Defaults</button>
           </div>
           <div class=\"project-batch-history-controls\">
             <select id=\"batch_history_action_filter\" onchange=\"resetBatchHistoryOffsetAndReload()\">
@@ -709,6 +716,7 @@ HTML = """
             <button type=\"button\" onclick=\"nextBatchHistoryPage()\">Next Page</button>
           </div>
           <div class=\"project-board-summary\" id=\"project_batch_history_summary\">batch_history: -</div>
+          <div class=\"project-board-summary\" id=\"project_batch_history_metrics\">batch_metrics: -</div>
           <div id=\"project_batch_history_list\" class=\"project-batch-history-list\"><div class=\"muted\">(none)</div></div>
           <pre id=\"project_batch_history\" style=\"margin: 0 0 8px 0; max-height: 120px; overflow: auto;\">(none)</pre>
           <div class=\"project-session-list\" id=\"project_session_list\">
@@ -1547,6 +1555,54 @@ HTML = """
         if (Object.prototype.hasOwnProperty.call(opts, 'web_topk')) {
           document.getElementById('web_topk').value = String(opts.web_topk);
         }
+        if (opts.batch_replay_defaults && typeof opts.batch_replay_defaults === 'object') {
+          applyBatchReplayOptions(opts.batch_replay_defaults);
+        }
+      }
+
+      function applyBatchReplayOptions(raw) {
+        const opts = (raw && typeof raw === 'object') ? raw : {};
+        const retryMaxRaw = Number(opts.retry_max || 0);
+        const retryMax = Number.isFinite(retryMaxRaw) ? Math.max(0, Math.min(3, Math.floor(retryMaxRaw))) : 0;
+        const backoffRaw = Number(opts.retry_backoff_ms || 150);
+        const retryBackoffMs = Number.isFinite(backoffRaw) ? Math.max(0, Math.min(5000, Math.floor(backoffRaw))) : 150;
+        const concurrencyRaw = Number(opts.max_concurrency || 2);
+        const maxConcurrency = Number.isFinite(concurrencyRaw) ? Math.max(1, Math.min(8, Math.floor(concurrencyRaw))) : 2;
+        const dryRun = Boolean(opts.dry_run);
+        const failedOnly = Boolean(opts.failed_only);
+
+        const dryEle = document.getElementById('batch_replay_dry_run');
+        if (dryEle) dryEle.checked = dryRun;
+        const failedEle = document.getElementById('batch_replay_failed_only');
+        if (failedEle) failedEle.checked = failedOnly;
+        const retryEle = document.getElementById('batch_replay_retry_max');
+        if (retryEle) retryEle.value = String(retryMax);
+        const backoffEle = document.getElementById('batch_replay_retry_backoff_ms');
+        if (backoffEle) backoffEle.value = String(retryBackoffMs);
+        const concurrencyEle = document.getElementById('batch_replay_max_concurrency');
+        if (concurrencyEle) concurrencyEle.value = String(maxConcurrency);
+      }
+
+      function replayPresetOptions(mode) {
+        const m = String(mode || '').trim().toLowerCase();
+        if (m === 'fast') {
+          return {dry_run: false, failed_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 6};
+        }
+        if (m === 'dryrun') {
+          return {dry_run: true, failed_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 1};
+        }
+        return {dry_run: false, failed_only: false, retry_max: 2, retry_backoff_ms: 200, max_concurrency: 2};
+      }
+
+      function applyReplayPreset(mode) {
+        const opts = replayPresetOptions(mode);
+        applyBatchReplayOptions(opts);
+        renderJsonOut({status: 'pass', action: 'apply_replay_preset', preset: String(mode || 'safe'), replay_options: readBatchReplayOptions()});
+      }
+
+      async function saveReplayDefaultsToProject() {
+        await saveProject();
+        renderJsonOut({status: 'pass', action: 'save_replay_defaults', replay_options: readBatchReplayOptions()});
       }
 
       function renderProjectMeta(project) {
@@ -1756,6 +1812,7 @@ HTML = """
           catalog_path: catalog,
           web_search_enabled: Boolean(webEnabled),
           web_topk: Number.isFinite(webTopk) ? webTopk : 5,
+          batch_replay_defaults: readBatchReplayOptions(),
         };
       }
 
@@ -2186,6 +2243,7 @@ HTML = """
         if (box) {
           box.textContent = items.length > 0 ? JSON.stringify(items.slice(0, 20), null, 2) : '(none)';
         }
+        renderBatchHistoryMetrics(items);
         renderBatchHistoryList(items);
         if (exportIdEle && items.length > 0) {
           const current = String(exportIdEle.value || '').trim();
@@ -2216,8 +2274,9 @@ HTML = """
         return eid;
       }
 
-      function readBatchReplayOptions() {
+      function readBatchReplayOptions(forceFailedOnly) {
         const dryRun = Boolean(document.getElementById('batch_replay_dry_run').checked);
+        const failedOnlyRaw = Boolean(document.getElementById('batch_replay_failed_only').checked);
         const retryMaxRaw = Number(document.getElementById('batch_replay_retry_max').value || 0);
         const retryMax = Number.isFinite(retryMaxRaw) ? Math.max(0, Math.min(3, Math.floor(retryMaxRaw))) : 0;
         const backoffRaw = Number(document.getElementById('batch_replay_retry_backoff_ms').value || 150);
@@ -2226,10 +2285,49 @@ HTML = """
         const maxConcurrency = Number.isFinite(concurrencyRaw) ? Math.max(1, Math.min(8, Math.floor(concurrencyRaw))) : 1;
         return {
           dry_run: dryRun,
+          failed_only: Boolean(forceFailedOnly) ? true : failedOnlyRaw,
           retry_max: retryMax,
           retry_backoff_ms: retryBackoffMs,
           max_concurrency: maxConcurrency,
         };
+      }
+
+      function renderBatchHistoryMetrics(items) {
+        const box = document.getElementById('project_batch_history_metrics');
+        if (!box) return;
+        const rows = Array.isArray(items) ? items : [];
+        if (rows.length < 1) {
+          box.textContent = 'batch_metrics: shown=0';
+          return;
+        }
+        let passN = 0;
+        let partialN = 0;
+        let failN = 0;
+        let totalElapsedMs = 0;
+        let elapsedCnt = 0;
+        let okN = 0;
+        let errN = 0;
+        let skippedN = 0;
+        let dryN = 0;
+        for (const row of rows) {
+          if (!row || typeof row !== 'object') continue;
+          const st = String(row.status || '').trim().toLowerCase();
+          if (st === 'pass') passN += 1;
+          else if (st === 'partial') partialN += 1;
+          else if (st === 'fail') failN += 1;
+          const m = (row.replay_metrics && typeof row.replay_metrics === 'object') ? row.replay_metrics : {};
+          const elapsed = Number(m.elapsed_ms || 0);
+          if (Number.isFinite(elapsed) && elapsed > 0) {
+            totalElapsedMs += elapsed;
+            elapsedCnt += 1;
+          }
+          okN += Number(m.ok_count || 0);
+          errN += Number(m.fail_count || 0);
+          skippedN += Number(m.skipped_count || 0);
+          dryN += Number(m.dry_run_count || 0);
+        }
+        const avgElapsedMs = elapsedCnt > 0 ? Math.round(totalElapsedMs / elapsedCnt) : 0;
+        box.textContent = `batch_metrics: shown=${rows.length} | pass=${passN} partial=${partialN} fail=${failN} | replay(ok/fail/skipped/dry)=${okN}/${errN}/${skippedN}/${dryN} | avg_elapsed_ms=${avgElapsedMs}`;
       }
 
       async function compareBatchExportsById() {
@@ -2278,6 +2376,18 @@ HTML = """
         await refreshProjects();
       }
 
+      async function replayFailedLatestBatchAction() {
+        const pid = selectedProjectId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/batch-exports/replay-latest`, {options: readBatchReplayOptions(true)});
+        renderJsonOut(r.data);
+        await loadBatchHistory();
+        await refreshProjects();
+      }
+
       async function viewBatchExportById() {
         const pid = selectedProjectId();
         const eid = readBatchExportId();
@@ -2305,6 +2415,23 @@ HTML = """
           return;
         }
         const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/batch-exports/${encodeURIComponent(eid)}/replay`, {options: readBatchReplayOptions()});
+        renderJsonOut(r.data);
+        await loadBatchHistory();
+        await refreshProjects();
+      }
+
+      async function replayFailedBatchExportById() {
+        const pid = selectedProjectId();
+        const eid = readBatchExportId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!eid) {
+          renderJsonOut({status: 'fail', error: 'missing export_id'});
+          return;
+        }
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/batch-exports/${encodeURIComponent(eid)}/replay`, {options: readBatchReplayOptions(true)});
         renderJsonOut(r.data);
         await loadBatchHistory();
         await refreshProjects();
@@ -4167,11 +4294,13 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     web_enabled = bool(options.get("web_search_enabled", True))
     web_topk = _as_int(options.get("web_topk"), 5)
     web_topk = max(1, min(web_topk, 20))
+    batch_replay_defaults = _normalize_batch_replay_options(options.get("batch_replay_defaults"))
     return {
         "planner_provider": planner,
         "catalog_path": catalog,
         "web_search_enabled": web_enabled,
         "web_topk": web_topk,
+        "batch_replay_defaults": batch_replay_defaults,
     }
 
 
@@ -4423,6 +4552,7 @@ def _list_batch_export_entries(
                 "replay_metrics": replay_metrics,
                 "replay_options": {
                     "dry_run": bool(replay_options.get("dry_run")),
+                    "failed_only": bool(replay_options.get("failed_only")),
                     "retry_max": _as_int(replay_options.get("retry_max"), 0),
                     "retry_backoff_ms": _as_int(replay_options.get("retry_backoff_ms"), 0),
                     "max_concurrency": _as_int(replay_options.get("max_concurrency"), 1),
@@ -4604,10 +4734,67 @@ def _normalize_batch_replay_options(raw: Any) -> Dict[str, Any]:
     max_concurrency = max(1, min(_as_int(body.get("max_concurrency"), 2), 8))
     return {
         "dry_run": bool(body.get("dry_run")),
+        "failed_only": bool(body.get("failed_only")),
         "retry_max": retry_max,
         "retry_backoff_ms": retry_backoff_ms,
         "max_concurrency": max_concurrency,
     }
+
+
+def _row_item_has_failure(item: Dict[str, Any]) -> bool:
+    status_text = str(item.get("status") or "").strip().lower()
+    if status_text in {"fail", "failed", "error", "missing"}:
+        return True
+    http_status = _as_int(item.get("http_status"), 0)
+    if http_status >= 400:
+        return True
+    data = item.get("data")
+    if isinstance(data, dict):
+        data_status = str(data.get("status") or "").strip().lower()
+        if data_status in {"fail", "failed", "error", "missing"}:
+            return True
+    return False
+
+
+def _filter_failed_only_replay_rows(
+    *,
+    action: str,
+    rows: List[Dict[str, Any]],
+    source_batch: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], int]:
+    failed_task_ids: set[str] = set()
+    failed_task_steps: set[Tuple[str, str]] = set()
+    for bucket_name in ("results", "retries"):
+        bucket = source_batch.get(bucket_name)
+        if not isinstance(bucket, list):
+            continue
+        for item in bucket:
+            if not isinstance(item, dict):
+                continue
+            if not _row_item_has_failure(item):
+                continue
+            tid = str(item.get("task_id") or "").strip()
+            if not tid:
+                continue
+            failed_task_ids.add(tid)
+            failed_step = str(item.get("failed_tool_name") or item.get("latest_failed_step") or "").strip()
+            if failed_step:
+                failed_task_steps.add((tid, failed_step))
+
+    picked: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tid = str(row.get("task_id") or "").strip()
+        if not tid:
+            continue
+        failed_step = str(row.get("failed_tool_name") or row.get("latest_failed_step") or "").strip()
+        if (tid in failed_task_ids) or (failed_step and (tid, failed_step) in failed_task_steps):
+            picked.append(row)
+
+    if not picked and action == "batch_retry_failed":
+        picked = [row for row in rows if isinstance(row, dict) and str(row.get("latest_failed_step") or row.get("failed_tool_name") or "").strip()]
+    return picked, len(failed_task_ids)
 
 
 def _classify_batch_replay_response(status_code: int, data: Dict[str, Any]) -> Tuple[str, str]:
@@ -4767,7 +4954,8 @@ def _replay_batch_export_payload(
     rows = source_batch.get("rows") if isinstance(source_batch.get("rows"), list) else []
     replay_limit = max(1, min(_as_int(source_batch.get("limit"), len(rows) if rows else 5), 20))
     options = _normalize_batch_replay_options(replay_options)
-    replay_rows = rows[:replay_limit]
+    base_rows: List[Dict[str, Any]] = rows[:replay_limit]
+    replay_rows = list(base_rows)
     if not replay_rows:
         derived: List[Dict[str, Any]] = []
         results = source_batch.get("results") if isinstance(source_batch.get("results"), list) else []
@@ -4790,10 +4978,15 @@ def _replay_batch_export_payload(
                         "latest_failed_step": str(item.get("failed_tool_name") or ""),
                     }
                 )
-        replay_rows = derived[:replay_limit]
+        base_rows = derived[:replay_limit]
+        replay_rows = list(base_rows)
 
     if action not in {"batch_summary", "batch_validate", "batch_retry_failed"}:
         return {"status": "fail", "error": "unsupported_batch_export_action", "action": action}
+
+    failed_source_count = 0
+    if bool(options.get("failed_only")):
+        replay_rows, failed_source_count = _filter_failed_only_replay_rows(action=action, rows=replay_rows, source_batch=source_batch)
 
     started = time.perf_counter()
     replay_results: List[Dict[str, Any]] = []
@@ -4837,6 +5030,10 @@ def _replay_batch_export_payload(
         options=options,
         applied_concurrency=applied_concurrency,
     )
+    replay_metrics["base_rows_count"] = len(base_rows)
+    replay_metrics["effective_rows_count"] = len(replay_rows)
+    replay_metrics["failed_source_count"] = int(failed_source_count)
+    replay_metrics["failed_only"] = bool(options.get("failed_only"))
     top_status = "pass" if int(replay_metrics.get("fail_count") or 0) < 1 else "partial"
     out = {
         "status": top_status,

@@ -43,13 +43,16 @@ Open: `http://127.0.0.1:8787`
   - batch actions are persisted to `runs/ui_sessions/exports/<project_id>/` via API
   - supports batch history panel (`Load Batch History`) with latest export summary
   - batch history supports filter by action/status and paging (`limit/offset`, prev/next)
+  - batch history includes aggregate metrics bar (`pass/partial/fail`, replay ok/fail/skipped/dry, avg elapsed)
   - batch history list items support one-click `Use ID` to fill `batch_export_id`
   - batch history list items support one-click `Use As Compare` to fill `batch_export_compare_id`
   - supports `Replay Latest Batch` to rerun latest exported batch action (`batch_summary` / `batch_validate` / `batch_retry_failed`)
+  - supports `Replay Failed Latest` / `Replay Failed By ID` (`failed_only=true`) to only replay previously failed rows
   - supports export-id actions: `View Export By ID`, `Replay Export By ID`, `Delete Export By ID`
   - supports export-id compare (`Compare Export IDs`) with JSON path-level diff summary
   - supports export-id download (`Download Export JSON` / `Download Export CSV`)
-  - replay supports governance controls: `dry_run`, `retry_max`, `retry_backoff_ms`, `max_concurrency`
+  - replay supports governance controls: `dry_run`, `failed_only`, `retry_max`, `retry_backoff_ms`, `max_concurrency`
+  - replay preset shortcuts: `Preset Safe`, `Preset Fast`, `Preset DryRun`, and project-level `Save Replay Defaults`
   - replay results persist `replay_metrics` (`ok/fail/skipped/dry_run`, attempts, elapsed_ms, failed_task_ids)
   - session card provides quick `Summary` and `Validate` actions for current task
   - runtime health now includes `success_ratio` and `recent_duration_ms` for smarter priority sorting
@@ -94,7 +97,7 @@ Open: `http://127.0.0.1:8787`
   - `GET /api/projects/<project_id>/batch-exports` (`limit`, `offset`, `action`, `status=pass|partial|fail`)
   - `GET /api/projects/<project_id>/batch-exports/compare` (`primary_export_id`, `other_export_id`)
   - `POST /api/projects/<project_id>/batch-exports/replay-latest`
-    - body supports `{ "options": { "dry_run": bool, "retry_max": 0..3, "retry_backoff_ms": 0..5000, "max_concurrency": 1..8 } }`
+    - body supports `{ "options": { "dry_run": bool, "failed_only": bool, "retry_max": 0..3, "retry_backoff_ms": 0..5000, "max_concurrency": 1..8 } }`
   - `GET /api/projects/<project_id>/batch-exports/<export_id>`
   - `GET /api/projects/<project_id>/batch-exports/<export_id>/download` (`format=json|csv`)
   - `POST /api/projects/<project_id>/batch-exports/<export_id>/replay`

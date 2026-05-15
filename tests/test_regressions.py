@@ -6264,6 +6264,19 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("release_evidence.json", content)
         self.assertIn("release_evidence.md", content)
 
+    def test_oled_agent_ci_has_manual_ui_freeze_acceptance_job(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("run_ui_freeze_acceptance:", content)
+        self.assertIn("ui-freeze-acceptance:", content)
+        self.assertIn("acceptance ui-freeze (manual)", content)
+        self.assertIn("github.event.inputs.run_ui_freeze_acceptance == 'true'", content)
+        self.assertIn("Run ui-freeze acceptance", content)
+        self.assertIn("make ui-freeze-acceptance WORKSPACE_ROOT=.", content)
+        self.assertIn("ui-freeze-acceptance-artifacts", content)
+        self.assertIn("runs/ci/ui_freeze_acceptance.json", content)
+
     def test_oled_agent_ci_validates_structured_reports_schema(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)
@@ -6343,10 +6356,13 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("real-chain-baseline-archive-tgz:", content)
         self.assertIn("real-chain-release-bundle-check:", content)
         self.assertIn("real-chain-evidence:", content)
+        self.assertIn("ui-freeze-acceptance:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/summarize_experiments.py", content)
+        self.assertIn("scripts/check_ui_freeze_acceptance.py", content)
+        self.assertIn("configs/acceptance/ui_freeze_acceptance_baseline.json", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/archive_real_chain_baseline.py", content)
         self.assertIn("scripts/check_real_chain_release_bundle.py", content)
@@ -6379,6 +6395,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "archive_real_chain_baseline.py",
             repo_root / "scripts" / "validate_step_request_examples.py",
             repo_root / "scripts" / "check_experiment_trace.py",
+            repo_root / "scripts" / "check_ui_freeze_acceptance.py",
             repo_root / "scripts" / "summarize_experiments.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
@@ -6388,6 +6405,22 @@ class PlanProgressAssetsTests(unittest.TestCase):
         for script in expected_scripts:
             self.assertTrue(script.exists(), msg=f"missing script: {script}")
             self.assertTrue(os.access(script, os.X_OK), msg=f"script is not executable: {script}")
+
+    def test_ui_freeze_acceptance_baseline_exists_and_has_required_checks(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        baseline_path = repo_root / "configs" / "acceptance" / "ui_freeze_acceptance_baseline.json"
+        self.assertTrue(baseline_path.exists(), msg=f"missing baseline: {baseline_path}")
+        payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+        self.assertEqual(str(payload.get("schema_version") or ""), "1.0")
+        rows = payload.get("required_checks")
+        self.assertTrue(isinstance(rows, list) and len(rows) >= 6)
+        names = [str(row.get("name") or "") for row in rows if isinstance(row, dict)]
+        self.assertIn("full_pipeline_mock", names)
+        self.assertIn("single_step_mock", names)
+        self.assertIn("project_clone", names)
+        self.assertIn("snapshot_roundtrip", names)
+        self.assertIn("read_only_lock", names)
+        self.assertIn("bundle_download", names)
 
     def test_summarize_experiments_script_outputs_aggregate_payload(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -7032,6 +7065,37 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(payload.get("status"), "pass")
             self.assertEqual(payload.get("baseline_status"), "pass")
             self.assertEqual(payload.get("archive_status"), "pass")
+
+    def test_check_ui_freeze_acceptance_script_smoke(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            out_path = td_path / "ui_freeze_acceptance.json"
+            script = repo_root / "scripts" / "check_ui_freeze_acceptance.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(repo_root),
+                    "--out",
+                    str(out_path),
+                    "--baseline",
+                    "configs/acceptance/ui_freeze_acceptance_baseline.json",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(int(payload.get("check_count") or 0), 6)
+            self.assertEqual(int(payload.get("failed_count") or 0), 0)
+            self.assertEqual(payload.get("missing_required_checks"), [])
+            self.assertEqual(payload.get("mismatched_required_checks"), [])
+            self.assertTrue(out_path.exists())
 
 
 class ModelCatalogTests(unittest.TestCase):

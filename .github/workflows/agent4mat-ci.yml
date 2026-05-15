@@ -15,6 +15,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      run_ui_freeze_acceptance:
+        description: "Run UI freeze acceptance job"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
   push:
   pull_request:
 
@@ -407,3 +413,30 @@ jobs:
             runs/agent/ci_real_chain_manual/acceptance_result.json
             runs/agent/ci_real_chain_manual/external_debug.json
           if-no-files-found: ignore
+
+  ui-freeze-acceptance:
+    name: acceptance ui-freeze (manual)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_ui_freeze_acceptance == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install CPU profile
+        run: ./scripts/install_profile.sh cpu
+
+      - name: Run ui-freeze acceptance
+        run: make ui-freeze-acceptance WORKSPACE_ROOT=.
+
+      - name: Upload ui-freeze acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-freeze-acceptance-artifacts
+          path: runs/ci/ui_freeze_acceptance.json
+          if-no-files-found: warn

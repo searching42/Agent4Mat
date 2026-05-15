@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "required_checks": [
+    {"name": "full_pipeline_mock", "status": "pass"},
+    {"name": "single_step_mock", "status": "pass"},
+    {"name": "project_clone", "status": "pass"},
+    {"name": "snapshot_roundtrip", "status": "pass"},
+    {"name": "read_only_lock", "status": "pass"},
+    {"name": "bundle_download", "status": "pass"}
+  ]
+}

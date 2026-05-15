@@ -6,7 +6,7 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke experiment-summary
-.PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard real-no-fallback-gate
+.PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard real-no-fallback-gate ui-freeze-acceptance
 .PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run
 
 help:
@@ -25,6 +25,7 @@ help:
 	@echo "  make web-evidence-guard  - smoke check intake web evidence artifact"
 	@echo "  make experiment-trace-guard - verify experiment trace artifacts for full/step modes"
 	@echo "  make real-no-fallback-gate - run require-real-adapters acceptance smoke"
+	@echo "  make ui-freeze-acceptance - run frozen UI acceptance chain checks + baseline contract"
 	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"
 	@echo "  make real-chain-acceptance-real - run non-stub real-chain acceptance (requires real env)"
 	@echo "  make real-chain-baseline   - run strict real-chain acceptance repeatedly (default x3)"
@@ -120,6 +121,9 @@ experiment-trace-guard:
 
 real-no-fallback-gate:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_real_no_fallback.py
+
+ui-freeze-acceptance:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_freeze_acceptance.py --workspace-root "$(WORKSPACE_ROOT)" --out "runs/ci/ui_freeze_acceptance.json" --baseline "configs/acceptance/ui_freeze_acceptance_baseline.json"
 
 real-chain-acceptance:
 	@./scripts/run_real_chain_acceptance_minimal.sh "$(WORKSPACE_ROOT)" "$(TASK_ID)"

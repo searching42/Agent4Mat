@@ -197,6 +197,12 @@ HTML = """
         font-size: 0.72rem;
         width: auto;
       }
+      .project-board-quick .project-batch-limit {
+        width: 72px;
+        margin-top: 0;
+        padding: 5px 7px;
+        font-size: 0.72rem;
+      }
       .project-board-summary {
         margin: 6px 0 8px 0;
         padding: 6px 7px;
@@ -205,6 +211,17 @@ HTML = """
         background: #ffffff;
         color: #334155;
         font-size: 0.72rem;
+      }
+      .project-session-section {
+        border: 1px dashed #d4dfef;
+        border-radius: 8px;
+        padding: 6px;
+        background: #ffffff;
+      }
+      .project-session-section-head {
+        font-size: 0.72rem;
+        color: #4b5a73;
+        margin-bottom: 6px;
       }
       .project-session-list {
         display: grid;
@@ -590,6 +607,11 @@ HTML = """
             <button type=\"button\" onclick=\"openTopPrioritySession()\">Open Top Priority</button>
             <button type=\"button\" onclick=\"openNextFailedSession()\">Open Next Failed</button>
             <button type=\"button\" onclick=\"togglePinnedOnly()\">Pinned Only</button>
+            <button type=\"button\" onclick=\"toggleSessionBoardGroupedView()\">Status Groups</button>
+            <button type=\"button\" onclick=\"batchShowProjectSummary()\">Batch Summary</button>
+            <button type=\"button\" onclick=\"batchValidateProjectTask()\">Batch Validate</button>
+            <label>Batch Limit</label>
+            <input id=\"session_batch_limit\" class=\"project-batch-limit\" type=\"number\" min=\"1\" max=\"20\" value=\"5\" />
             <button type=\"button\" onclick=\"clearSessionBoardControls()\">Reset</button>
             <label><input id=\"session_auto_refresh\" type=\"checkbox\" onchange=\"onSessionAutoRefreshChanged()\" /> Auto Refresh</label>
             <select id=\"session_refresh_seconds\" onchange=\"onSessionAutoRefreshChanged()\">
@@ -833,6 +855,8 @@ HTML = """
           refreshSeconds: 30,
           pinnedProjectIds: [],
           pinnedOnly: false,
+          groupedView: false,
+          batchLimit: 5,
         },
         sessionAutoRefreshTimer: null,
       };
@@ -944,6 +968,8 @@ HTML = """
           refreshSeconds: 30,
           pinnedProjectIds: [],
           pinnedOnly: false,
+          groupedView: false,
+          batchLimit: 5,
         };
         try {
           const raw = localStorage.getItem(SESSION_BOARD_KEY);
@@ -957,12 +983,15 @@ HTML = """
           const refreshSecondsRaw = Number(parsed.refreshSeconds || 30);
           const refreshSeconds = Number.isFinite(refreshSecondsRaw) ? Math.max(10, Math.min(120, Math.floor(refreshSecondsRaw))) : 30;
           const pinnedOnly = Boolean(parsed.pinnedOnly);
+          const groupedView = Boolean(parsed.groupedView);
+          const batchLimitRaw = Number(parsed.batchLimit || 5);
+          const batchLimit = Number.isFinite(batchLimitRaw) ? Math.max(1, Math.min(20, Math.floor(batchLimitRaw))) : 5;
           const pinnedRaw = Array.isArray(parsed.pinnedProjectIds) ? parsed.pinnedProjectIds : [];
           const pinnedProjectIds = pinnedRaw
             .map((x) => String(x || '').trim())
             .filter((x) => Boolean(x))
             .slice(0, 200);
-          return {filterText, health, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, pinnedProjectIds};
+          return {filterText, health, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, groupedView, batchLimit, pinnedProjectIds};
         } catch (e) {
           return fallback;
         }
@@ -976,6 +1005,8 @@ HTML = """
           autoRefreshEnabled: Boolean(v && v.autoRefreshEnabled),
           refreshSeconds: Number.isFinite(Number(v && v.refreshSeconds)) ? Math.max(10, Math.min(120, Math.floor(Number(v.refreshSeconds)))) : 30,
           pinnedOnly: Boolean(v && v.pinnedOnly),
+          groupedView: Boolean(v && v.groupedView),
+          batchLimit: Number.isFinite(Number(v && v.batchLimit)) ? Math.max(1, Math.min(20, Math.floor(Number(v.batchLimit)))) : 5,
           pinnedProjectIds: Array.isArray(v && v.pinnedProjectIds)
             ? (v.pinnedProjectIds
                 .map((x) => String(x || '').trim())
@@ -997,11 +1028,13 @@ HTML = """
         const sortEle = document.getElementById('session_sort_mode');
         const autoEle = document.getElementById('session_auto_refresh');
         const secEle = document.getElementById('session_refresh_seconds');
+        const batchLimitEle = document.getElementById('session_batch_limit');
         if (filterEle) filterEle.value = String(payload.filterText || '');
         if (healthEle) healthEle.value = String(payload.health || 'all');
         if (sortEle) sortEle.value = String(payload.sort || 'updated_desc');
         if (autoEle) autoEle.checked = Boolean(payload.autoRefreshEnabled);
         if (secEle) secEle.value = String(payload.refreshSeconds || 30);
+        if (batchLimitEle) batchLimitEle.value = String(payload.batchLimit || 5);
       }
 
       function renderPromptHistory(projectId) {
@@ -1656,11 +1689,14 @@ HTML = """
         const autoRefreshEnabled = Boolean(document.getElementById('session_auto_refresh').checked);
         const refreshSecondsRaw = Number(document.getElementById('session_refresh_seconds').value || 30);
         const refreshSeconds = Number.isFinite(refreshSecondsRaw) ? Math.max(10, Math.min(120, Math.floor(refreshSecondsRaw))) : 30;
+        const batchLimitRaw = Number(document.getElementById('session_batch_limit').value || 5);
+        const batchLimit = Number.isFinite(batchLimitRaw) ? Math.max(1, Math.min(20, Math.floor(batchLimitRaw))) : 5;
         const pinnedOnly = Boolean(state.sessionBoard && state.sessionBoard.pinnedOnly);
+        const groupedView = Boolean(state.sessionBoard && state.sessionBoard.groupedView);
         const pinnedProjectIds = Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
           ? state.sessionBoard.pinnedProjectIds.slice()
           : [];
-        return {filterText, health, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, pinnedProjectIds};
+        return {filterText, health, sort, autoRefreshEnabled, refreshSeconds, batchLimit, pinnedOnly, groupedView, pinnedProjectIds};
       }
 
       function applySessionBoardControls() {
@@ -1693,7 +1729,9 @@ HTML = """
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
+          batchLimit: 5,
           pinnedOnly: false,
+          groupedView: false,
           pinnedProjectIds: Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
             ? state.sessionBoard.pinnedProjectIds
             : [],
@@ -1709,6 +1747,16 @@ HTML = """
           pinnedProjectIds: Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
             ? state.sessionBoard.pinnedProjectIds.slice()
             : [],
+        };
+        saveSessionBoardState(state.sessionBoard);
+        renderProjectSessionBoard(state.projects || []);
+      }
+
+      function toggleSessionBoardGroupedView() {
+        const next = !Boolean(state.sessionBoard && state.sessionBoard.groupedView);
+        state.sessionBoard = {
+          ...(state.sessionBoard || {}),
+          groupedView: next,
         };
         saveSessionBoardState(state.sessionBoard);
         renderProjectSessionBoard(state.projects || []);
@@ -1752,21 +1800,32 @@ HTML = """
         }, sec * 1000);
       }
 
-      function renderProjectSessionBoard(projects) {
-        const wrap = document.getElementById('project_session_list');
-        if (!wrap) return;
-        wrap.innerHTML = '';
-        const summaryEle = document.getElementById('project_board_summary');
+      function projectHealthStatus(row) {
+        const st = String((row && row.runtime_health && row.runtime_health.status) || '').toLowerCase();
+        if (st === 'failed') return 'failed';
+        if (st === 'success') return 'success';
+        return 'none';
+      }
+
+      function scoreProjectPriority(row) {
+        const rh = (row && row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+        const failed = Number(rh.failed_steps || 0);
+        const dur = Number(rh.recent_duration_ms || 0);
+        const ratio = Number(rh.success_ratio || 0);
+        return (failed * 1000) + (dur / 1000) - (ratio * 100);
+      }
+
+      function computeSessionBoardRows(projects) {
         const controls = readSessionBoardControls();
         state.sessionBoard = controls;
         const baseRows = Array.isArray(projects) ? projects : [];
         const pinnedIds = new Set(
-          Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
-            ? state.sessionBoard.pinnedProjectIds
+          Array.isArray(controls.pinnedProjectIds)
+            ? controls.pinnedProjectIds
             : []
         );
         let rows = baseRows.slice();
-        if (Boolean(state.sessionBoard && state.sessionBoard.pinnedOnly)) {
+        if (Boolean(controls.pinnedOnly)) {
           rows = rows.filter((row) => {
             const pid = String((row && row.project_id) || '').trim();
             return pid && pinnedIds.has(pid);
@@ -1784,7 +1843,7 @@ HTML = """
         }
         if (controls.health && controls.health !== 'all') {
           rows = rows.filter((row) => {
-            const status = String((row && row.runtime_health && row.runtime_health.status) || '').toLowerCase();
+            const status = projectHealthStatus(row);
             if (controls.health === 'failed') return status === 'failed';
             if (controls.health === 'success') return status === 'success';
             if (controls.health === 'none') return status === 'none';
@@ -1804,19 +1863,7 @@ HTML = """
             return ra - rb;
           });
         } else if (controls.sort === 'priority_desc') {
-          rows.sort((a, b) => {
-            const ah = (a && a.runtime_health && typeof a.runtime_health === 'object') ? a.runtime_health : {};
-            const bh = (b && b.runtime_health && typeof b.runtime_health === 'object') ? b.runtime_health : {};
-            const af = Number(ah.failed_steps || 0);
-            const bf = Number(bh.failed_steps || 0);
-            const ar = Number(ah.recent_duration_ms || 0);
-            const br = Number(bh.recent_duration_ms || 0);
-            const as = Number(ah.success_ratio || 0);
-            const bs = Number(bh.success_ratio || 0);
-            const aScore = (af * 1000) + (ar / 1000) - (as * 100);
-            const bScore = (bf * 1000) + (br / 1000) - (bs * 100);
-            return bScore - aScore;
-          });
+          rows.sort((a, b) => scoreProjectPriority(b) - scoreProjectPriority(a));
         } else {
           rows.sort((a, b) => String((b && b.updated_at) || '').localeCompare(String((a && a.updated_at) || '')));
         }
@@ -1825,6 +1872,219 @@ HTML = """
           const bp = pinnedIds.has(String((b && b.project_id) || '').trim()) ? 1 : 0;
           return bp - ap;
         });
+        return {rows, controls, pinnedIds};
+      }
+
+      function readSessionBatchLimit() {
+        const controls = state.sessionBoard || readSessionBoardControls();
+        const raw = Number(controls.batchLimit || 5);
+        return Number.isFinite(raw) ? Math.max(1, Math.min(20, Math.floor(raw))) : 5;
+      }
+
+      function attachSessionCard(parent, row, pinnedIds, activeId) {
+        if (!parent || !row || typeof row !== 'object') return;
+        const pid = String(row.project_id || '').trim();
+        if (!pid) return;
+        const taskId = String(row.current_task_id || '').trim();
+        const runtime = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+        const successSteps = Number(runtime.success_steps || 0);
+        const failedSteps = Number(runtime.failed_steps || 0);
+        const totalSteps = Math.max(0, successSteps + failedSteps);
+        const successRatio = totalSteps > 0 ? (successSteps / totalSteps) : 0;
+        const runtimeSecRaw = Number((row.last_runtime && row.last_runtime.duration_ms) || 0);
+        const runtimeSec = Number.isFinite(runtimeSecRaw) && runtimeSecRaw > 0 ? (runtimeSecRaw / 1000.0) : 0;
+        const latestFailedStep = String((row.runtime_health && row.runtime_health.latest_failed_step) || '').trim();
+        const latestFailedError = String((row.runtime_health && row.runtime_health.latest_failed_error) || '').trim();
+        const healthObj = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+        const healthStatus = String(healthObj.status || 'none').toLowerCase();
+        const health = formatRuntimeHealth(healthObj || {});
+        const updatedAt = String(row.updated_at || '-');
+        const title = String(row.title || pid);
+
+        const card = document.createElement('div');
+        const isPinned = pinnedIds.has(pid);
+        card.className = `project-session-item${pid === activeId ? ' active' : ''}${isPinned ? ' pinned' : ''}`;
+
+        const head = document.createElement('div');
+        head.className = 'project-session-head';
+        const titleEle = document.createElement('div');
+        titleEle.className = 'project-session-title';
+        titleEle.textContent = title;
+        const idEle = document.createElement('div');
+        idEle.className = 'project-session-id';
+        idEle.textContent = pid;
+        head.appendChild(titleEle);
+        head.appendChild(idEle);
+        card.appendChild(head);
+
+        const meta = document.createElement('div');
+        meta.className = 'project-session-meta';
+        meta.textContent = `task=${taskId || '-'} | health=${health} | updated=${updatedAt}`;
+        card.appendChild(meta);
+        const statusBadge = document.createElement('div');
+        statusBadge.className = `project-session-status${healthStatus === 'failed' ? ' fail' : (healthStatus === 'success' ? ' pass' : '')}`;
+        statusBadge.textContent = `status=${healthStatus || 'none'}`;
+        card.appendChild(statusBadge);
+        const failed = document.createElement('div');
+        failed.className = 'project-session-failed';
+        failed.textContent = latestFailedStep ? `latest_failed_step=${latestFailedStep}` : 'latest_failed_step=-';
+        card.appendChild(failed);
+        const failedErr = document.createElement('div');
+        failedErr.className = 'project-session-error';
+        failedErr.textContent = latestFailedError ? `failed_error=${latestFailedError}` : 'failed_error=-';
+        card.appendChild(failedErr);
+        const runtimeLine = document.createElement('div');
+        runtimeLine.className = 'project-session-runtime';
+        const ratioText = totalSteps > 0 ? `${Math.round(successRatio * 100)}%` : '-';
+        const durationText = runtimeSec > 0 ? `${runtimeSec.toFixed(2)}s` : '-';
+        const recordCount = Number(healthObj.record_count || 0);
+        runtimeLine.textContent = `recent_duration=${durationText} | success_ratio=${ratioText} (${successSteps}/${totalSteps || 0}) | records=${recordCount}`;
+        card.appendChild(runtimeLine);
+        const progress = document.createElement('div');
+        progress.className = 'project-session-progress';
+        const progressBar = document.createElement('div');
+        progressBar.className = 'project-session-progress-bar';
+        progressBar.style.width = `${Math.max(0, Math.min(100, successRatio * 100))}%`;
+        progress.appendChild(progressBar);
+        card.appendChild(progress);
+
+        const actions = document.createElement('div');
+        actions.className = 'project-session-actions';
+        const openBtn = document.createElement('button');
+        openBtn.type = 'button';
+        openBtn.textContent = 'Open';
+        openBtn.onclick = () => {
+          openProjectWorkspace(pid, {push: true});
+        };
+        actions.appendChild(openBtn);
+
+        const pinBtn = document.createElement('button');
+        pinBtn.type = 'button';
+        pinBtn.textContent = isPinned ? 'Unpin' : 'Pin';
+        pinBtn.onclick = () => {
+          toggleProjectPin(pid);
+        };
+        actions.appendChild(pinBtn);
+
+        const resumeBtn = document.createElement('button');
+        resumeBtn.type = 'button';
+        resumeBtn.textContent = 'Resume';
+        resumeBtn.disabled = !taskId;
+        resumeBtn.onclick = () => {
+          resumeProjectTask(pid, taskId);
+        };
+        actions.appendChild(resumeBtn);
+
+        const retryFailedBtn = document.createElement('button');
+        retryFailedBtn.type = 'button';
+        retryFailedBtn.textContent = 'Retry Failed';
+        retryFailedBtn.disabled = !(taskId && latestFailedStep);
+        retryFailedBtn.onclick = () => {
+          retryProjectFailedStep(pid, taskId, latestFailedStep);
+        };
+        actions.appendChild(retryFailedBtn);
+
+        const timelineBtn = document.createElement('button');
+        timelineBtn.type = 'button';
+        timelineBtn.textContent = 'Timeline';
+        timelineBtn.disabled = !taskId;
+        timelineBtn.onclick = () => {
+          showProjectTimeline(pid, taskId);
+        };
+        actions.appendChild(timelineBtn);
+
+        const copyTaskBtn = document.createElement('button');
+        copyTaskBtn.type = 'button';
+        copyTaskBtn.textContent = 'Copy Task ID';
+        copyTaskBtn.disabled = !taskId;
+        copyTaskBtn.onclick = () => {
+          copyProjectTaskId(taskId);
+        };
+        actions.appendChild(copyTaskBtn);
+
+        const summaryBtn = document.createElement('button');
+        summaryBtn.type = 'button';
+        summaryBtn.textContent = 'Summary';
+        summaryBtn.disabled = !taskId;
+        summaryBtn.onclick = () => {
+          showProjectSummary(pid, taskId);
+        };
+        actions.appendChild(summaryBtn);
+
+        const validateBtn = document.createElement('button');
+        validateBtn.type = 'button';
+        validateBtn.textContent = 'Validate';
+        validateBtn.disabled = !taskId;
+        validateBtn.onclick = () => {
+          validateProjectTask(pid, taskId);
+        };
+        actions.appendChild(validateBtn);
+        card.appendChild(actions);
+        parent.appendChild(card);
+      }
+
+      function appendSessionBoardSection(wrap, label, rows, pinnedIds, activeId) {
+        if (!wrap || !Array.isArray(rows) || rows.length < 1) return;
+        const section = document.createElement('div');
+        section.className = 'project-session-section';
+        const head = document.createElement('div');
+        head.className = 'project-session-section-head';
+        head.textContent = `${label} (${rows.length})`;
+        section.appendChild(head);
+        for (const row of rows) {
+          attachSessionCard(section, row, pinnedIds, activeId);
+        }
+        wrap.appendChild(section);
+      }
+
+      async function batchShowProjectSummary() {
+        const payload = computeSessionBoardRows(state.projects || []);
+        const rows = payload.rows || [];
+        const limit = readSessionBatchLimit();
+        const picked = rows.filter((row) => String((row && row.current_task_id) || '').trim()).slice(0, limit);
+        if (picked.length < 1) {
+          renderJsonOut({status: 'fail', error: 'no task available in filtered set'});
+          return;
+        }
+        const results = [];
+        for (const row of picked) {
+          const pid = String((row && row.project_id) || '').trim();
+          const tid = String((row && row.current_task_id) || '').trim();
+          const resp = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
+          results.push({project_id: pid, task_id: tid, http_status: resp.status, data: resp.data});
+        }
+        renderJsonOut({status: 'pass', action: 'batch_summary', limit: limit, count: results.length, results: results});
+      }
+
+      async function batchValidateProjectTask() {
+        const payload = computeSessionBoardRows(state.projects || []);
+        const rows = payload.rows || [];
+        const limit = readSessionBatchLimit();
+        const picked = rows.filter((row) => String((row && row.current_task_id) || '').trim()).slice(0, limit);
+        if (picked.length < 1) {
+          renderJsonOut({status: 'fail', error: 'no task available in filtered set'});
+          return;
+        }
+        const results = [];
+        for (const row of picked) {
+          const pid = String((row && row.project_id) || '').trim();
+          const tid = String((row && row.current_task_id) || '').trim();
+          const resp = await apiGet(`/api/task/${encodeURIComponent(tid)}/validate`);
+          results.push({project_id: pid, task_id: tid, http_status: resp.status, data: resp.data});
+        }
+        renderJsonOut({status: 'pass', action: 'batch_validate', limit: limit, count: results.length, results: results});
+      }
+
+      function renderProjectSessionBoard(projects) {
+        const wrap = document.getElementById('project_session_list');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const summaryEle = document.getElementById('project_board_summary');
+        const payload = computeSessionBoardRows(projects);
+        const rows = payload.rows || [];
+        const controls = payload.controls || readSessionBoardControls();
+        const pinnedIds = payload.pinnedIds || new Set();
+
         if (summaryEle) {
           const total = rows.length;
           let failedN = 0;
@@ -1849,8 +2109,11 @@ HTML = """
             }
           }
           const avgRatio = ratioCnt > 0 ? Math.round((ratioSum / ratioCnt) * 100) : 0;
-          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | avg_success_ratio=${avgRatio}%`;
+          const mode = Boolean(controls.groupedView) ? 'grouped' : 'flat';
+          const batchLimit = readSessionBatchLimit();
+          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | avg_success_ratio=${avgRatio}% | mode=${mode} | batch_limit=${batchLimit}`;
         }
+
         if (rows.length < 1) {
           const empty = document.createElement('div');
           empty.className = 'muted';
@@ -1858,149 +2121,36 @@ HTML = """
           wrap.appendChild(empty);
           return;
         }
+
         const activeId = selectedProjectId();
-        for (const row of rows.slice(0, 18)) {
-          if (!row || typeof row !== 'object') continue;
-          const pid = String(row.project_id || '').trim();
-          if (!pid) continue;
-          const taskId = String(row.current_task_id || '').trim();
-          const runtime = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
-          const successSteps = Number(runtime.success_steps || 0);
-          const failedSteps = Number(runtime.failed_steps || 0);
-          const totalSteps = Math.max(0, successSteps + failedSteps);
-          const successRatio = totalSteps > 0 ? (successSteps / totalSteps) : 0;
-          const runtimeSecRaw = Number((row.last_runtime && row.last_runtime.duration_ms) || 0);
-          const runtimeSec = Number.isFinite(runtimeSecRaw) && runtimeSecRaw > 0 ? (runtimeSecRaw / 1000.0) : 0;
-          const latestFailedStep = String((row.runtime_health && row.runtime_health.latest_failed_step) || '').trim();
-          const latestFailedError = String((row.runtime_health && row.runtime_health.latest_failed_error) || '').trim();
-          const healthObj = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
-          const healthStatus = String(healthObj.status || 'none').toLowerCase();
-          const health = formatRuntimeHealth(healthObj || {});
-          const updatedAt = String(row.updated_at || '-');
-          const title = String(row.title || pid);
+        const cappedRows = rows.slice(0, 18);
+        if (Boolean(controls.groupedView)) {
+          const failedRows = [];
+          const successRows = [];
+          const noneRows = [];
+          for (const row of cappedRows) {
+            const st = projectHealthStatus(row);
+            if (st === 'failed') failedRows.push(row);
+            else if (st === 'success') successRows.push(row);
+            else noneRows.push(row);
+          }
+          appendSessionBoardSection(wrap, 'Failed', failedRows, pinnedIds, activeId);
+          appendSessionBoardSection(wrap, 'Success', successRows, pinnedIds, activeId);
+          appendSessionBoardSection(wrap, 'None', noneRows, pinnedIds, activeId);
+          if (wrap.childElementCount < 1) {
+            const empty = document.createElement('div');
+            empty.className = 'muted';
+            empty.textContent = '(empty)';
+            wrap.appendChild(empty);
+          }
+          return;
+        }
 
-          const card = document.createElement('div');
-          const isPinned = pinnedIds.has(pid);
-          card.className = `project-session-item${pid === activeId ? ' active' : ''}${isPinned ? ' pinned' : ''}`;
-
-          const head = document.createElement('div');
-          head.className = 'project-session-head';
-          const titleEle = document.createElement('div');
-          titleEle.className = 'project-session-title';
-          titleEle.textContent = title;
-          const idEle = document.createElement('div');
-          idEle.className = 'project-session-id';
-          idEle.textContent = pid;
-          head.appendChild(titleEle);
-          head.appendChild(idEle);
-          card.appendChild(head);
-
-          const meta = document.createElement('div');
-          meta.className = 'project-session-meta';
-          meta.textContent = `task=${taskId || '-'} | health=${health} | updated=${updatedAt}`;
-          card.appendChild(meta);
-          const statusBadge = document.createElement('div');
-          statusBadge.className = `project-session-status${healthStatus === 'failed' ? ' fail' : (healthStatus === 'success' ? ' pass' : '')}`;
-          statusBadge.textContent = `status=${healthStatus || 'none'}`;
-          card.appendChild(statusBadge);
-          const failed = document.createElement('div');
-          failed.className = 'project-session-failed';
-          failed.textContent = latestFailedStep ? `latest_failed_step=${latestFailedStep}` : 'latest_failed_step=-';
-          card.appendChild(failed);
-          const failedErr = document.createElement('div');
-          failedErr.className = 'project-session-error';
-          failedErr.textContent = latestFailedError ? `failed_error=${latestFailedError}` : 'failed_error=-';
-          card.appendChild(failedErr);
-          const runtimeLine = document.createElement('div');
-          runtimeLine.className = 'project-session-runtime';
-          const ratioText = totalSteps > 0 ? `${Math.round(successRatio * 100)}%` : '-';
-          const durationText = runtimeSec > 0 ? `${runtimeSec.toFixed(2)}s` : '-';
-          const recordCount = Number(healthObj.record_count || 0);
-          runtimeLine.textContent = `recent_duration=${durationText} | success_ratio=${ratioText} (${successSteps}/${totalSteps || 0}) | records=${recordCount}`;
-          card.appendChild(runtimeLine);
-          const progress = document.createElement('div');
-          progress.className = 'project-session-progress';
-          const progressBar = document.createElement('div');
-          progressBar.className = 'project-session-progress-bar';
-          progressBar.style.width = `${Math.max(0, Math.min(100, successRatio * 100))}%`;
-          progress.appendChild(progressBar);
-          card.appendChild(progress);
-
-          const actions = document.createElement('div');
-          actions.className = 'project-session-actions';
-          const openBtn = document.createElement('button');
-          openBtn.type = 'button';
-          openBtn.textContent = 'Open';
-          openBtn.onclick = () => {
-            openProjectWorkspace(pid, {push: true});
-          };
-          actions.appendChild(openBtn);
-
-          const pinBtn = document.createElement('button');
-          pinBtn.type = 'button';
-          pinBtn.textContent = isPinned ? 'Unpin' : 'Pin';
-          pinBtn.onclick = () => {
-            toggleProjectPin(pid);
-          };
-          actions.appendChild(pinBtn);
-
-          const resumeBtn = document.createElement('button');
-          resumeBtn.type = 'button';
-          resumeBtn.textContent = 'Resume';
-          resumeBtn.disabled = !taskId;
-          resumeBtn.onclick = () => {
-            resumeProjectTask(pid, taskId);
-          };
-          actions.appendChild(resumeBtn);
-
-          const retryFailedBtn = document.createElement('button');
-          retryFailedBtn.type = 'button';
-          retryFailedBtn.textContent = 'Retry Failed';
-          retryFailedBtn.disabled = !(taskId && latestFailedStep);
-          retryFailedBtn.onclick = () => {
-            retryProjectFailedStep(pid, taskId, latestFailedStep);
-          };
-          actions.appendChild(retryFailedBtn);
-
-          const timelineBtn = document.createElement('button');
-          timelineBtn.type = 'button';
-          timelineBtn.textContent = 'Timeline';
-          timelineBtn.disabled = !taskId;
-          timelineBtn.onclick = () => {
-            showProjectTimeline(pid, taskId);
-          };
-          actions.appendChild(timelineBtn);
-
-          const copyTaskBtn = document.createElement('button');
-          copyTaskBtn.type = 'button';
-          copyTaskBtn.textContent = 'Copy Task ID';
-          copyTaskBtn.disabled = !taskId;
-          copyTaskBtn.onclick = () => {
-            copyProjectTaskId(taskId);
-          };
-          actions.appendChild(copyTaskBtn);
-
-          const summaryBtn = document.createElement('button');
-          summaryBtn.type = 'button';
-          summaryBtn.textContent = 'Summary';
-          summaryBtn.disabled = !taskId;
-          summaryBtn.onclick = () => {
-            showProjectSummary(pid, taskId);
-          };
-          actions.appendChild(summaryBtn);
-
-          const validateBtn = document.createElement('button');
-          validateBtn.type = 'button';
-          validateBtn.textContent = 'Validate';
-          validateBtn.disabled = !taskId;
-          validateBtn.onclick = () => {
-            validateProjectTask(pid, taskId);
-          };
-          actions.appendChild(validateBtn);
-          card.appendChild(actions);
-          wrap.appendChild(card);
+        for (const row of cappedRows) {
+          attachSessionCard(wrap, row, pinnedIds, activeId);
         }
       }
+
 
       async function openTopPrioritySession() {
         const rows = Array.isArray(state.projects) ? state.projects.slice() : [];

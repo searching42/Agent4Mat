@@ -34,6 +34,9 @@ Open: `http://127.0.0.1:8787`
   - supports optional session board auto-refresh (`10/20/30/60s`)
   - supports project pin/unpin and `Pinned Only` focus mode (persisted in local storage)
   - supports `Open Next Failed` for failed-project triage
+  - supports `Status Groups` mode to render failed/success/none sections
+  - supports batch actions on current filtered set: `Batch Summary`, `Batch Validate`
+  - supports `Batch Limit` (1-20) to cap batch action scope
   - session card provides quick `Summary` and `Validate` actions for current task
   - runtime health now includes `success_ratio` and `recent_duration_ms` for smarter priority sorting
   - session file: `runs/ui_sessions/projects/<project_id>.json`

@@ -197,6 +197,11 @@ HTML = """
         color: #8a2f2f;
         font-size: 0.72rem;
       }
+      .project-session-error {
+        margin-top: 3px;
+        color: #7a3f00;
+        font-size: 0.72rem;
+      }
       .project-session-runtime {
         margin-top: 4px;
         color: #36506f;
@@ -1481,6 +1486,7 @@ HTML = """
           const runtimeSecRaw = Number((row.last_runtime && row.last_runtime.duration_ms) || 0);
           const runtimeSec = Number.isFinite(runtimeSecRaw) && runtimeSecRaw > 0 ? (runtimeSecRaw / 1000.0) : 0;
           const latestFailedStep = String((row.runtime_health && row.runtime_health.latest_failed_step) || '').trim();
+          const latestFailedError = String((row.runtime_health && row.runtime_health.latest_failed_error) || '').trim();
           const health = formatRuntimeHealth(row.runtime_health || {});
           const updatedAt = String(row.updated_at || '-');
           const title = String(row.title || pid);
@@ -1508,6 +1514,10 @@ HTML = """
           failed.className = 'project-session-failed';
           failed.textContent = latestFailedStep ? `latest_failed_step=${latestFailedStep}` : 'latest_failed_step=-';
           card.appendChild(failed);
+          const failedErr = document.createElement('div');
+          failedErr.className = 'project-session-error';
+          failedErr.textContent = latestFailedError ? `failed_error=${latestFailedError}` : 'failed_error=-';
+          card.appendChild(failedErr);
           const runtimeLine = document.createElement('div');
           runtimeLine.className = 'project-session-runtime';
           const ratioText = totalSteps > 0 ? `${Math.round(successRatio * 100)}%` : '-';
@@ -1549,6 +1559,24 @@ HTML = """
             retryProjectFailedStep(pid, taskId, latestFailedStep);
           };
           actions.appendChild(retryFailedBtn);
+
+          const timelineBtn = document.createElement('button');
+          timelineBtn.type = 'button';
+          timelineBtn.textContent = 'Timeline';
+          timelineBtn.disabled = !taskId;
+          timelineBtn.onclick = () => {
+            showProjectTimeline(pid, taskId);
+          };
+          actions.appendChild(timelineBtn);
+
+          const copyTaskBtn = document.createElement('button');
+          copyTaskBtn.type = 'button';
+          copyTaskBtn.textContent = 'Copy Task ID';
+          copyTaskBtn.disabled = !taskId;
+          copyTaskBtn.onclick = () => {
+            copyProjectTaskId(taskId);
+          };
+          actions.appendChild(copyTaskBtn);
           card.appendChild(actions);
           wrap.appendChild(card);
         }
@@ -1623,6 +1651,43 @@ HTML = """
         renderEvents([{stage: 'retry_project_failed_step', status: status, operation: op}]);
         await loadRunRuntime();
         await refreshProjects();
+      }
+
+      async function showProjectTimeline(projectId, taskId) {
+        const pid = String(projectId || '').trim();
+        const tid = String(taskId || '').trim();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'project has no current_task_id'});
+          return;
+        }
+        await openProjectWorkspace(pid, {push: true});
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/timeline?sort=duration_desc`);
+        renderJsonOut(r.data);
+        if (r.data && Array.isArray(r.data.timeline_lines)) {
+          document.getElementById('event_out').textContent = r.data.timeline_lines.join('\n');
+        }
+      }
+
+      async function copyProjectTaskId(taskId) {
+        const tid = String(taskId || '').trim();
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'empty task_id'});
+          return;
+        }
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(tid);
+            renderJsonOut({status: 'pass', copied_task_id: tid});
+            return;
+          }
+        } catch (e) {
+          // fall through
+        }
+        renderJsonOut({status: 'fail', error: 'clipboard_unavailable', task_id: tid});
       }
 
       async function switchProjectFromPicker() {
@@ -2969,6 +3034,7 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
             "success_steps": 0,
             "failed_steps": 0,
             "latest_failed_step": "",
+            "latest_failed_error": "",
         }
     run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
     execution = _load_json_if_exists(run_dir / "execution.json")
@@ -2981,11 +3047,13 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
             "success_steps": 0,
             "failed_steps": 0,
             "latest_failed_step": "",
+            "latest_failed_error": "",
         }
     records = execution.get("records") if isinstance(execution.get("records"), list) else []
     success_steps = 0
     failed_steps = 0
     latest_failed_step = ""
+    latest_failed_error = ""
     for rec in records:
         if not isinstance(rec, dict):
             continue
@@ -2994,6 +3062,9 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
         else:
             failed_steps += 1
             latest_failed_step = str(rec.get("name") or latest_failed_step)
+            err_txt = str(rec.get("error") or "").strip()
+            if err_txt:
+                latest_failed_error = err_txt[:240]
     return {
         "status": str(execution.get("status") or "unknown"),
         "task_id": task_id,
@@ -3001,6 +3072,7 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
         "success_steps": success_steps,
         "failed_steps": failed_steps,
         "latest_failed_step": latest_failed_step,
+        "latest_failed_error": latest_failed_error,
     }
 
 

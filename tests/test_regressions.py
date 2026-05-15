@@ -7405,7 +7405,7 @@ class UiPrototypeTests(unittest.TestCase):
                             "status": "failed",
                             "records": [
                                 {"name": "search_dataset", "status": "success"},
-                                {"name": "score_candidates", "status": "failed"},
+                                {"name": "score_candidates", "status": "failed", "error": "adapter timeout after 300s"},
                             ],
                         },
                         ensure_ascii=False,
@@ -7430,6 +7430,7 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(int(health.get("success_steps") or 0), 1)
                 self.assertEqual(int(health.get("failed_steps") or 0), 1)
                 self.assertEqual(health.get("latest_failed_step"), "score_candidates")
+                self.assertIn("timeout", str(health.get("latest_failed_error") or ""))
 
     def test_ui_html_contains_project_runtime_health_field(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -7489,8 +7490,13 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("openProjectWorkspace(", html)
         self.assertIn("resumeProjectTask(", html)
         self.assertIn("latest_failed_step=", html)
+        self.assertIn("failed_error=", html)
         self.assertIn("Retry Failed", html)
         self.assertIn("retryProjectFailedStep(", html)
+        self.assertIn("Timeline", html)
+        self.assertIn("showProjectTimeline(", html)
+        self.assertIn("Copy Task ID", html)
+        self.assertIn("copyProjectTaskId(", html)
         self.assertIn("recent_duration=", html)
         self.assertIn("success_ratio=", html)
         self.assertIn("project-session-progress-bar", html)

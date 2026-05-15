@@ -603,6 +603,9 @@ HTML = """
           </div>
           <div class=\"project-board-quick\">
             <button type=\"button\" onclick=\"quickFilterFailedOnly()\">Failed Only</button>
+            <button type=\"button\" onclick=\"quickFilterByHealth('failed')\">Failed Count</button>
+            <button type=\"button\" onclick=\"quickFilterByHealth('success')\">Success Count</button>
+            <button type=\"button\" onclick=\"quickFilterByHealth('none')\">None Count</button>
             <button type=\"button\" onclick=\"quickSortPriority()\">Priority First</button>
             <button type=\"button\" onclick=\"openTopPrioritySession()\">Open Top Priority</button>
             <button type=\"button\" onclick=\"openNextFailedSession()\">Open Next Failed</button>
@@ -610,6 +613,8 @@ HTML = """
             <button type=\"button\" onclick=\"toggleSessionBoardGroupedView()\">Status Groups</button>
             <button type=\"button\" onclick=\"batchShowProjectSummary()\">Batch Summary</button>
             <button type=\"button\" onclick=\"batchValidateProjectTask()\">Batch Validate</button>
+            <button type=\"button\" onclick=\"batchRetryFailedProjectStep()\">Batch Retry Failed</button>
+            <button type=\"button\" onclick=\"exportSessionBoardBatchResult()\">Batch Export JSON</button>
             <label>Batch Limit</label>
             <input id=\"session_batch_limit\" class=\"project-batch-limit\" type=\"number\" min=\"1\" max=\"20\" value=\"5\" />
             <button type=\"button\" onclick=\"clearSessionBoardControls()\">Reset</button>
@@ -1714,6 +1719,17 @@ HTML = """
         applySessionBoardControls();
       }
 
+      function quickFilterByHealth(health) {
+        const value = String(health || 'all').trim().toLowerCase();
+        const allow = new Set(['all', 'failed', 'success', 'none']);
+        const next = allow.has(value) ? value : 'all';
+        const healthEle = document.getElementById('session_filter_health');
+        if (healthEle) {
+          healthEle.value = next;
+        }
+        applySessionBoardControls();
+      }
+
       function quickSortPriority() {
         const sortEle = document.getElementById('session_sort_mode');
         if (sortEle) {
@@ -1881,6 +1897,50 @@ HTML = """
         return Number.isFinite(raw) ? Math.max(1, Math.min(20, Math.floor(raw))) : 5;
       }
 
+      function recentSessionBatchRows(requireTask) {
+        const payload = computeSessionBoardRows(state.projects || []);
+        const rows = payload.rows || [];
+        const limit = readSessionBatchLimit();
+        const filtered = Boolean(requireTask)
+          ? rows.filter((row) => String((row && row.current_task_id) || '').trim())
+          : rows;
+        const picked = filtered.slice(0, limit);
+        return {payload, rows, picked, limit};
+      }
+
+      function readLatestBatchPayload() {
+        try {
+          const raw = sessionStorage.getItem('agent4mat.ui.latest_batch_payload');
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function storeLatestBatchPayload(payload) {
+        try {
+          sessionStorage.setItem('agent4mat.ui.latest_batch_payload', JSON.stringify(payload || {}));
+        } catch (e) {
+          // ignore storage failures
+        }
+      }
+
+      function exportSessionBoardBatchResult() {
+        const batch = readLatestBatchPayload();
+        if (!batch) {
+          renderJsonOut({status: 'fail', error: 'no batch result to export'});
+          return;
+        }
+        const payload = {
+          exported_at: nowIso(),
+          project_id: selectedProjectId(),
+          batch_result: batch,
+        };
+        renderJsonOut({status: 'pass', action: 'batch_export', payload: payload});
+      }
+
       function attachSessionCard(parent, row, pinnedIds, activeId) {
         if (!parent || !row || typeof row !== 'object') return;
         const pid = String(row.project_id || '').trim();
@@ -2038,10 +2098,9 @@ HTML = """
       }
 
       async function batchShowProjectSummary() {
-        const payload = computeSessionBoardRows(state.projects || []);
-        const rows = payload.rows || [];
-        const limit = readSessionBatchLimit();
-        const picked = rows.filter((row) => String((row && row.current_task_id) || '').trim()).slice(0, limit);
+        const payload = recentSessionBatchRows(true);
+        const picked = payload.picked || [];
+        const limit = payload.limit || 5;
         if (picked.length < 1) {
           renderJsonOut({status: 'fail', error: 'no task available in filtered set'});
           return;
@@ -2053,14 +2112,15 @@ HTML = """
           const resp = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
           results.push({project_id: pid, task_id: tid, http_status: resp.status, data: resp.data});
         }
-        renderJsonOut({status: 'pass', action: 'batch_summary', limit: limit, count: results.length, results: results});
+        const out = {status: 'pass', action: 'batch_summary', limit: limit, count: results.length, results: results};
+        storeLatestBatchPayload(out);
+        renderJsonOut(out);
       }
 
       async function batchValidateProjectTask() {
-        const payload = computeSessionBoardRows(state.projects || []);
-        const rows = payload.rows || [];
-        const limit = readSessionBatchLimit();
-        const picked = rows.filter((row) => String((row && row.current_task_id) || '').trim()).slice(0, limit);
+        const payload = recentSessionBatchRows(true);
+        const picked = payload.picked || [];
+        const limit = payload.limit || 5;
         if (picked.length < 1) {
           renderJsonOut({status: 'fail', error: 'no task available in filtered set'});
           return;
@@ -2072,7 +2132,44 @@ HTML = """
           const resp = await apiGet(`/api/task/${encodeURIComponent(tid)}/validate`);
           results.push({project_id: pid, task_id: tid, http_status: resp.status, data: resp.data});
         }
-        renderJsonOut({status: 'pass', action: 'batch_validate', limit: limit, count: results.length, results: results});
+        const out = {status: 'pass', action: 'batch_validate', limit: limit, count: results.length, results: results};
+        storeLatestBatchPayload(out);
+        renderJsonOut(out);
+      }
+
+      async function batchRetryFailedProjectStep() {
+        const payload = recentSessionBatchRows(true);
+        const picked = payload.picked || [];
+        const limit = payload.limit || 5;
+        if (picked.length < 1) {
+          renderJsonOut({status: 'fail', error: 'no task available in filtered set'});
+          return;
+        }
+        const retries = [];
+        for (const row of picked) {
+          const pid = String((row && row.project_id) || '').trim();
+          const tid = String((row && row.current_task_id) || '').trim();
+          const latestFailedStep = String((row && row.runtime_health && row.runtime_health.latest_failed_step) || '').trim();
+          if (!latestFailedStep) {
+            retries.push({project_id: pid, task_id: tid, status: 'skipped', reason: 'no_latest_failed_step'});
+            continue;
+          }
+          const resp = await apiPost(`/api/task/${encodeURIComponent(tid)}/retry-failed-step`, {
+            catalog_path: document.getElementById('catalog').value,
+            failed_tool_name: latestFailedStep,
+          });
+          retries.push({
+            project_id: pid,
+            task_id: tid,
+            failed_tool_name: latestFailedStep,
+            http_status: resp.status,
+            data: resp.data,
+          });
+        }
+        const out = {status: 'pass', action: 'batch_retry_failed', limit: limit, count: retries.length, retries: retries};
+        storeLatestBatchPayload(out);
+        renderJsonOut(out);
+        await refreshProjects();
       }
 
       function renderProjectSessionBoard(projects) {
@@ -2112,6 +2209,12 @@ HTML = """
           const mode = Boolean(controls.groupedView) ? 'grouped' : 'flat';
           const batchLimit = readSessionBatchLimit();
           summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | avg_success_ratio=${avgRatio}% | mode=${mode} | batch_limit=${batchLimit}`;
+          const failedBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('failed')\\\"]\");
+          const successBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('success')\\\"]\");
+          const noneBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('none')\\\"]\");
+          if (failedBtn) failedBtn.textContent = `Failed Count (${failedN})`;
+          if (successBtn) successBtn.textContent = `Success Count (${successN})`;
+          if (noneBtn) noneBtn.textContent = `None Count (${noneN})`;
         }
 
         if (rows.length < 1) {

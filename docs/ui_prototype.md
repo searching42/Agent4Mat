@@ -36,7 +36,10 @@ Open: `http://127.0.0.1:8787`
   - supports `Open Next Failed` for failed-project triage
   - supports `Status Groups` mode to render failed/success/none sections
   - supports batch actions on current filtered set: `Batch Summary`, `Batch Validate`
+  - supports `Batch Retry Failed` to replay each row's latest failed step in limited scope
+  - supports `Batch Export JSON` to emit latest batch payload for copy/save
   - supports `Batch Limit` (1-20) to cap batch action scope
+  - supports one-click health count filters (`Failed Count` / `Success Count` / `None Count`) with live counters
   - session card provides quick `Summary` and `Validate` actions for current task
   - runtime health now includes `success_ratio` and `recent_duration_ms` for smarter priority sorting
   - session file: `runs/ui_sessions/projects/<project_id>.json`

@@ -164,6 +164,7 @@ Implemented stages:
   - chat API supports single-step command execution (`/step <operation> {args_json}`)
   - supports project APIs (`/api/projects`, `/api/projects/<id>/history`, `/api/chat/send`, `/api/projects/<id>/upload-ref`)
   - supports one-click project clone (`POST /api/projects/<project_id>/clone`) with copy policy controls
+  - supports read-only snapshot projects (`options.project_read_only`) and clone-time lock via `target_options`
   - supports targeted retry for latest failed step (`POST /api/task/<task_id>/retry-failed-step`)
   - supports one-click task bundle export (`GET /api/task/<task_id>/bundle`, `.tar.gz`)
   - keeps full pipeline / single-step / intake / approve / resume APIs for compatibility

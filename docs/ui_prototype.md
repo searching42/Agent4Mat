@@ -25,6 +25,8 @@ Open: `http://127.0.0.1:8787`
   - supports editable `Project memory notes` with `Enable project memory injection` toggle
   - when enabled, memory notes are appended to `agent-intake` request as persistent context
   - supports one-click `Clone Project` into a new `project_id` with selectable copy policy (messages/attachments/runtime pointers)
+  - supports `Clone + Open Window` and `Snapshot Lock Clone` (clone + force `project_read_only=true`)
+  - read-only projects block mutating chat/file actions and keep inspection/export flows available
   - workspace URL carries `?project_id=...` and restores project context on load/back-forward navigation
   - supports `Open in New Window` and `Copy Workspace Link` for project-isolated windows
   - left drawer includes `Workspace Sessions` board with quick `Open` and `Resume` actions per project
@@ -96,6 +98,7 @@ Open: `http://127.0.0.1:8787`
   - `GET /api/projects`
   - `POST /api/projects` (supports `memory_notes` + `options.memory_enabled`)
   - `POST /api/projects/<project_id>/clone`
+    - supports `target_options` (e.g. `{ "project_read_only": true }`) for cloned project options
   - `GET /api/projects/<project_id>/export`
   - `POST /api/projects/import`
   - `GET /api/projects/<project_id>/history`

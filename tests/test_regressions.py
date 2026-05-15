@@ -7903,6 +7903,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("memory_enabled", html)
         self.assertIn("memory_notes", html)
         self.assertIn("updateMemoryStatus()", html)
+        self.assertIn("project_read_only", html)
+        self.assertIn("updateProjectLockStatus()", html)
 
     def test_ui_html_contains_workspace_url_controls(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -8042,6 +8044,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("project-session-progress-bar", html)
         self.assertIn("clone_project_id", html)
         self.assertIn("cloneProject()", html)
+        self.assertIn("cloneAndOpenProject()", html)
+        self.assertIn("snapshotLockProject()", html)
         self.assertIn("/api/projects/${encodeURIComponent(sourceProjectId)}/clone", html)
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
@@ -8235,6 +8239,55 @@ class UiPrototypeTests(unittest.TestCase):
                 payload = clone_resp.get_json()
                 self.assertEqual(payload.get("status"), "fail")
                 self.assertEqual(payload.get("error"), "project_exists")
+
+    def test_ui_project_clone_can_set_read_only_target_and_block_chat_send(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_clone_ro_src", "title": "src"})
+                clone_resp = client.post(
+                    "/api/projects/ui_clone_ro_src/clone",
+                    json={
+                        "target_project_id": "ui_clone_ro_dst",
+                        "target_options": {"project_read_only": True},
+                    },
+                )
+                self.assertEqual(clone_resp.status_code, 200)
+                clone_payload = clone_resp.get_json()
+                self.assertEqual(clone_payload.get("status"), "pass")
+                proj = clone_payload.get("project") if isinstance(clone_payload.get("project"), dict) else {}
+                opts = proj.get("options") if isinstance(proj.get("options"), dict) else {}
+                self.assertEqual(bool(opts.get("project_read_only")), True)
+
+                send_resp = client.post(
+                    "/api/chat/send",
+                    json={"project_id": "ui_clone_ro_dst", "message": "设计470nm附近且高PLQY分子"},
+                )
+                self.assertEqual(send_resp.status_code, 409)
+                send_payload = send_resp.get_json()
+                self.assertEqual(send_payload.get("status"), "fail")
+                self.assertEqual(send_payload.get("error"), "project_read_only")
+
+    def test_ui_upload_ref_rejects_read_only_project(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={"project_id": "ui_upload_ro", "title": "ro", "options": {"project_read_only": True}},
+                )
+                resp = client.post(
+                    "/api/projects/ui_upload_ro/upload-ref",
+                    json={"path": "/tmp/demo.csv", "label": "demo", "kind": "path_ref"},
+                )
+                self.assertEqual(resp.status_code, 409)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "fail")
+                self.assertEqual(payload.get("error"), "project_read_only")
 
     def test_ui_batch_export_list_and_replay_latest(self) -> None:
         ui_app_mod = self._load_ui_module()

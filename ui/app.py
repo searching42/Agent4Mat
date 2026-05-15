@@ -750,6 +750,8 @@ HTML = """
         <label>Project memory notes</label>
         <textarea id=\"memory_notes\" rows=\"5\" placeholder=\"记录该项目长期约束/偏好，例如目标波长范围、禁用骨架、数据来源优先级。\" oninput=\"updateMemoryStatus()\"></textarea>
         <div class=\"muted\" id=\"memory_status\">memory: disabled, chars=0</div>
+        <label><input id=\"project_read_only\" type=\"checkbox\" onchange=\"updateProjectLockStatus()\" /> Snapshot read-only mode</label>
+        <div class=\"muted\" id=\"project_lock_status\">project lock: writable</div>
         <div class=\"btn-row\">
           <button type=\"button\" onclick=\"clearMemoryNotes()\">Clear Memory Notes</button>
         </div>
@@ -767,6 +769,8 @@ HTML = """
         </div>
         <div class=\"btn-row\">
           <button type=\"button\" onclick=\"cloneProject()\">Clone Project</button>
+          <button type=\"button\" onclick=\"cloneAndOpenProject()\">Clone + Open Window</button>
+          <button type=\"button\" onclick=\"snapshotLockProject()\">Snapshot Lock Clone</button>
         </div>
         <div class=\"btn-row\">
           <button onclick=\"openWorkspaceWindow()\">Open in New Window</button>
@@ -1586,11 +1590,15 @@ HTML = """
         if (Object.prototype.hasOwnProperty.call(opts, 'memory_enabled')) {
           document.getElementById('memory_enabled').checked = Boolean(opts.memory_enabled);
         }
+        if (Object.prototype.hasOwnProperty.call(opts, 'project_read_only')) {
+          document.getElementById('project_read_only').checked = Boolean(opts.project_read_only);
+        }
         document.getElementById('memory_notes').value = String(project.memory_notes || '');
         if (opts.batch_replay_defaults && typeof opts.batch_replay_defaults === 'object') {
           applyBatchReplayOptions(opts.batch_replay_defaults);
         }
         updateMemoryStatus();
+        updateProjectLockStatus();
       }
 
       function applyBatchReplayOptions(raw) {
@@ -1863,12 +1871,14 @@ HTML = """
         const webEnabled = document.getElementById('web_enabled').checked;
         const webTopk = Number(document.getElementById('web_topk').value || 5);
         const memoryEnabled = document.getElementById('memory_enabled').checked;
+        const projectReadOnly = document.getElementById('project_read_only').checked;
         return {
           planner_provider: planner,
           catalog_path: catalog,
           web_search_enabled: Boolean(webEnabled),
           web_topk: Number.isFinite(webTopk) ? webTopk : 5,
           memory_enabled: Boolean(memoryEnabled),
+          project_read_only: Boolean(projectReadOnly),
           batch_replay_defaults: readBatchReplayOptions(),
         };
       }
@@ -1887,6 +1897,11 @@ HTML = """
       function clearMemoryNotes() {
         document.getElementById('memory_notes').value = '';
         updateMemoryStatus();
+      }
+
+      function updateProjectLockStatus() {
+        const lock = Boolean(document.getElementById('project_read_only').checked);
+        document.getElementById('project_lock_status').textContent = lock ? 'project lock: read-only' : 'project lock: writable';
       }
 
       async function refreshProjects() {
@@ -3148,11 +3163,12 @@ HTML = """
         await loadHistory();
       }
 
-      async function cloneProject() {
+      async function cloneProjectInternal(opts) {
+        const conf = (opts && typeof opts === 'object') ? opts : {};
         const sourceProjectId = selectedProjectId();
         if (!sourceProjectId || !isSafeProjectId(sourceProjectId)) {
           renderJsonOut({status: 'fail', error: 'invalid source project_id'});
-          return;
+          return null;
         }
         const targetEle = document.getElementById('clone_project_id');
         let targetProjectId = String(targetEle && targetEle.value ? targetEle.value : '').trim();
@@ -3162,34 +3178,63 @@ HTML = """
         }
         if (!isSafeProjectId(targetProjectId)) {
           renderJsonOut({status: 'fail', error: 'invalid target project_id'});
-          return;
+          return null;
         }
         if (targetProjectId === sourceProjectId) {
           renderJsonOut({status: 'fail', error: 'target project_id must differ from source'});
-          return;
+          return null;
         }
         const copyMessages = Boolean(document.getElementById('clone_copy_messages').checked);
         const copyAttachments = Boolean(document.getElementById('clone_copy_attachments').checked);
         const carryRuntime = Boolean(document.getElementById('clone_carry_runtime').checked);
-        const r = await apiPost(`/api/projects/${encodeURIComponent(sourceProjectId)}/clone`, {
+        const targetTitleSuffix = String(conf.targetTitleSuffix || '').trim();
+        const forceReadOnly = Boolean(conf.forceReadOnly);
+        const openWindow = Boolean(conf.openWindow);
+        const payload = {
           target_project_id: targetProjectId,
           options: {
             copy_messages: copyMessages,
             copy_attachments: copyAttachments,
             carry_runtime: carryRuntime,
           },
+        };
+        if (forceReadOnly) {
+          payload.target_options = {project_read_only: true};
+        }
+        if (targetTitleSuffix) {
+          const srcTitle = String(document.getElementById('project_title').value || sourceProjectId).trim() || sourceProjectId;
+          payload.target_title = `${srcTitle} ${targetTitleSuffix}`.trim();
+        }
+        const r = await apiPost(`/api/projects/${encodeURIComponent(sourceProjectId)}/clone`, {
+          ...payload,
         });
         renderJsonOut(r.data);
         if (!r.data || String(r.data.status || '') !== 'pass') {
-          return;
+          return r;
         }
         const project = r.data.project && typeof r.data.project === 'object' ? r.data.project : null;
         if (project) {
           state.project = project;
           applyProjectStateToUi(project, {push: true});
+          if (openWindow && project.project_id) {
+            window.open(workspaceUrlForProject(String(project.project_id || '')), '_blank', 'noopener,noreferrer');
+          }
         }
         await refreshProjects();
         await loadHistory();
+        return r;
+      }
+
+      async function cloneProject() {
+        await cloneProjectInternal({});
+      }
+
+      async function cloneAndOpenProject() {
+        await cloneProjectInternal({openWindow: true});
+      }
+
+      async function snapshotLockProject() {
+        await cloneProjectInternal({openWindow: true, forceReadOnly: true, targetTitleSuffix: '[snapshot]'});
       }
 
       async function exportProject() {
@@ -3624,6 +3669,7 @@ HTML = """
       async function boot() {
         applyStepArgsTemplate(true);
         updateMemoryStatus();
+        updateProjectLockStatus();
         refreshCloneTargetSuggestion();
         bindComposerShortcuts();
         bindWorkspaceUrlNavigation();
@@ -4813,6 +4859,7 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     web_topk = _as_int(options.get("web_topk"), 5)
     web_topk = max(1, min(web_topk, 20))
     memory_enabled = bool(options.get("memory_enabled", False))
+    project_read_only = bool(options.get("project_read_only", False))
     batch_replay_defaults = _normalize_batch_replay_options(options.get("batch_replay_defaults"))
     return {
         "planner_provider": planner,
@@ -4820,6 +4867,7 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
         "web_search_enabled": web_enabled,
         "web_topk": web_topk,
         "memory_enabled": memory_enabled,
+        "project_read_only": project_read_only,
         "batch_replay_defaults": batch_replay_defaults,
     }
 
@@ -5037,6 +5085,11 @@ def _apply_project_memory_update(project: Dict[str, Any], memory_notes: Any, *, 
         project["memory_updated_at"] = ""
     else:
         project["memory_updated_at"] = current_updated
+
+
+def _project_is_read_only(project: Dict[str, Any]) -> bool:
+    options = _normalize_project_options(project.get("options"))
+    return bool(options.get("project_read_only", False))
 
 
 def _compose_intake_request_text(*, message: str, project: Dict[str, Any], options: Dict[str, Any]) -> Tuple[str, bool]:
@@ -5776,6 +5829,7 @@ def _clone_project_state(
     target_project_id: str,
     target_title: str,
     options: Dict[str, Any],
+    target_options: Dict[str, Any],
 ) -> Dict[str, Any]:
     clone = _normalize_import_project(source_project, project_id=target_project_id)
     clone["project_id"] = target_project_id
@@ -5802,6 +5856,11 @@ def _clone_project_state(
         clone["request_path"] = ""
         clone["last_runtime"] = {}
         clone["pending_input"] = {}
+
+    if isinstance(target_options, dict) and target_options:
+        merged_opts = dict(clone.get("options") or {})
+        merged_opts.update(target_options)
+        clone["options"] = _normalize_project_options(merged_opts)
 
     _append_message(
         clone,
@@ -6666,6 +6725,7 @@ def api_project_clone(project_id: str):
     target_id = str(body.get("target_project_id") or "").strip()
     target_title = str(body.get("target_title") or "").strip()
     clone_options = body.get("options") if isinstance(body.get("options"), dict) else {}
+    target_options = body.get("target_options") if isinstance(body.get("target_options"), dict) else {}
     override = bool(body.get("override"))
 
     if not target_id:
@@ -6685,6 +6745,7 @@ def api_project_clone(project_id: str):
         target_project_id=target_id,
         target_title=target_title,
         options=clone_options,
+        target_options=target_options,
     )
     saved = _save_project_state(cloned)
     return jsonify(
@@ -6709,6 +6770,8 @@ def api_project_upload_ref(project_id: str):
     project = _load_project_state(pid)
     if not isinstance(project, dict):
         project = _new_project_state(pid, title=pid, options={})
+    if _project_is_read_only(project):
+        return jsonify({"status": "fail", "error": "project_read_only", "project_id": pid}), 409
 
     attachment: Dict[str, Any] = {}
     file_obj = request.files.get("file")
@@ -7080,6 +7143,15 @@ def api_chat_send():
         merged_options.update(options)
         project["options"] = merged_options
     _apply_project_memory_update(project, memory_notes, provided=memory_notes_provided)
+    if _project_is_read_only(project):
+        return jsonify(
+            {
+                "status": "fail",
+                "error": "project_read_only",
+                "project": _project_summary(project),
+                "messages": _recent_messages(project),
+            }
+        ), 409
 
     out = _chat_run_pipeline(project=project, message=message, new_task=new_task)
     events_for_meta = out.get("events") if isinstance(out.get("events"), list) else []
@@ -7121,6 +7193,15 @@ def api_chat_pending_submit():
         merged_options.update(options)
         project["options"] = merged_options
     _apply_project_memory_update(project, memory_notes, provided=memory_notes_provided)
+    if _project_is_read_only(project):
+        return jsonify(
+            {
+                "status": "fail",
+                "error": "project_read_only",
+                "project": _project_summary(project),
+                "messages": _recent_messages(project),
+            }
+        ), 409
 
     out = _chat_resume_from_pending(
         project=project,

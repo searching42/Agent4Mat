@@ -7429,8 +7429,10 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(int(health.get("record_count") or 0), 2)
                 self.assertEqual(int(health.get("success_steps") or 0), 1)
                 self.assertEqual(int(health.get("failed_steps") or 0), 1)
+                self.assertAlmostEqual(float(health.get("success_ratio") or 0.0), 0.5, places=6)
                 self.assertEqual(health.get("latest_failed_step"), "score_candidates")
                 self.assertIn("timeout", str(health.get("latest_failed_error") or ""))
+                self.assertEqual(int(health.get("recent_duration_ms") or 0), 0)
 
     def test_ui_html_contains_project_runtime_health_field(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -7501,6 +7503,12 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("session_filter_health", html)
         self.assertIn("session_sort_mode", html)
         self.assertIn("applySessionBoardControls()", html)
+        self.assertIn("quickFilterFailedOnly()", html)
+        self.assertIn("quickSortPriority()", html)
+        self.assertIn("clearSessionBoardControls()", html)
+        self.assertIn("SESSION_BOARD_KEY", html)
+        self.assertIn("loadSessionBoardState()", html)
+        self.assertIn("saveSessionBoardState(", html)
         self.assertIn("project-session-status", html)
         self.assertIn("Summary", html)
         self.assertIn("showProjectSummary(", html)
@@ -7508,6 +7516,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("validateProjectTask(", html)
         self.assertIn("recent_duration=", html)
         self.assertIn("success_ratio=", html)
+        self.assertIn("records=", html)
         self.assertIn("project-session-progress-bar", html)
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:

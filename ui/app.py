@@ -172,6 +172,17 @@ HTML = """
         padding: 6px 8px;
         font-size: 0.72rem;
       }
+      .project-board-quick {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .project-board-quick button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.71rem;
+      }
       .project-session-list {
         display: grid;
         grid-template-columns: 1fr;
@@ -542,8 +553,14 @@ HTML = """
               <option value=\"updated_desc\">sort: updated desc</option>
               <option value=\"failed_desc\">sort: failed desc</option>
               <option value=\"success_ratio_asc\">sort: success ratio asc</option>
+              <option value=\"priority_desc\">sort: priority desc</option>
             </select>
             <button type=\"button\" onclick=\"applySessionBoardControls()\">Apply</button>
+          </div>
+          <div class=\"project-board-quick\">
+            <button type=\"button\" onclick=\"quickFilterFailedOnly()\">Failed Only</button>
+            <button type=\"button\" onclick=\"quickSortPriority()\">Priority First</button>
+            <button type=\"button\" onclick=\"clearSessionBoardControls()\">Reset</button>
           </div>
           <div class=\"project-session-list\" id=\"project_session_list\">
             <div class=\"muted\">(empty)</div>
@@ -778,6 +795,7 @@ HTML = """
       };
 
       const PROMPT_HISTORY_LIMIT = 8;
+      const SESSION_BOARD_KEY = 'agent4mat.ui.session_board.v1';
 
       const pendingFieldMeta = {
         property: {label: 'property', placeholder: 'plqy / lambda_em / stability'},
@@ -872,6 +890,45 @@ HTML = """
         } catch (e) {
           // ignore storage failures
         }
+      }
+
+      function loadSessionBoardState() {
+        const fallback = {filterText: '', health: 'all', sort: 'updated_desc'};
+        try {
+          const raw = localStorage.getItem(SESSION_BOARD_KEY);
+          if (!raw) return fallback;
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== 'object') return fallback;
+          const filterText = String(parsed.filterText || '').trim().toLowerCase();
+          const health = String(parsed.health || 'all').trim().toLowerCase();
+          const sort = String(parsed.sort || 'updated_desc').trim().toLowerCase();
+          return {filterText, health, sort};
+        } catch (e) {
+          return fallback;
+        }
+      }
+
+      function saveSessionBoardState(v) {
+        const payload = {
+          filterText: String((v && v.filterText) || '').trim().toLowerCase(),
+          health: String((v && v.health) || 'all').trim().toLowerCase(),
+          sort: String((v && v.sort) || 'updated_desc').trim().toLowerCase(),
+        };
+        try {
+          localStorage.setItem(SESSION_BOARD_KEY, JSON.stringify(payload));
+        } catch (e) {
+          // ignore storage failures
+        }
+      }
+
+      function applySessionBoardStateToControls(v) {
+        const payload = v && typeof v === 'object' ? v : loadSessionBoardState();
+        const filterEle = document.getElementById('session_filter_text');
+        const healthEle = document.getElementById('session_filter_health');
+        const sortEle = document.getElementById('session_sort_mode');
+        if (filterEle) filterEle.value = String(payload.filterText || '');
+        if (healthEle) healthEle.value = String(payload.health || 'all');
+        if (sortEle) sortEle.value = String(payload.sort || 'updated_desc');
       }
 
       function renderPromptHistory(projectId) {
@@ -1528,7 +1585,29 @@ HTML = """
 
       function applySessionBoardControls() {
         state.sessionBoard = readSessionBoardControls();
+        saveSessionBoardState(state.sessionBoard);
         renderProjectSessionBoard(state.projects || []);
+      }
+
+      function quickFilterFailedOnly() {
+        const healthEle = document.getElementById('session_filter_health');
+        if (healthEle) {
+          healthEle.value = 'failed';
+        }
+        applySessionBoardControls();
+      }
+
+      function quickSortPriority() {
+        const sortEle = document.getElementById('session_sort_mode');
+        if (sortEle) {
+          sortEle.value = 'priority_desc';
+        }
+        applySessionBoardControls();
+      }
+
+      function clearSessionBoardControls() {
+        applySessionBoardStateToControls({filterText: '', health: 'all', sort: 'updated_desc'});
+        applySessionBoardControls();
       }
 
       function renderProjectSessionBoard(projects) {
@@ -1569,6 +1648,20 @@ HTML = """
             const ra = (sa + fa) > 0 ? (sa / (sa + fa)) : 1;
             const rb = (sb + fb) > 0 ? (sb / (sb + fb)) : 1;
             return ra - rb;
+          });
+        } else if (controls.sort === 'priority_desc') {
+          rows.sort((a, b) => {
+            const ah = (a && a.runtime_health && typeof a.runtime_health === 'object') ? a.runtime_health : {};
+            const bh = (b && b.runtime_health && typeof b.runtime_health === 'object') ? b.runtime_health : {};
+            const af = Number(ah.failed_steps || 0);
+            const bf = Number(bh.failed_steps || 0);
+            const ar = Number(ah.recent_duration_ms || 0);
+            const br = Number(bh.recent_duration_ms || 0);
+            const as = Number(ah.success_ratio || 0);
+            const bs = Number(bh.success_ratio || 0);
+            const aScore = (af * 1000) + (ar / 1000) - (as * 100);
+            const bScore = (bf * 1000) + (br / 1000) - (bs * 100);
+            return bScore - aScore;
           });
         } else {
           rows.sort((a, b) => String((b && b.updated_at) || '').localeCompare(String((a && a.updated_at) || '')));
@@ -1636,7 +1729,8 @@ HTML = """
           runtimeLine.className = 'project-session-runtime';
           const ratioText = totalSteps > 0 ? `${Math.round(successRatio * 100)}%` : '-';
           const durationText = runtimeSec > 0 ? `${runtimeSec.toFixed(2)}s` : '-';
-          runtimeLine.textContent = `recent_duration=${durationText} | success_ratio=${ratioText} (${successSteps}/${totalSteps || 0})`;
+          const recordCount = Number(healthObj.record_count || 0);
+          runtimeLine.textContent = `recent_duration=${durationText} | success_ratio=${ratioText} (${successSteps}/${totalSteps || 0}) | records=${recordCount}`;
           card.appendChild(runtimeLine);
           const progress = document.createElement('div');
           progress.className = 'project-session-progress';
@@ -2259,6 +2353,9 @@ HTML = """
         applyStepArgsTemplate(true);
         bindComposerShortcuts();
         bindWorkspaceUrlNavigation();
+        const savedSessionBoard = loadSessionBoardState();
+        state.sessionBoard = savedSessionBoard;
+        applySessionBoardStateToControls(savedSessionBoard);
         const urlProjectId = readProjectIdFromUrl();
         if (urlProjectId) {
           document.getElementById('project_id').value = urlProjectId;
@@ -3197,8 +3294,10 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
             "record_count": 0,
             "success_steps": 0,
             "failed_steps": 0,
+            "success_ratio": 0.0,
             "latest_failed_step": "",
             "latest_failed_error": "",
+            "recent_duration_ms": 0,
         }
     run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
     execution = _load_json_if_exists(run_dir / "execution.json")
@@ -3210,8 +3309,10 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
             "record_count": 0,
             "success_steps": 0,
             "failed_steps": 0,
+            "success_ratio": 0.0,
             "latest_failed_step": "",
             "latest_failed_error": "",
+            "recent_duration_ms": 0,
         }
     records = execution.get("records") if isinstance(execution.get("records"), list) else []
     success_steps = 0
@@ -3229,14 +3330,49 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
             err_txt = str(rec.get("error") or "").strip()
             if err_txt:
                 latest_failed_error = err_txt[:240]
+    total_steps = max(0, success_steps + failed_steps)
+    success_ratio = (float(success_steps) / float(total_steps)) if total_steps > 0 else 0.0
+    recent_duration_ms = 0
+    started_raw = str(execution.get("started_at") or "").strip()
+    ended_raw = str(execution.get("ended_at") or "").strip()
+    if started_raw and ended_raw:
+        try:
+            started_dt = datetime.fromisoformat(started_raw)
+            ended_dt = datetime.fromisoformat(ended_raw)
+            dur = int((ended_dt - started_dt).total_seconds() * 1000)
+            if dur > 0:
+                recent_duration_ms = dur
+        except Exception:
+            recent_duration_ms = 0
+    if recent_duration_ms <= 0:
+        record_durations: List[int] = []
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            st = str(rec.get("started_at") or "").strip()
+            ed = str(rec.get("ended_at") or "").strip()
+            if not st or not ed:
+                continue
+            try:
+                st_dt = datetime.fromisoformat(st)
+                ed_dt = datetime.fromisoformat(ed)
+                d = int((ed_dt - st_dt).total_seconds() * 1000)
+            except Exception:
+                d = 0
+            if d > 0:
+                record_durations.append(d)
+        if record_durations:
+            recent_duration_ms = sum(record_durations)
     return {
         "status": str(execution.get("status") or "unknown"),
         "task_id": task_id,
         "record_count": len(records),
         "success_steps": success_steps,
         "failed_steps": failed_steps,
+        "success_ratio": success_ratio,
         "latest_failed_step": latest_failed_step,
         "latest_failed_error": latest_failed_error,
+        "recent_duration_ms": recent_duration_ms,
     }
 
 

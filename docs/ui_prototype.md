@@ -29,7 +29,9 @@ Open: `http://127.0.0.1:8787`
   - session board shows `recent_duration` and `success_ratio` with a mini progress bar
   - session board shows `failed_error` snippet, plus quick `Timeline` view and `Copy Task ID`
   - session board supports filter/sort controls (`project/task` text filter, health filter, sort mode)
+  - session board provides quick presets (`Failed Only`, `Priority First`, `Reset`) and persists controls in browser local storage
   - session card provides quick `Summary` and `Validate` actions for current task
+  - runtime health now includes `success_ratio` and `recent_duration_ms` for smarter priority sorting
   - session file: `runs/ui_sessions/projects/<project_id>.json`
   - project picker/meta now includes `runtime_health` snapshot from current task execution (`status`, success/failed steps, latest failed step)
 - file input entry:

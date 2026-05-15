@@ -155,6 +155,23 @@ HTML = """
         font-size: 0.78rem;
         color: #4b5a73;
       }
+      .project-board-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .project-board-controls input,
+      .project-board-controls select {
+        margin-top: 0;
+        padding: 6px 7px;
+        font-size: 0.74rem;
+      }
+      .project-board-controls button {
+        margin-top: 0;
+        padding: 6px 8px;
+        font-size: 0.72rem;
+      }
       .project-session-list {
         display: grid;
         grid-template-columns: 1fr;
@@ -191,6 +208,28 @@ HTML = """
       .project-session-meta {
         color: #4b5568;
         line-height: 1.45;
+      }
+      .project-session-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 4px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        border: 1px solid #d5deec;
+        color: #3e4b61;
+        font-size: 0.7rem;
+        background: #f2f6fc;
+      }
+      .project-session-status.fail {
+        color: #8a2f2f;
+        border-color: #eab9b9;
+        background: #fff0f0;
+      }
+      .project-session-status.pass {
+        color: #116b5c;
+        border-color: #bfe8df;
+        background: #ecfaf6;
       }
       .project-session-failed {
         margin-top: 4px;
@@ -491,6 +530,21 @@ HTML = """
         <button onclick=\"refreshProjects()\">Refresh Projects</button>
         <div class=\"project-board\">
           <h4>Workspace Sessions</h4>
+          <div class=\"project-board-controls\">
+            <input id=\"session_filter_text\" placeholder=\"filter: project/task\" />
+            <select id=\"session_filter_health\">
+              <option value=\"all\">health: all</option>
+              <option value=\"failed\">health: failed</option>
+              <option value=\"success\">health: success</option>
+              <option value=\"none\">health: none</option>
+            </select>
+            <select id=\"session_sort_mode\">
+              <option value=\"updated_desc\">sort: updated desc</option>
+              <option value=\"failed_desc\">sort: failed desc</option>
+              <option value=\"success_ratio_asc\">sort: success ratio asc</option>
+            </select>
+            <button type=\"button\" onclick=\"applySessionBoardControls()\">Apply</button>
+          </div>
           <div class=\"project-session-list\" id=\"project_session_list\">
             <div class=\"muted\">(empty)</div>
           </div>
@@ -716,6 +770,11 @@ HTML = """
         pendingInput: null,
         promptHistory: [],
         projects: [],
+        sessionBoard: {
+          filterText: '',
+          health: 'all',
+          sort: 'updated_desc',
+        },
       };
 
       const PROMPT_HISTORY_LIMIT = 8;
@@ -1460,11 +1519,60 @@ HTML = """
         renderProjectSessionBoard(projects);
       }
 
+      function readSessionBoardControls() {
+        const filterText = String((document.getElementById('session_filter_text').value || '')).trim().toLowerCase();
+        const health = String(document.getElementById('session_filter_health').value || 'all').trim().toLowerCase();
+        const sort = String(document.getElementById('session_sort_mode').value || 'updated_desc').trim().toLowerCase();
+        return {filterText, health, sort};
+      }
+
+      function applySessionBoardControls() {
+        state.sessionBoard = readSessionBoardControls();
+        renderProjectSessionBoard(state.projects || []);
+      }
+
       function renderProjectSessionBoard(projects) {
         const wrap = document.getElementById('project_session_list');
         if (!wrap) return;
         wrap.innerHTML = '';
-        const rows = Array.isArray(projects) ? projects : [];
+        const controls = readSessionBoardControls();
+        state.sessionBoard = controls;
+        const baseRows = Array.isArray(projects) ? projects : [];
+        let rows = baseRows.slice();
+        if (controls.filterText) {
+          rows = rows.filter((row) => {
+            if (!row || typeof row !== 'object') return false;
+            const pid = String(row.project_id || '').toLowerCase();
+            const title = String(row.title || '').toLowerCase();
+            const task = String(row.current_task_id || '').toLowerCase();
+            const token = controls.filterText;
+            return pid.includes(token) || title.includes(token) || task.includes(token);
+          });
+        }
+        if (controls.health && controls.health !== 'all') {
+          rows = rows.filter((row) => {
+            const status = String((row && row.runtime_health && row.runtime_health.status) || '').toLowerCase();
+            if (controls.health === 'failed') return status === 'failed';
+            if (controls.health === 'success') return status === 'success';
+            if (controls.health === 'none') return status === 'none';
+            return true;
+          });
+        }
+        if (controls.sort === 'failed_desc') {
+          rows.sort((a, b) => Number((b && b.runtime_health && b.runtime_health.failed_steps) || 0) - Number((a && a.runtime_health && a.runtime_health.failed_steps) || 0));
+        } else if (controls.sort === 'success_ratio_asc') {
+          rows.sort((a, b) => {
+            const sa = Number((a && a.runtime_health && a.runtime_health.success_steps) || 0);
+            const fa = Number((a && a.runtime_health && a.runtime_health.failed_steps) || 0);
+            const sb = Number((b && b.runtime_health && b.runtime_health.success_steps) || 0);
+            const fb = Number((b && b.runtime_health && b.runtime_health.failed_steps) || 0);
+            const ra = (sa + fa) > 0 ? (sa / (sa + fa)) : 1;
+            const rb = (sb + fb) > 0 ? (sb / (sb + fb)) : 1;
+            return ra - rb;
+          });
+        } else {
+          rows.sort((a, b) => String((b && b.updated_at) || '').localeCompare(String((a && a.updated_at) || '')));
+        }
         if (rows.length < 1) {
           const empty = document.createElement('div');
           empty.className = 'muted';
@@ -1487,7 +1595,9 @@ HTML = """
           const runtimeSec = Number.isFinite(runtimeSecRaw) && runtimeSecRaw > 0 ? (runtimeSecRaw / 1000.0) : 0;
           const latestFailedStep = String((row.runtime_health && row.runtime_health.latest_failed_step) || '').trim();
           const latestFailedError = String((row.runtime_health && row.runtime_health.latest_failed_error) || '').trim();
-          const health = formatRuntimeHealth(row.runtime_health || {});
+          const healthObj = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+          const healthStatus = String(healthObj.status || 'none').toLowerCase();
+          const health = formatRuntimeHealth(healthObj || {});
           const updatedAt = String(row.updated_at || '-');
           const title = String(row.title || pid);
 
@@ -1510,6 +1620,10 @@ HTML = """
           meta.className = 'project-session-meta';
           meta.textContent = `task=${taskId || '-'} | health=${health} | updated=${updatedAt}`;
           card.appendChild(meta);
+          const statusBadge = document.createElement('div');
+          statusBadge.className = `project-session-status${healthStatus === 'failed' ? ' fail' : (healthStatus === 'success' ? ' pass' : '')}`;
+          statusBadge.textContent = `status=${healthStatus || 'none'}`;
+          card.appendChild(statusBadge);
           const failed = document.createElement('div');
           failed.className = 'project-session-failed';
           failed.textContent = latestFailedStep ? `latest_failed_step=${latestFailedStep}` : 'latest_failed_step=-';
@@ -1577,6 +1691,24 @@ HTML = """
             copyProjectTaskId(taskId);
           };
           actions.appendChild(copyTaskBtn);
+
+          const summaryBtn = document.createElement('button');
+          summaryBtn.type = 'button';
+          summaryBtn.textContent = 'Summary';
+          summaryBtn.disabled = !taskId;
+          summaryBtn.onclick = () => {
+            showProjectSummary(pid, taskId);
+          };
+          actions.appendChild(summaryBtn);
+
+          const validateBtn = document.createElement('button');
+          validateBtn.type = 'button';
+          validateBtn.textContent = 'Validate';
+          validateBtn.disabled = !taskId;
+          validateBtn.onclick = () => {
+            validateProjectTask(pid, taskId);
+          };
+          actions.appendChild(validateBtn);
           card.appendChild(actions);
           wrap.appendChild(card);
         }
@@ -1688,6 +1820,38 @@ HTML = """
           // fall through
         }
         renderJsonOut({status: 'fail', error: 'clipboard_unavailable', task_id: tid});
+      }
+
+      async function showProjectSummary(projectId, taskId) {
+        const pid = String(projectId || '').trim();
+        const tid = String(taskId || '').trim();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'project has no current_task_id'});
+          return;
+        }
+        await openProjectWorkspace(pid, {push: true});
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
+        renderJsonOut(r.data);
+      }
+
+      async function validateProjectTask(projectId, taskId) {
+        const pid = String(projectId || '').trim();
+        const tid = String(taskId || '').trim();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'project has no current_task_id'});
+          return;
+        }
+        await openProjectWorkspace(pid, {push: true});
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/validate`);
+        renderJsonOut(r.data);
       }
 
       async function switchProjectFromPicker() {

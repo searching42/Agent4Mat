@@ -49,6 +49,8 @@ Open: `http://127.0.0.1:8787`
   - supports export-id actions: `View Export By ID`, `Replay Export By ID`, `Delete Export By ID`
   - supports export-id compare (`Compare Export IDs`) with JSON path-level diff summary
   - supports export-id download (`Download Export JSON` / `Download Export CSV`)
+  - replay supports governance controls: `dry_run`, `retry_max`, `retry_backoff_ms`, `max_concurrency`
+  - replay results persist `replay_metrics` (`ok/fail/skipped/dry_run`, attempts, elapsed_ms, failed_task_ids)
   - session card provides quick `Summary` and `Validate` actions for current task
   - runtime health now includes `success_ratio` and `recent_duration_ms` for smarter priority sorting
   - session file: `runs/ui_sessions/projects/<project_id>.json`
@@ -89,12 +91,14 @@ Open: `http://127.0.0.1:8787`
   - `GET /api/projects/<project_id>/history`
   - `POST /api/projects/<project_id>/upload-ref`
   - `POST /api/projects/<project_id>/batch-export`
-  - `GET /api/projects/<project_id>/batch-exports` (`limit`, `offset`, `action`, `status`)
+  - `GET /api/projects/<project_id>/batch-exports` (`limit`, `offset`, `action`, `status=pass|partial|fail`)
   - `GET /api/projects/<project_id>/batch-exports/compare` (`primary_export_id`, `other_export_id`)
   - `POST /api/projects/<project_id>/batch-exports/replay-latest`
+    - body supports `{ "options": { "dry_run": bool, "retry_max": 0..3, "retry_backoff_ms": 0..5000, "max_concurrency": 1..8 } }`
   - `GET /api/projects/<project_id>/batch-exports/<export_id>`
   - `GET /api/projects/<project_id>/batch-exports/<export_id>/download` (`format=json|csv`)
   - `POST /api/projects/<project_id>/batch-exports/<export_id>/replay`
+    - body supports same replay `options`
   - `DELETE /api/projects/<project_id>/batch-exports/<export_id>`
   - `POST /api/chat/send`
 - existing execution and inspector APIs:

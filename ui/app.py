@@ -423,6 +423,11 @@ HTML = """
           <button class=\"primary\" onclick=\"saveProject()\">Save/Load Project</button>
           <button onclick=\"sendChat(true)\">Start New Task</button>
         </div>
+        <div class=\"btn-row\">
+          <button onclick=\"openWorkspaceWindow()\">Open in New Window</button>
+          <button onclick=\"copyWorkspaceLink()\">Copy Workspace Link</button>
+        </div>
+        <div class=\"muted\">当前项目会同步到 URL 的 <code>?project_id=...</code>，便于独立窗口和分享。</div>
 
         <div class=\"project-meta\" id=\"project_meta\">
           <div>task_id: <span id=\"current_task_id\">-</span></div>
@@ -1234,6 +1239,99 @@ HTML = """
         return v || 'demo_chat_project';
       }
 
+      function isSafeProjectId(projectId) {
+        return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(projectId || '').trim());
+      }
+
+      function readProjectIdFromUrl() {
+        try {
+          const raw = new URLSearchParams(window.location.search || '').get('project_id');
+          const pid = String(raw || '').trim();
+          return isSafeProjectId(pid) ? pid : '';
+        } catch (e) {
+          return '';
+        }
+      }
+
+      function workspaceUrlForProject(projectId) {
+        const url = new URL(window.location.href);
+        const pid = String(projectId || '').trim();
+        if (pid) {
+          url.searchParams.set('project_id', pid);
+        } else {
+          url.searchParams.delete('project_id');
+        }
+        return url.toString();
+      }
+
+      function syncProjectPickerValue(projectId) {
+        const picker = document.getElementById('project_picker');
+        if (!picker) return;
+        const pid = String(projectId || '').trim();
+        const hasOption = Array.from(picker.options || []).some((opt) => String(opt.value || '') === pid);
+        picker.value = hasOption ? pid : '';
+      }
+
+      function syncWorkspaceUrl(projectId, opts) {
+        const pid = String(projectId || '').trim();
+        const next = workspaceUrlForProject(pid);
+        try {
+          if (opts && opts.push) {
+            window.history.pushState({project_id: pid}, '', next);
+          } else {
+            window.history.replaceState({project_id: pid}, '', next);
+          }
+        } catch (e) {
+          // ignore history updates when the browser blocks them
+        }
+      }
+
+      function applyProjectStateToUi(project, opts) {
+        if (!project || typeof project !== 'object') return;
+        const pid = String(project.project_id || selectedProjectId() || '').trim() || 'demo_chat_project';
+        document.getElementById('project_id').value = pid;
+        syncProjectPickerValue(pid);
+        if (!opts || opts.updateUrl !== false) {
+          syncWorkspaceUrl(pid, opts);
+        }
+        renderProjectOptions(project);
+        renderProjectMeta(project);
+        renderPendingInput(project.pending_input || null);
+        restoreMessageDraft(pid);
+        renderPromptHistory(pid);
+        refreshWorkspaceHud();
+      }
+
+      function bindWorkspaceUrlNavigation() {
+        window.addEventListener('popstate', () => {
+          const pid = readProjectIdFromUrl();
+          if (!pid) return;
+          document.getElementById('project_id').value = pid;
+          syncProjectPickerValue(pid);
+          void loadHistory();
+          void loadRunRuntime();
+        });
+      }
+
+      function openWorkspaceWindow() {
+        const url = workspaceUrlForProject(selectedProjectId());
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+
+      async function copyWorkspaceLink() {
+        const url = workspaceUrlForProject(selectedProjectId());
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(url);
+            renderJsonOut({status: 'pass', copied: url});
+            return;
+          }
+        } catch (e) {
+          // fall through to the failure payload below
+        }
+        renderJsonOut({status: 'fail', error: 'clipboard_unavailable', url: url});
+      }
+
       function collectOptions() {
         const planner = document.getElementById('planner').value;
         const catalog = document.getElementById('catalog').value;
@@ -1262,6 +1360,7 @@ HTML = """
           opt.textContent = label;
           picker.appendChild(opt);
         }
+        syncProjectPickerValue(selectedProjectId());
       }
 
       async function switchProjectFromPicker() {
@@ -1284,15 +1383,10 @@ HTML = """
         const project = r.data && r.data.project ? r.data.project : null;
         if (project) {
           state.project = project;
-          renderProjectOptions(project);
-          renderProjectMeta(project);
-          renderPendingInput(project.pending_input || null);
+          applyProjectStateToUi(project);
         }
         await refreshProjects();
         await loadHistory();
-        restoreMessageDraft(projectId);
-        renderPromptHistory(projectId);
-        refreshWorkspaceHud();
       }
 
       async function exportProject() {
@@ -1327,10 +1421,7 @@ HTML = """
         renderJsonOut(r.data);
         if (r.data && r.data.project) {
           state.project = r.data.project;
-          renderProjectOptions(r.data.project);
-          renderProjectMeta(r.data.project);
-          renderPendingInput(r.data.project.pending_input || null);
-          refreshWorkspaceHud();
+          applyProjectStateToUi(r.data.project);
         }
         await refreshProjects();
         await loadHistory();
@@ -1342,8 +1433,7 @@ HTML = """
         renderJsonOut(r.data);
         if (r.data && r.data.project) {
           state.project = r.data.project;
-          renderProjectMeta(r.data.project);
-          renderPendingInput(r.data.project.pending_input || null);
+          applyProjectStateToUi(r.data.project);
         }
         const messages = Array.isArray(r.data.messages) ? r.data.messages : [];
         renderChat(messages);
@@ -1375,9 +1465,7 @@ HTML = """
         renderPendingInput(pending);
         if (r.data && r.data.project) {
           state.project = r.data.project;
-          renderProjectOptions(r.data.project);
-          renderProjectMeta(r.data.project);
-          refreshWorkspaceHud();
+          applyProjectStateToUi(r.data.project);
         }
         const msgs = Array.isArray(r.data.messages) ? r.data.messages : [];
         if (msgs.length > 0) {
@@ -1679,6 +1767,11 @@ HTML = """
       async function boot() {
         applyStepArgsTemplate(true);
         bindComposerShortcuts();
+        bindWorkspaceUrlNavigation();
+        const urlProjectId = readProjectIdFromUrl();
+        if (urlProjectId) {
+          document.getElementById('project_id').value = urlProjectId;
+        }
         await refreshProjects();
         await saveProject();
         renderPromptHistory(currentProjectKey());

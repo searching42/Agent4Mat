@@ -22,6 +22,8 @@ Open: `http://127.0.0.1:8787`
   - includes a built-in step panel (operation dropdown + args JSON) that sends step requests into chat
 - project/session memory:
   - each project persists independent chat history and runtime pointers
+  - workspace URL carries `?project_id=...` and restores project context on load/back-forward navigation
+  - supports `Open in New Window` and `Copy Workspace Link` for project-isolated windows
   - session file: `runs/ui_sessions/projects/<project_id>.json`
   - project picker/meta now includes `runtime_health` snapshot from current task execution (`status`, success/failed steps, latest failed step)
 - file input entry:

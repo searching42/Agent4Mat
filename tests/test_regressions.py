@@ -7449,6 +7449,17 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("current_task_id_hud", html)
         self.assertIn("sendWebSearchHint()", html)
 
+    def test_ui_html_contains_workspace_url_controls(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("openWorkspaceWindow()", html)
+        self.assertIn("copyWorkspaceLink()", html)
+        self.assertIn("readProjectIdFromUrl()", html)
+        self.assertIn("syncWorkspaceUrl(", html)
+
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

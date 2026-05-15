@@ -213,6 +213,37 @@ HTML = """
         color: #334155;
         font-size: 0.72rem;
       }
+      .project-batch-history-controls {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+        margin: 0 0 6px 0;
+      }
+      .project-batch-history-controls select,
+      .project-batch-history-controls input {
+        margin-top: 0;
+        padding: 5px 7px;
+        font-size: 0.72rem;
+      }
+      .project-batch-history-list {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 6px;
+        margin: 0 0 8px 0;
+      }
+      .project-batch-history-item {
+        border: 1px solid #d6e2f3;
+        border-radius: 8px;
+        padding: 6px;
+        background: #ffffff;
+        font-size: 0.72rem;
+        color: #304058;
+      }
+      .project-batch-history-item button {
+        margin-top: 4px;
+        padding: 4px 7px;
+        font-size: 0.7rem;
+      }
       .project-session-section {
         border: 1px dashed #d4dfef;
         border-radius: 8px;
@@ -636,8 +667,30 @@ HTML = """
             <button type=\"button\" onclick=\"deleteBatchExportById()\">Delete Export By ID</button>
           </div>
           <input id=\"batch_export_id\" placeholder=\"batch export id\" />
+          <div class=\"project-batch-history-controls\">
+            <select id=\"batch_history_action_filter\" onchange=\"resetBatchHistoryOffsetAndReload()\">
+              <option value=\"\">action: all</option>
+              <option value=\"batch_summary\">action: batch_summary</option>
+              <option value=\"batch_validate\">action: batch_validate</option>
+              <option value=\"batch_retry_failed\">action: batch_retry_failed</option>
+            </select>
+            <select id=\"batch_history_status_filter\" onchange=\"resetBatchHistoryOffsetAndReload()\">
+              <option value=\"\">status: all</option>
+              <option value=\"pass\">status: pass</option>
+              <option value=\"fail\">status: fail</option>
+            </select>
+            <select id=\"batch_history_page_size\" onchange=\"resetBatchHistoryOffsetAndReload()\">
+              <option value=\"10\">page size: 10</option>
+              <option value=\"20\" selected>page size: 20</option>
+              <option value=\"50\">page size: 50</option>
+            </select>
+            <input id=\"batch_history_offset\" type=\"number\" min=\"0\" step=\"1\" value=\"0\" />
+            <button type=\"button\" onclick=\"prevBatchHistoryPage()\">Prev Page</button>
+            <button type=\"button\" onclick=\"nextBatchHistoryPage()\">Next Page</button>
+          </div>
           <div class=\"project-board-summary\" id=\"project_batch_history_summary\">batch_history: -</div>
-          <pre id=\"project_batch_history\" style=\"margin: 0 0 8px 0; max-height: 180px; overflow: auto;\">(none)</pre>
+          <div id=\"project_batch_history_list\" class=\"project-batch-history-list\"><div class=\"muted\">(none)</div></div>
+          <pre id=\"project_batch_history\" style=\"margin: 0 0 8px 0; max-height: 120px; overflow: auto;\">(none)</pre>
           <div class=\"project-session-list\" id=\"project_session_list\">
             <div class=\"muted\">(empty)</div>
           </div>
@@ -864,6 +917,7 @@ HTML = """
         promptHistory: [],
         projects: [],
         batchHistory: [],
+        batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
         sessionBoard: {
           filterText: '',
           health: 'all',
@@ -1993,30 +2047,111 @@ HTML = """
         await loadBatchHistory();
       }
 
+      function readBatchHistoryControls() {
+        const action = String((document.getElementById('batch_history_action_filter').value || '')).trim();
+        const status = String((document.getElementById('batch_history_status_filter').value || '')).trim().toLowerCase();
+        const limitRaw = Number(document.getElementById('batch_history_page_size').value || 20);
+        const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.floor(limitRaw))) : 20;
+        const offsetRaw = Number(document.getElementById('batch_history_offset').value || 0);
+        const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
+        return {action, status, limit, offset};
+      }
+
+      function setBatchHistoryOffset(offset) {
+        const ele = document.getElementById('batch_history_offset');
+        if (ele) {
+          ele.value = String(Math.max(0, Number.isFinite(Number(offset)) ? Math.floor(Number(offset)) : 0));
+        }
+      }
+
+      function resetBatchHistoryOffsetAndReload() {
+        setBatchHistoryOffset(0);
+        void loadBatchHistory();
+      }
+
+      function prevBatchHistoryPage() {
+        const c = readBatchHistoryControls();
+        setBatchHistoryOffset(Math.max(0, c.offset - c.limit));
+        void loadBatchHistory();
+      }
+
+      function nextBatchHistoryPage() {
+        const c = readBatchHistoryControls();
+        const meta = state.batchHistoryMeta || {};
+        const hasMore = Boolean(meta.has_more);
+        if (!hasMore) return;
+        setBatchHistoryOffset(c.offset + c.limit);
+        void loadBatchHistory();
+      }
+
+      function renderBatchHistoryList(items) {
+        const wrap = document.getElementById('project_batch_history_list');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const rows = Array.isArray(items) ? items : [];
+        if (rows.length < 1) {
+          const empty = document.createElement('div');
+          empty.className = 'muted';
+          empty.textContent = '(none)';
+          wrap.appendChild(empty);
+          return;
+        }
+        for (const item of rows) {
+          if (!item || typeof item !== 'object') continue;
+          const eid = String(item.export_id || '').trim();
+          const row = document.createElement('div');
+          row.className = 'project-batch-history-item';
+          row.textContent = `${String(item.created_at || '-')} | ${String(item.action || '-')} | status=${String(item.status || '-')} | count=${String(item.count || 0)} | export_id=${eid || '-'}`;
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = 'Use ID';
+          btn.onclick = () => {
+            const input = document.getElementById('batch_export_id');
+            if (input) input.value = eid;
+            renderJsonOut(item);
+          };
+          row.appendChild(document.createElement('br'));
+          row.appendChild(btn);
+          wrap.appendChild(row);
+        }
+      }
+
       async function loadBatchHistory() {
         const pid = selectedProjectId();
         if (!pid || !isSafeProjectId(pid)) {
           renderJsonOut({status: 'fail', error: 'invalid project_id'});
           return;
         }
-        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports?limit=20`);
+        const c = readBatchHistoryControls();
+        const qs = new URLSearchParams();
+        qs.set('limit', String(c.limit));
+        qs.set('offset', String(c.offset));
+        if (c.action) qs.set('action', c.action);
+        if (c.status) qs.set('status', c.status);
+        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports?${qs.toString()}`);
         const items = Array.isArray(r.data && r.data.exports) ? r.data.exports : [];
+        const total = Number((r.data && r.data.total_count) || items.length);
+        const hasMore = Boolean(r.data && r.data.has_more);
         state.batchHistory = items;
+        state.batchHistoryMeta = {offset: c.offset, limit: c.limit, total: total, has_more: hasMore, action: c.action, status: c.status};
         const head = document.getElementById('project_batch_history_summary');
         const box = document.getElementById('project_batch_history');
         const exportIdEle = document.getElementById('batch_export_id');
         if (head) {
+          const page = Math.floor(c.offset / c.limit) + 1;
           const latest = items.length > 0 ? items[0] : null;
           head.textContent = latest
-            ? `batch_history: total=${items.length} | latest=${String(latest.action || '-')}/${String(latest.created_at || '-')}`
-            : 'batch_history: total=0';
+            ? `batch_history: total=${total} | page=${page} | shown=${items.length} | has_more=${hasMore ? 'yes' : 'no'} | latest=${String(latest.action || '-')}/${String(latest.created_at || '-')}`
+            : `batch_history: total=${total} | page=${page} | shown=0 | has_more=no`;
         }
         if (box) {
           box.textContent = items.length > 0 ? JSON.stringify(items.slice(0, 20), null, 2) : '(none)';
         }
+        renderBatchHistoryList(items);
         if (exportIdEle && items.length > 0) {
           const current = String(exportIdEle.value || '').trim();
-          if (!current) {
+          const hit = items.some((x) => String((x && x.export_id) || '') === current);
+          if (!current || !hit) {
             exportIdEle.value = String(items[0].export_id || '');
           }
         }
@@ -4153,7 +4288,14 @@ def _delete_batch_export_entry(project_id: str, export_id: str) -> bool:
         return False
 
 
-def _list_batch_export_entries(project_id: str, *, limit: int = 20) -> List[Dict[str, Any]]:
+def _list_batch_export_entries(
+    project_id: str,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    action_filter: str = "",
+    status_filter: str = "",
+) -> Tuple[List[Dict[str, Any]], int]:
     root = _ui_batch_exports_root(project_id)
     rows: List[Dict[str, Any]] = []
     for path in root.glob("*.json"):
@@ -4172,10 +4314,20 @@ def _list_batch_export_entries(project_id: str, *, limit: int = 20) -> List[Dict
                 "count": _as_int(payload.get("count"), 0),
                 "limit": _as_int(payload.get("limit"), 0),
                 "action": str(payload.get("action") or ""),
+                "status": str(payload.get("status") or ""),
             }
         )
     rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
-    return rows[:max(1, min(limit, 100))]
+    act = str(action_filter or "").strip()
+    st = str(status_filter or "").strip().lower()
+    if act:
+        rows = [row for row in rows if str(row.get("action") or "") == act]
+    if st:
+        rows = [row for row in rows if str(row.get("status") or "").lower() == st]
+    total = len(rows)
+    safe_limit = max(1, min(limit, 100))
+    safe_offset = max(0, offset)
+    return rows[safe_offset : safe_offset + safe_limit], total
 
 
 def _save_batch_export_entry(project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -5151,8 +5303,35 @@ def api_project_batch_exports(project_id: str):
         return jsonify({"status": "fail", "error": "invalid project_id"}), 400
     limit = _as_int(request.args.get("limit"), 20)
     limit = max(1, min(limit, 100))
-    exports = _list_batch_export_entries(pid, limit=limit)
-    return jsonify({"status": "pass", "project_id": pid, "limit": limit, "count": len(exports), "exports": exports})
+    offset = _as_int(request.args.get("offset"), 0)
+    offset = max(0, min(offset, 200000))
+    action_filter = str(request.args.get("action") or "").strip()
+    status_filter = str(request.args.get("status") or "").strip().lower()
+    if action_filter and not _safe_filter_token(action_filter):
+        return jsonify({"status": "fail", "error": "invalid action filter"}), 400
+    if status_filter and status_filter not in {"pass", "fail"}:
+        return jsonify({"status": "fail", "error": "invalid status filter"}), 400
+    exports, total_count = _list_batch_export_entries(
+        pid,
+        limit=limit,
+        offset=offset,
+        action_filter=action_filter,
+        status_filter=status_filter,
+    )
+    return jsonify(
+        {
+            "status": "pass",
+            "project_id": pid,
+            "limit": limit,
+            "offset": offset,
+            "action_filter": action_filter,
+            "status_filter": status_filter,
+            "count": len(exports),
+            "total_count": total_count,
+            "has_more": (offset + len(exports)) < total_count,
+            "exports": exports,
+        }
+    )
 
 
 @app.post("/api/projects/<project_id>/batch-exports/replay-latest")
@@ -5162,7 +5341,7 @@ def api_project_batch_exports_replay_latest(project_id: str):
         return jsonify({"status": "fail", "error": "missing project_id"}), 400
     if not _is_safe_project_id(pid):
         return jsonify({"status": "fail", "error": "invalid project_id"}), 400
-    exports = _list_batch_export_entries(pid, limit=1)
+    exports, _ = _list_batch_export_entries(pid, limit=1)
     if not exports:
         return jsonify({"status": "missing", "error": "no_batch_export", "project_id": pid}), 200
     latest = exports[0]

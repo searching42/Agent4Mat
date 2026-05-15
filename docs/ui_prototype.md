@@ -42,6 +42,8 @@ Open: `http://127.0.0.1:8787`
   - supports one-click health count filters (`Failed Count` / `Success Count` / `None Count`) with live counters
   - batch actions are persisted to `runs/ui_sessions/exports/<project_id>/` via API
   - supports batch history panel (`Load Batch History`) with latest export summary
+  - batch history supports filter by action/status and paging (`limit/offset`, prev/next)
+  - batch history list items support one-click `Use ID` to fill `batch_export_id`
   - supports `Replay Latest Batch` to rerun latest exported batch action (`batch_summary` / `batch_validate` / `batch_retry_failed`)
   - supports export-id actions: `View Export By ID`, `Replay Export By ID`, `Delete Export By ID`
   - session card provides quick `Summary` and `Validate` actions for current task
@@ -84,7 +86,7 @@ Open: `http://127.0.0.1:8787`
   - `GET /api/projects/<project_id>/history`
   - `POST /api/projects/<project_id>/upload-ref`
   - `POST /api/projects/<project_id>/batch-export`
-  - `GET /api/projects/<project_id>/batch-exports`
+  - `GET /api/projects/<project_id>/batch-exports` (`limit`, `offset`, `action`, `status`)
   - `POST /api/projects/<project_id>/batch-exports/replay-latest`
   - `GET /api/projects/<project_id>/batch-exports/<export_id>`
   - `POST /api/projects/<project_id>/batch-exports/<export_id>/replay`

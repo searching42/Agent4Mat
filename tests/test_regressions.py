@@ -7520,13 +7520,23 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("persistBatchPayload(", html)
         self.assertIn("loadBatchHistory()", html)
         self.assertIn("replayLatestBatchAction()", html)
+        self.assertIn("readBatchHistoryControls()", html)
+        self.assertIn("resetBatchHistoryOffsetAndReload()", html)
+        self.assertIn("prevBatchHistoryPage()", html)
+        self.assertIn("nextBatchHistoryPage()", html)
+        self.assertIn("renderBatchHistoryList(", html)
         self.assertIn("viewBatchExportById()", html)
         self.assertIn("replayBatchExportById()", html)
         self.assertIn("deleteBatchExportById()", html)
         self.assertIn("batch_export_id", html)
+        self.assertIn("batch_history_action_filter", html)
+        self.assertIn("batch_history_status_filter", html)
+        self.assertIn("batch_history_page_size", html)
+        self.assertIn("batch_history_offset", html)
         self.assertIn("session_batch_limit", html)
         self.assertIn("project_batch_history_summary", html)
         self.assertIn("project_batch_history", html)
+        self.assertIn("project_batch_history_list", html)
         self.assertIn("clearSessionBoardControls()", html)
         self.assertIn("session_auto_refresh", html)
         self.assertIn("session_refresh_seconds", html)
@@ -7559,6 +7569,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("/batch-export", html)
         self.assertIn("/batch-exports", html)
         self.assertIn("/batch-exports/replay-latest", html)
+        self.assertIn("?${qs.toString()}", html)
         self.assertIn("/batch-exports/${encodeURIComponent(eid)}", html)
         self.assertIn("/batch-exports/${encodeURIComponent(eid)}/replay", html)
         self.assertIn("Summary", html)
@@ -7680,7 +7691,7 @@ class UiPrototypeTests(unittest.TestCase):
                             "count": 1,
                             "rows": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
                             "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
-                            "created_at": "2026-05-15T08:00:00+08:00",
+                            "created_at": "2026-05-15T10:00:00+08:00",
                         }
                     },
                 )
@@ -7691,6 +7702,58 @@ class UiPrototypeTests(unittest.TestCase):
                 export_path = Path(str(entry.get("path") or ""))
                 self.assertTrue(export_path.exists())
                 self.assertIn("runs/ui_sessions/exports/ui_proj_batch", str(export_path))
+
+                save_resp_2 = client.post(
+                    "/api/projects/ui_proj_batch/batch-export",
+                    json={
+                        "payload": {
+                            "status": "fail",
+                            "action": "batch_validate",
+                            "limit": 1,
+                            "count": 1,
+                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "created_at": "2026-05-15T09:00:00+08:00",
+                        }
+                    },
+                )
+                self.assertEqual(save_resp_2.status_code, 200)
+
+                save_resp_3 = client.post(
+                    "/api/projects/ui_proj_batch/batch-export",
+                    json={
+                        "payload": {
+                            "status": "pass",
+                            "action": "batch_summary",
+                            "limit": 1,
+                            "count": 1,
+                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "created_at": "2026-05-15T08:30:00+08:00",
+                        }
+                    },
+                )
+                self.assertEqual(save_resp_3.status_code, 200)
+
+                filtered_page_1 = client.get("/api/projects/ui_proj_batch/batch-exports?limit=1&offset=0&action=batch_summary&status=pass")
+                self.assertEqual(filtered_page_1.status_code, 200)
+                fp1_payload = filtered_page_1.get_json()
+                self.assertEqual(fp1_payload.get("status"), "pass")
+                self.assertEqual(int(fp1_payload.get("total_count") or 0), 2)
+                self.assertEqual(bool(fp1_payload.get("has_more")), True)
+                fp1_exports = fp1_payload.get("exports") if isinstance(fp1_payload.get("exports"), list) else []
+                self.assertEqual(len(fp1_exports), 1)
+                self.assertEqual(str(fp1_exports[0].get("action") or ""), "batch_summary")
+                self.assertEqual(str(fp1_exports[0].get("status") or ""), "pass")
+
+                filtered_page_2 = client.get("/api/projects/ui_proj_batch/batch-exports?limit=1&offset=1&action=batch_summary&status=pass")
+                self.assertEqual(filtered_page_2.status_code, 200)
+                fp2_payload = filtered_page_2.get_json()
+                self.assertEqual(fp2_payload.get("status"), "pass")
+                self.assertEqual(int(fp2_payload.get("total_count") or 0), 2)
+                self.assertEqual(bool(fp2_payload.get("has_more")), False)
+                fp2_exports = fp2_payload.get("exports") if isinstance(fp2_payload.get("exports"), list) else []
+                self.assertEqual(len(fp2_exports), 1)
 
                 list_resp = client.get("/api/projects/ui_proj_batch/batch-exports?limit=10")
                 self.assertEqual(list_resp.status_code, 200)

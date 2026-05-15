@@ -810,6 +810,7 @@ HTML = """
             <div class=\"btn-row\">
               <button class=\"primary\" onclick=\"sendPendingForm(false)\">Send Form Patch</button>
               <button onclick=\"sendPendingForm(true)\">Send + Run</button>
+              <button onclick=\"sendPendingResume()\">Resume With Patch</button>
               <button onclick=\"clearPendingInput()\">Hide</button>
             </div>
           </div>
@@ -973,6 +974,8 @@ HTML = """
         range: {label: 'range', placeholder: '470+-12nm or 60-100'},
         n_structures: {label: 'n_structures', placeholder: 'e.g. 500', type: 'number'},
         prediction_model: {label: 'prediction_model', placeholder: 'e.g. unimol_lambda_plqy_v1'},
+        predictor_id: {label: 'predictor_id', placeholder: 'e.g. unimol_lambda_plqy_v1'},
+        generator_id: {label: 'generator_id', placeholder: 'e.g. reinvent4_lambda_em_v2'},
         candidate_data: {label: 'candidate_data', placeholder: '/abs/path/to/candidates.csv'},
         train_data: {label: 'train_data', placeholder: '/abs/path/to/train.csv'},
       };
@@ -3176,10 +3179,48 @@ HTML = """
           renderJsonOut({status: 'fail', error: 'pending form has no values'});
           return;
         }
+        const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+        const stage = String(pending.stage || '');
+        if (sendNow && (stage === 'intake' || stage === 'approve' || stage === 'resume')) {
+          await sendPendingResume();
+          return;
+        }
         setMessageInput(JSON.stringify(patch, null, 2));
         if (sendNow) {
           await sendChat(false);
         }
+      }
+
+      async function sendPendingResume() {
+        const patch = collectPendingPatch();
+        if (!patch || Object.keys(patch).length < 1) {
+          renderJsonOut({status: 'fail', error: 'pending form has no values'});
+          return;
+        }
+        const pid = selectedProjectId();
+        const r = await apiPost('/api/chat/pending-submit', {
+          project_id: pid,
+          patch: patch,
+          options: collectOptions(),
+        });
+        renderJsonOut(r.data);
+        renderEvents(r.data && r.data.events ? r.data.events : []);
+        const pending = (r.data && r.data.pending_input)
+          ? r.data.pending_input
+          : ((r.data && r.data.project && r.data.project.pending_input) ? r.data.project.pending_input : null);
+        renderPendingInput(pending);
+        if (r.data && r.data.project) {
+          state.project = r.data.project;
+          applyProjectStateToUi(r.data.project);
+        }
+        const msgs = Array.isArray(r.data.messages) ? r.data.messages : [];
+        if (msgs.length > 0) {
+          renderChat(msgs);
+        } else {
+          await loadHistory();
+        }
+        setMessageInput('', {persist: false});
+        await loadRunRuntime();
       }
 
       async function previewArtifact() {
@@ -3644,21 +3685,92 @@ def _run_agent_approve(*, task_json_path: Path, planner_provider: str, catalog_p
     )
 
 
-def _run_agent_resume(*, task_id: str, planner_provider: str, catalog_path: str) -> Dict[str, Any]:
+def _normalize_resume_overrides(raw: Any) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if not isinstance(raw, dict):
+        return out
+
+    def _pick_str(src: Dict[str, Any], key: str) -> str:
+        return str(src.get(key) or "").strip()
+
+    for key in ("candidate_data", "train_data", "prediction_model", "property", "range"):
+        val = _pick_str(raw, key)
+        if val:
+            out[key] = val
+
+    n_val = raw.get("n_structures")
+    try:
+        n = int(n_val)
+    except Exception:
+        n = 0
+    if n > 0:
+        out["n_structures"] = n
+
+    predictor_id = _pick_str(raw, "predictor_id")
+    generator_id = _pick_str(raw, "generator_id")
+    if not predictor_id or not generator_id:
+        for mk in ("model_preferences", "model_choice"):
+            model = raw.get(mk)
+            if not isinstance(model, dict):
+                continue
+            if not predictor_id:
+                predictor_id = _pick_str(model, "predictor_id")
+            if not generator_id:
+                generator_id = _pick_str(model, "generator_id")
+            if predictor_id and generator_id:
+                break
+    if predictor_id:
+        out["predictor_id"] = predictor_id
+    if generator_id:
+        out["generator_id"] = generator_id
+    return out
+
+
+def _run_agent_resume(*, task_id: str, planner_provider: str, catalog_path: str, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     catalog = _resolve_catalog(catalog_path)
+    ov = _normalize_resume_overrides(overrides)
+    cli_args = [
+        "agent-resume",
+        "--workspace-root",
+        str(REPO_ROOT),
+        "--task-id",
+        task_id,
+        "--planner-provider",
+        str(planner_provider or "rule_based_v1"),
+        "--catalog",
+        str(catalog),
+    ]
+    flag_pairs = (
+        ("candidate_data", "--candidate-data"),
+        ("train_data", "--train-data"),
+        ("prediction_model", "--prediction-model"),
+        ("property", "--property"),
+        ("range", "--range"),
+        ("n_structures", "--n-structures"),
+        ("predictor_id", "--predictor-id"),
+        ("generator_id", "--generator-id"),
+    )
+    for key, flag in flag_pairs:
+        if key not in ov:
+            continue
+        value = ov.get(key)
+        if key == "n_structures":
+            try:
+                v = int(value)
+            except Exception:
+                continue
+            if v < 1:
+                continue
+            cli_args.extend([flag, str(v)])
+            continue
+        val_text = str(value or "").strip()
+        if not val_text:
+            continue
+        cli_args.extend([flag, val_text])
+
     return _run_cli_command(
-        cli_args=[
-            "agent-resume",
-            "--workspace-root",
-            str(REPO_ROOT),
-            "--task-id",
-            task_id,
-            "--planner-provider",
-            str(planner_provider or "rule_based_v1"),
-            "--catalog",
-            str(catalog),
-        ],
-        ok_returncodes=[0],
+        cli_args=cli_args,
+        ok_returncodes=[0, 2],
     )
 
 
@@ -5496,6 +5608,152 @@ def _pending_input_payload(*, stage: str, missing_fields: Any, questions: Any, t
     }
 
 
+def _chat_resume_from_pending(
+    *,
+    project: Dict[str, Any],
+    patch: Dict[str, Any],
+    source_message: str,
+) -> Dict[str, Any]:
+    options = _normalize_project_options(project.get("options"))
+    planner = str(options.get("planner_provider") or "rule_based_v1")
+    catalog = str(options.get("catalog_path") or DEFAULT_CATALOG)
+    pending = project.get("pending_input") if isinstance(project.get("pending_input"), dict) else {}
+    stage = str(pending.get("stage") or "").strip()
+    if stage not in {"intake", "approve", "resume"}:
+        _append_message(
+            project,
+            role="assistant",
+            kind="assistant",
+            content=f"当前 pending stage={stage or '-'}，请使用普通 Send 或 Step 流程。",
+        )
+        project = _save_project_state(project)
+        return {
+            "status": "fail",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "resume", "status": "fail", "reason": "invalid_pending_stage"}],
+        }
+
+    task_id = str(project.get("current_task_id") or "").strip()
+    if not task_id:
+        draft_path = _resolve_optional_path(project.get("task_draft_path"))
+        if draft_path is not None:
+            task_id = str(draft_path.parent.name or "").strip()
+    if not task_id:
+        _append_message(project, role="assistant", kind="assistant", content="pending continue 缺少 task_id。")
+        project = _save_project_state(project)
+        return {
+            "status": "fail",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "resume", "status": "fail", "reason": "missing_task_id"}],
+        }
+
+    started_at = datetime.now()
+    resume = _run_agent_resume(
+        task_id=task_id,
+        planner_provider=planner,
+        catalog_path=catalog,
+        overrides=patch,
+    )
+    elapsed_ms = int((datetime.now() - started_at).total_seconds() * 1000)
+
+    if resume.get("status") != "pass":
+        _append_message(project, role="assistant", kind="assistant", content=_assistant_cli_fail_text("agent-resume", resume))
+        project["last_runtime"] = {"status": "failed", "duration_ms": elapsed_ms, "operation": "resume", "updated_at": _now_iso()}
+        project = _save_project_state(project)
+        return {
+            "status": "fail",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "resume", "status": "fail"}],
+            "resume_result": resume.get("result"),
+        }
+
+    rr = resume.get("result") if isinstance(resume.get("result"), dict) else {}
+    rr_status = str(rr.get("status") or "").strip()
+    if rr_status == "need_user_input":
+        pending_next = _pending_input_payload(
+            stage="resume",
+            missing_fields=rr.get("missing_fields"),
+            questions=rr.get("questions"),
+            task_draft_path=rr.get("task_draft_path"),
+        )
+        project["pending_input"] = pending_next
+        _append_message(
+            project,
+            role="assistant",
+            kind="assistant",
+            content=_assistant_need_input_text(rr.get("missing_fields"), rr.get("questions")),
+            meta={"resume_result": rr, "source_message": source_message},
+        )
+        project["last_runtime"] = {
+            "status": "need_user_input",
+            "duration_ms": elapsed_ms,
+            "operation": "resume",
+            "updated_at": _now_iso(),
+        }
+        project = _save_project_state(project)
+        return {
+            "status": "need_user_input",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "resume", "status": "need_user_input"}],
+            "pending_input": pending_next,
+            "resume_result": rr,
+        }
+
+    if rr_status != "success":
+        _append_message(project, role="assistant", kind="assistant", content=f"agent-resume 返回未知状态: {rr_status or '(empty)'}")
+        project["last_runtime"] = {"status": "failed", "duration_ms": elapsed_ms, "operation": "resume", "updated_at": _now_iso()}
+        project = _save_project_state(project)
+        return {
+            "status": "fail",
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+            "events": [{"stage": "resume", "status": "fail", "reason": "unexpected_status"}],
+            "resume_result": rr,
+        }
+
+    project["pending_input"] = {}
+    project["current_task_id"] = str(rr.get("task_id") or task_id)
+    task_path = _resolve_optional_path(rr.get("task_path"))
+    if task_path is not None:
+        project["task_json_path"] = str(task_path)
+    request_path = _resolve_optional_path(rr.get("request_path"))
+    if request_path is not None:
+        project["request_path"] = str(request_path)
+    run_label = str(rr.get("run_label") or "")
+    result_dir = str(rr.get("result_dir") or "")
+    _append_message(
+        project,
+        role="assistant",
+        kind="assistant",
+        content=(
+            f"已根据补充字段继续执行: status=success"
+            f"\nrun_label={run_label}"
+            f"\nresult_dir={result_dir}"
+        ),
+        meta={"resume_result": rr, "source_message": source_message},
+    )
+    project["last_runtime"] = {
+        "status": "success",
+        "duration_ms": elapsed_ms,
+        "operation": "resume",
+        "run_label": run_label,
+        "result_dir": result_dir,
+        "updated_at": _now_iso(),
+    }
+    project = _save_project_state(project)
+    return {
+        "status": "pass",
+        "project": _project_summary(project),
+        "messages": _recent_messages(project),
+        "events": [{"stage": "resume", "status": "success"}],
+        "resume_result": rr,
+    }
+
+
 def _chat_run_single_step(*, project: Dict[str, Any], step_intent: Dict[str, Any], message: str) -> Dict[str, Any]:
     options = _normalize_project_options(project.get("options"))
     catalog = str(options.get("catalog_path") or DEFAULT_CATALOG)
@@ -6339,6 +6597,48 @@ def api_chat_send():
     return jsonify(out)
 
 
+@app.post("/api/chat/pending-submit")
+def api_chat_pending_submit():
+    body = request.get_json(silent=True) or {}
+    project_id = str(body.get("project_id") or "").strip()
+    patch = body.get("patch") if isinstance(body.get("patch"), dict) else {}
+    options = body.get("options")
+
+    if not project_id:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(project_id):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    if not isinstance(patch, dict) or len(patch) < 1:
+        return jsonify({"status": "fail", "error": "missing patch"}), 400
+
+    project = _load_project_state(project_id)
+    if not isinstance(project, dict):
+        return jsonify({"status": "fail", "error": "project_not_found"}), 404
+    if isinstance(options, dict):
+        merged_options = dict(project.get("options") or {})
+        merged_options.update(options)
+        project["options"] = merged_options
+
+    out = _chat_resume_from_pending(
+        project=project,
+        patch=patch,
+        source_message=json.dumps(patch, ensure_ascii=False),
+    )
+    events_for_meta = out.get("events") if isinstance(out.get("events"), list) else []
+    if events_for_meta:
+        _append_message(
+            project,
+            role="system",
+            kind="event_trace",
+            content="Execution timeline updated.",
+            meta={"events": events_for_meta},
+        )
+        project = _save_project_state(project)
+        out["project"] = _project_summary(project)
+        out["messages"] = _recent_messages(project)
+    return jsonify(out)
+
+
 @app.get("/api/tasks")
 def api_tasks():
     limit = _as_int(request.args.get("limit"), 50)
@@ -6519,11 +6819,12 @@ def api_resume():
     task_id = str(body.get("task_id") or "").strip()
     planner = str(body.get("planner_provider") or "rule_based_v1")
     catalog = str(body.get("catalog_path") or DEFAULT_CATALOG)
+    overrides = _normalize_resume_overrides(body)
     if not task_id:
         return jsonify({"status": "fail", "error": "missing task_id"}), 400
     if not _is_safe_task_id(task_id):
         return jsonify({"status": "fail", "error": "invalid task_id"}), 400
-    return jsonify(_run_agent_resume(task_id=task_id, planner_provider=planner, catalog_path=catalog))
+    return jsonify(_run_agent_resume(task_id=task_id, planner_provider=planner, catalog_path=catalog, overrides=overrides))
 
 
 @app.post("/api/task/<task_id>/retry-failed-step")

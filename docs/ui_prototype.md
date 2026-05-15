@@ -107,6 +107,7 @@ Open: `http://127.0.0.1:8787`
     - body supports same replay `options`
   - `DELETE /api/projects/<project_id>/batch-exports/<export_id>`
   - `POST /api/chat/send`
+  - `POST /api/chat/pending-submit` (submit pending-input patch and continue via `agent-resume`)
 - existing execution and inspector APIs:
   - `GET /api/health`
   - `GET /api/tasks`
@@ -116,6 +117,7 @@ Open: `http://127.0.0.1:8787`
   - `POST /api/intake`
   - `POST /api/approve`
   - `POST /api/resume`
+    - supports intake/approval patch overrides (`candidate_data`, `train_data`, `prediction_model`, `property`, `range`, `n_structures`, `predictor_id`, `generator_id`)
   - `POST /api/task/<task_id>/retry-failed-step`
   - `GET /api/task/<task_id>/summary`
   - `GET /api/task/<task_id>/artifact/<artifact_name>`

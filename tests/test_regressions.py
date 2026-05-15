@@ -8260,6 +8260,106 @@ class UiPrototypeTests(unittest.TestCase):
                 assistant_text = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
                 self.assertIn("candidate_data", assistant_text)
 
+    def test_ui_chat_pending_submit_resume_success(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_pending_resume", "title": "pending"})
+                project = ui_app_mod._load_project_state("ui_chat_pending_resume")
+                self.assertIsInstance(project, dict)
+                project["current_task_id"] = "ui_chat_pending_task"
+                project["pending_input"] = {
+                    "stage": "intake",
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_pending_task" / "task.draft.json"),
+                }
+                ui_app_mod._save_project_state(project)
+
+                fake_resume = {
+                    "task_id": "ui_chat_pending_task",
+                    "status": "success",
+                    "run_label": "ui_chat_pending_task-20260515-120000",
+                    "result_dir": str(root / "result" / "ui_chat_pending_task-20260515-120000"),
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-resume"],
+                    returncode=0,
+                    stdout=json.dumps(fake_resume, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+                    resp = client.post(
+                        "/api/chat/pending-submit",
+                        json={
+                            "project_id": "ui_chat_pending_resume",
+                            "patch": {"candidate_data": "/tmp/candidates.csv"},
+                            "options": {"planner_provider": "rule_based_v1", "catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                events = payload.get("events") if isinstance(payload.get("events"), list) else []
+                self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("status") == "success" for e in events))
+                project_out = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                self.assertEqual(project_out.get("current_task_id"), "ui_chat_pending_task")
+                self.assertEqual(project_out.get("pending_input"), {})
+                cmd = mocked.call_args.args[0]
+                self.assertIn("agent-resume", cmd)
+                self.assertIn("--candidate-data", cmd)
+                self.assertIn("/tmp/candidates.csv", cmd)
+
+    def test_ui_chat_pending_submit_resume_need_user_input(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_pending_need_input", "title": "pending"})
+                project = ui_app_mod._load_project_state("ui_chat_pending_need_input")
+                self.assertIsInstance(project, dict)
+                project["current_task_id"] = "ui_chat_pending_need_task"
+                project["pending_input"] = {
+                    "stage": "approve",
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_pending_need_task" / "task.draft.json"),
+                }
+                ui_app_mod._save_project_state(project)
+
+                fake_resume = {
+                    "task_id": "ui_chat_pending_need_task",
+                    "status": "need_user_input",
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？本地CSV路径还是数据库关键词？"],
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_pending_need_task" / "task.draft.json"),
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-resume"],
+                    returncode=2,
+                    stdout=json.dumps(fake_resume, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp):
+                    resp = client.post(
+                        "/api/chat/pending-submit",
+                        json={
+                            "project_id": "ui_chat_pending_need_input",
+                            "patch": {"property": "plqy"},
+                            "options": {"planner_provider": "rule_based_v1", "catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                pending = payload.get("pending_input") if isinstance(payload.get("pending_input"), dict) else {}
+                self.assertEqual(pending.get("stage"), "resume")
+                missing = pending.get("missing_fields") if isinstance(pending.get("missing_fields"), list) else []
+                self.assertIn("candidate_data", missing)
+
     def test_ui_chat_send_happy_path_runs_pipeline(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -8753,6 +8853,8 @@ class UiPrototypeTests(unittest.TestCase):
                     "task_id": "ui_resume_demo",
                     "planner_provider": "rule_based_v1",
                     "catalog_path": "configs/models/catalog.json",
+                    "candidate_data": "/tmp/candidates.csv",
+                    "predictor_id": "unimol_lambda_plqy_v1",
                 },
             )
         self.assertEqual(resp.status_code, 200)
@@ -8761,6 +8863,9 @@ class UiPrototypeTests(unittest.TestCase):
         cmd = mocked.call_args.args[0]
         self.assertIn("agent-resume", cmd)
         self.assertIn("ui_resume_demo", cmd)
+        self.assertIn("--candidate-data", cmd)
+        self.assertIn("/tmp/candidates.csv", cmd)
+        self.assertIn("--predictor-id", cmd)
 
     def test_ui_retry_failed_step_endpoint_runs_agent_step_retry(self) -> None:
         ui_app_mod = self._load_ui_module()

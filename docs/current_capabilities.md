@@ -160,7 +160,7 @@ Implemented stages:
   - persists aggregate `runs/agent/<task_id>/baseline_summary.json`
 - lightweight UI prototype smoke:
   - `ui/app.py`
-  - supports chat-first workflow (project memory + chat turn orchestration + file input entry)
+  - supports chat-first workflow (project memory notes + optional intake memory injection + chat turn orchestration + file input entry)
   - chat API supports single-step command execution (`/step <operation> {args_json}`)
   - supports project APIs (`/api/projects`, `/api/projects/<id>/history`, `/api/chat/send`, `/api/projects/<id>/upload-ref`)
   - supports targeted retry for latest failed step (`POST /api/task/<task_id>/retry-failed-step`)

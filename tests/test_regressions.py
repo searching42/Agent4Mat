@@ -7662,6 +7662,131 @@ class UiPrototypeTests(unittest.TestCase):
                 attachments = hist.get("attachments") if isinstance(hist.get("attachments"), list) else []
                 self.assertEqual(len(attachments), 1)
 
+    def test_ui_project_memory_roundtrip_persists(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                create_resp = client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_proj_memory",
+                        "title": "memory project",
+                        "options": {"memory_enabled": True, "planner_provider": "rule_based_v1"},
+                        "memory_notes": "固定目标: 470nm附近\n禁用 alert: azo",
+                    },
+                )
+                self.assertEqual(create_resp.status_code, 200)
+                created = create_resp.get_json()
+                self.assertEqual(created.get("status"), "pass")
+                proj = created.get("project") if isinstance(created.get("project"), dict) else {}
+                opts = proj.get("options") if isinstance(proj.get("options"), dict) else {}
+                self.assertEqual(bool(opts.get("memory_enabled")), True)
+                self.assertIn("470nm", str(proj.get("memory_notes") or ""))
+                self.assertTrue(str(proj.get("memory_updated_at") or ""))
+
+                hist_resp = client.get("/api/projects/ui_proj_memory/history?limit=20")
+                self.assertEqual(hist_resp.status_code, 200)
+                hist = hist_resp.get_json()
+                hist_proj = hist.get("project") if isinstance(hist.get("project"), dict) else {}
+                self.assertIn("禁用 alert", str(hist_proj.get("memory_notes") or ""))
+
+    def test_ui_chat_send_injects_project_memory_into_intake_request_when_enabled(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_chat_mem_on",
+                        "title": "memory on",
+                        "options": {"memory_enabled": True},
+                        "memory_notes": "优先考虑470nm +/- 10nm，避免已知高风险骨架。",
+                    },
+                )
+                intake_result = {
+                    "task_id": "ui_chat_mem_on_20260515_000001",
+                    "status": "need_user_input",
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_mem_on_20260515_000001" / "task.draft.json"),
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=2,
+                    stdout=json.dumps(intake_result, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_mem_on",
+                            "message": "设计470nm附近且高PLQY分子",
+                            "options": {"planner_provider": "rule_based_v1", "memory_enabled": True},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                cmd = mocked.call_args.args[0]
+                self.assertIn("--request", cmd)
+                request_text = str(cmd[cmd.index("--request") + 1])
+                self.assertIn("Project memory context:", request_text)
+                self.assertIn("470nm", request_text)
+                messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+                self.assertTrue(
+                    any(isinstance(m, dict) and str(m.get("kind") or "") == "memory_context" for m in messages)
+                )
+
+    def test_ui_chat_send_does_not_inject_memory_when_disabled(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_chat_mem_off",
+                        "title": "memory off",
+                        "options": {"memory_enabled": False},
+                        "memory_notes": "这个文本不应被注入。",
+                    },
+                )
+                intake_result = {
+                    "task_id": "ui_chat_mem_off_20260515_000001",
+                    "status": "need_user_input",
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_mem_off_20260515_000001" / "task.draft.json"),
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=2,
+                    stdout=json.dumps(intake_result, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_mem_off",
+                            "message": "设计470nm附近且高PLQY分子",
+                            "options": {"planner_provider": "rule_based_v1", "memory_enabled": False},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                cmd = mocked.call_args.args[0]
+                request_text = str(cmd[cmd.index("--request") + 1])
+                self.assertNotIn("Project memory context:", request_text)
+                self.assertEqual(request_text, "设计470nm附近且高PLQY分子")
+
     def test_ui_project_history_roundtrip_preserves_project_identity(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -7773,6 +7898,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("hud_project_id", html)
         self.assertIn("current_task_id_hud", html)
         self.assertIn("sendWebSearchHint()", html)
+        self.assertIn("memory_enabled", html)
+        self.assertIn("memory_notes", html)
+        self.assertIn("updateMemoryStatus()", html)
 
     def test_ui_html_contains_workspace_url_controls(self) -> None:
         ui_app_mod = self._load_ui_module()

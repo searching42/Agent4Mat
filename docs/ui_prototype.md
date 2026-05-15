@@ -22,6 +22,8 @@ Open: `http://127.0.0.1:8787`
   - includes a built-in step panel (operation dropdown + args JSON) that sends step requests into chat
 - project/session memory:
   - each project persists independent chat history and runtime pointers
+  - supports editable `Project memory notes` with `Enable project memory injection` toggle
+  - when enabled, memory notes are appended to `agent-intake` request as persistent context
   - workspace URL carries `?project_id=...` and restores project context on load/back-forward navigation
   - supports `Open in New Window` and `Copy Workspace Link` for project-isolated windows
   - left drawer includes `Workspace Sessions` board with quick `Open` and `Resume` actions per project
@@ -90,7 +92,7 @@ Open: `http://127.0.0.1:8787`
 ## API endpoints
 - project/chat/session:
   - `GET /api/projects`
-  - `POST /api/projects`
+  - `POST /api/projects` (supports `memory_notes` + `options.memory_enabled`)
   - `GET /api/projects/<project_id>/export`
   - `POST /api/projects/import`
   - `GET /api/projects/<project_id>/history`
@@ -106,8 +108,8 @@ Open: `http://127.0.0.1:8787`
   - `POST /api/projects/<project_id>/batch-exports/<export_id>/replay`
     - body supports same replay `options`
   - `DELETE /api/projects/<project_id>/batch-exports/<export_id>`
-  - `POST /api/chat/send`
-  - `POST /api/chat/pending-submit` (submit pending-input patch and continue via `agent-resume`)
+  - `POST /api/chat/send` (supports transient `memory_notes` update)
+  - `POST /api/chat/pending-submit` (submit pending-input patch and continue via `agent-resume`; supports transient `memory_notes` update)
 - existing execution and inspector APIs:
   - `GET /api/health`
   - `GET /api/tasks`

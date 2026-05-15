@@ -27,6 +27,7 @@ PROJECTS_DIR_REL = Path("runs/ui_sessions/projects")
 UPLOADS_DIR_REL = Path("runs/ui_sessions/uploads")
 BATCH_EXPORTS_DIR_REL = Path("runs/ui_sessions/exports")
 MAX_PROJECT_HISTORY = 400
+MAX_MEMORY_NOTES_CHARS = 8000
 STEP_OPERATIONS = (
     "retrieve_candidate_data",
     "clean_dataset",
@@ -744,6 +745,13 @@ HTML = """
         <label><input id=\"web_enabled\" type=\"checkbox\" checked /> Enable web evidence</label>
         <label>Web topk</label>
         <input id=\"web_topk\" value=\"5\" />
+        <label><input id=\"memory_enabled\" type=\"checkbox\" onchange=\"updateMemoryStatus()\" /> Enable project memory injection</label>
+        <label>Project memory notes</label>
+        <textarea id=\"memory_notes\" rows=\"5\" placeholder=\"记录该项目长期约束/偏好，例如目标波长范围、禁用骨架、数据来源优先级。\" oninput=\"updateMemoryStatus()\"></textarea>
+        <div class=\"muted\" id=\"memory_status\">memory: disabled, chars=0</div>
+        <div class=\"btn-row\">
+          <button type=\"button\" onclick=\"clearMemoryNotes()\">Clear Memory Notes</button>
+        </div>
 
         <div class=\"btn-row\">
           <button class=\"primary\" onclick=\"saveProject()\">Save/Load Project</button>
@@ -1563,9 +1571,14 @@ HTML = """
         if (Object.prototype.hasOwnProperty.call(opts, 'web_topk')) {
           document.getElementById('web_topk').value = String(opts.web_topk);
         }
+        if (Object.prototype.hasOwnProperty.call(opts, 'memory_enabled')) {
+          document.getElementById('memory_enabled').checked = Boolean(opts.memory_enabled);
+        }
+        document.getElementById('memory_notes').value = String(project.memory_notes || '');
         if (opts.batch_replay_defaults && typeof opts.batch_replay_defaults === 'object') {
           applyBatchReplayOptions(opts.batch_replay_defaults);
         }
+        updateMemoryStatus();
       }
 
       function applyBatchReplayOptions(raw) {
@@ -1815,13 +1828,31 @@ HTML = """
         const catalog = document.getElementById('catalog').value;
         const webEnabled = document.getElementById('web_enabled').checked;
         const webTopk = Number(document.getElementById('web_topk').value || 5);
+        const memoryEnabled = document.getElementById('memory_enabled').checked;
         return {
           planner_provider: planner,
           catalog_path: catalog,
           web_search_enabled: Boolean(webEnabled),
           web_topk: Number.isFinite(webTopk) ? webTopk : 5,
+          memory_enabled: Boolean(memoryEnabled),
           batch_replay_defaults: readBatchReplayOptions(),
         };
+      }
+
+      function collectMemoryNotes() {
+        return String(document.getElementById('memory_notes').value || '');
+      }
+
+      function updateMemoryStatus() {
+        const enabled = Boolean(document.getElementById('memory_enabled').checked);
+        const notes = collectMemoryNotes().trim();
+        const status = enabled ? 'enabled' : 'disabled';
+        document.getElementById('memory_status').textContent = `memory: ${status}, chars=${notes.length}`;
+      }
+
+      function clearMemoryNotes() {
+        document.getElementById('memory_notes').value = '';
+        updateMemoryStatus();
       }
 
       async function refreshProjects() {
@@ -3071,6 +3102,7 @@ HTML = """
           project_id: projectId,
           title: title,
           options: collectOptions(),
+          memory_notes: collectMemoryNotes(),
         });
         renderJsonOut(r.data);
         const project = r.data && r.data.project ? r.data.project : null;
@@ -3148,6 +3180,7 @@ HTML = """
           project_id: pid,
           message: message,
           options: collectOptions(),
+          memory_notes: collectMemoryNotes(),
           new_task: Boolean(newTask),
         });
         if (message) {
@@ -3202,6 +3235,7 @@ HTML = """
           project_id: pid,
           patch: patch,
           options: collectOptions(),
+          memory_notes: collectMemoryNotes(),
         });
         renderJsonOut(r.data);
         renderEvents(r.data && r.data.events ? r.data.events : []);
@@ -3500,6 +3534,7 @@ HTML = """
 
       async function boot() {
         applyStepArgsTemplate(true);
+        updateMemoryStatus();
         bindComposerShortcuts();
         bindWorkspaceUrlNavigation();
         const savedSessionBoard = loadSessionBoardState();
@@ -4466,6 +4501,14 @@ def _resolve_optional_path(raw_path: Any) -> Optional[Path]:
     return p
 
 
+def _normalize_memory_notes(raw: Any) -> str:
+    text = str(raw or "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(text) > MAX_MEMORY_NOTES_CHARS:
+        text = text[:MAX_MEMORY_NOTES_CHARS]
+    return text
+
+
 def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     options = raw if isinstance(raw, dict) else {}
     planner = str(options.get("planner_provider") or "rule_based_v1").strip() or "rule_based_v1"
@@ -4473,12 +4516,14 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     web_enabled = bool(options.get("web_search_enabled", True))
     web_topk = _as_int(options.get("web_topk"), 5)
     web_topk = max(1, min(web_topk, 20))
+    memory_enabled = bool(options.get("memory_enabled", False))
     batch_replay_defaults = _normalize_batch_replay_options(options.get("batch_replay_defaults"))
     return {
         "planner_provider": planner,
         "catalog_path": catalog,
         "web_search_enabled": web_enabled,
         "web_topk": web_topk,
+        "memory_enabled": memory_enabled,
         "batch_replay_defaults": batch_replay_defaults,
     }
 
@@ -4498,6 +4543,8 @@ def _new_project_state(project_id: str, *, title: str = "", options: Optional[Di
         "request_path": "",
         "last_runtime": {},
         "pending_input": {},
+        "memory_notes": "",
+        "memory_updated_at": "",
         "attachments": [],
         "messages": [],
     }
@@ -4519,6 +4566,8 @@ def _project_summary(project: Dict[str, Any]) -> Dict[str, Any]:
         "request_path": str(project.get("request_path") or ""),
         "last_runtime": project.get("last_runtime") if isinstance(project.get("last_runtime"), dict) else {},
         "pending_input": project.get("pending_input") if isinstance(project.get("pending_input"), dict) else {},
+        "memory_notes": _normalize_memory_notes(project.get("memory_notes")),
+        "memory_updated_at": str(project.get("memory_updated_at") or ""),
         "message_count": len(messages) if isinstance(messages, list) else 0,
         "attachment_count": len(attachments) if isinstance(attachments, list) else 0,
         "project_path": str(_project_file_path(pid)) if pid else "",
@@ -4635,6 +4684,10 @@ def _load_project_state(project_id: str) -> Optional[Dict[str, Any]]:
         payload["messages"] = []
     if not isinstance(payload.get("pending_input"), dict):
         payload["pending_input"] = {}
+    payload["memory_notes"] = _normalize_memory_notes(payload.get("memory_notes"))
+    payload["memory_updated_at"] = str(payload.get("memory_updated_at") or "").strip()
+    if payload["memory_notes"] and not payload["memory_updated_at"]:
+        payload["memory_updated_at"] = str(payload.get("updated_at") or "")
     return payload
 
 
@@ -4647,6 +4700,12 @@ def _save_project_state(project: Dict[str, Any]) -> Dict[str, Any]:
         project["created_at"] = _now_iso()
     project["updated_at"] = _now_iso()
     project["options"] = _normalize_project_options(project.get("options"))
+    project["memory_notes"] = _normalize_memory_notes(project.get("memory_notes"))
+    project["memory_updated_at"] = str(project.get("memory_updated_at") or "").strip()
+    if project["memory_notes"] and not project["memory_updated_at"]:
+        project["memory_updated_at"] = str(project.get("updated_at") or "")
+    if not project["memory_notes"]:
+        project["memory_updated_at"] = ""
     messages = project.get("messages")
     if not isinstance(messages, list):
         messages = []
@@ -4665,6 +4724,36 @@ def _save_project_state(project: Dict[str, Any]) -> Dict[str, Any]:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(project, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return project
+
+
+def _apply_project_memory_update(project: Dict[str, Any], memory_notes: Any, *, provided: bool) -> None:
+    current_notes = _normalize_memory_notes(project.get("memory_notes"))
+    project["memory_notes"] = current_notes
+    current_updated = str(project.get("memory_updated_at") or "").strip()
+    if not provided:
+        project["memory_updated_at"] = current_updated
+        return
+    next_notes = _normalize_memory_notes(memory_notes)
+    project["memory_notes"] = next_notes
+    if next_notes != current_notes or (next_notes and not current_updated):
+        project["memory_updated_at"] = _now_iso()
+    elif not next_notes:
+        project["memory_updated_at"] = ""
+    else:
+        project["memory_updated_at"] = current_updated
+
+
+def _compose_intake_request_text(*, message: str, project: Dict[str, Any], options: Dict[str, Any]) -> Tuple[str, bool]:
+    base = str(message or "").strip()
+    if not base:
+        return "", False
+    if not bool(options.get("memory_enabled", False)):
+        return base, False
+    notes = _normalize_memory_notes(project.get("memory_notes"))
+    if not notes:
+        return base, False
+    merged = f"{base}\n\nProject memory context:\n{notes}"
+    return merged, True
 
 
 def _batch_export_entry_path(project_id: str, export_id: str) -> Path:
@@ -5339,6 +5428,10 @@ def _normalize_import_project(raw: Dict[str, Any], *, project_id: str) -> Dict[s
     base = _new_project_state(project_id, title=str(raw.get("title") or project_id), options=raw.get("options") if isinstance(raw.get("options"), dict) else {})
     if str(raw.get("created_at") or "").strip():
         base["created_at"] = str(raw.get("created_at"))
+    base["memory_notes"] = _normalize_memory_notes(raw.get("memory_notes"))
+    base["memory_updated_at"] = str(raw.get("memory_updated_at") or "").strip()
+    if base["memory_notes"] and not base["memory_updated_at"]:
+        base["memory_updated_at"] = str(raw.get("updated_at") or base.get("created_at") or "")
     for key in ("current_task_id", "task_draft_path", "task_json_path", "request_path"):
         base[key] = str(raw.get(key) or "")
     if isinstance(raw.get("last_runtime"), dict):
@@ -5922,7 +6015,16 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
             _append_message(project, role="assistant", content="请先输入任务目标，然后我会自动做 intake。", kind="assistant")
             project = _save_project_state(project)
             return {"status": "pass", "project": _project_summary(project), "messages": _recent_messages(project), "events": []}
-        intake = _run_agent_intake(task_id=task_id, request_text=message, web_topk=web_topk, enable_web_search=web_enabled)
+        intake_request_text, memory_injected = _compose_intake_request_text(message=message, project=project, options=options)
+        if memory_injected:
+            _append_message(
+                project,
+                role="system",
+                kind="memory_context",
+                content="Project memory injected into intake request.",
+                meta={"memory_chars": len(_normalize_memory_notes(project.get("memory_notes")))},
+            )
+        intake = _run_agent_intake(task_id=task_id, request_text=intake_request_text, web_topk=web_topk, enable_web_search=web_enabled)
         intake_result = intake.get("result") if isinstance(intake.get("result"), dict) else {}
         draft_path = _resolve_optional_path(intake_result.get("task_draft_path"))
         if draft_path is not None:
@@ -6126,6 +6228,8 @@ def api_projects_upsert():
     project_id = str(body.get("project_id") or "").strip()
     title = str(body.get("title") or "").strip()
     options = body.get("options")
+    memory_notes_provided = "memory_notes" in body
+    memory_notes = body.get("memory_notes")
     if not project_id:
         return jsonify({"status": "fail", "error": "missing project_id"}), 400
     if not _is_safe_project_id(project_id):
@@ -6134,6 +6238,7 @@ def api_projects_upsert():
     project = _load_project_state(project_id)
     if not isinstance(project, dict):
         project = _new_project_state(project_id, title=title, options=options if isinstance(options, dict) else {})
+        _apply_project_memory_update(project, memory_notes, provided=memory_notes_provided)
     else:
         if title:
             project["title"] = title
@@ -6141,6 +6246,7 @@ def api_projects_upsert():
             merged = dict(project.get("options") or {})
             merged.update(options)
             project["options"] = merged
+        _apply_project_memory_update(project, memory_notes, provided=memory_notes_provided)
     project = _save_project_state(project)
     return jsonify({"status": "pass", "project": _project_summary(project), "messages": _recent_messages(project)})
 
@@ -6565,6 +6671,8 @@ def api_chat_send():
     message = str(body.get("message") or "").strip()
     new_task = bool(body.get("new_task"))
     options = body.get("options")
+    memory_notes_provided = "memory_notes" in body
+    memory_notes = body.get("memory_notes")
 
     if not project_id:
         return jsonify({"status": "fail", "error": "missing project_id"}), 400
@@ -6580,6 +6688,7 @@ def api_chat_send():
         merged_options = dict(project.get("options") or {})
         merged_options.update(options)
         project["options"] = merged_options
+    _apply_project_memory_update(project, memory_notes, provided=memory_notes_provided)
 
     out = _chat_run_pipeline(project=project, message=message, new_task=new_task)
     events_for_meta = out.get("events") if isinstance(out.get("events"), list) else []
@@ -6603,6 +6712,8 @@ def api_chat_pending_submit():
     project_id = str(body.get("project_id") or "").strip()
     patch = body.get("patch") if isinstance(body.get("patch"), dict) else {}
     options = body.get("options")
+    memory_notes_provided = "memory_notes" in body
+    memory_notes = body.get("memory_notes")
 
     if not project_id:
         return jsonify({"status": "fail", "error": "missing project_id"}), 400
@@ -6618,6 +6729,7 @@ def api_chat_pending_submit():
         merged_options = dict(project.get("options") or {})
         merged_options.update(options)
         project["options"] = merged_options
+    _apply_project_memory_update(project, memory_notes, provided=memory_notes_provided)
 
     out = _chat_resume_from_pending(
         project=project,

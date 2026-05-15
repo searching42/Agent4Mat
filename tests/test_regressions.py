@@ -7491,6 +7491,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("latest_failed_step=", html)
         self.assertIn("Retry Failed", html)
         self.assertIn("retryProjectFailedStep(", html)
+        self.assertIn("recent_duration=", html)
+        self.assertIn("success_ratio=", html)
+        self.assertIn("project-session-progress-bar", html)
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -26,6 +26,7 @@ Open: `http://127.0.0.1:8787`
   - supports `Open in New Window` and `Copy Workspace Link` for project-isolated windows
   - left drawer includes `Workspace Sessions` board with quick `Open` and `Resume` actions per project
   - session board shows `latest_failed_step` and supports `Retry Failed` one-click action per project
+  - session board shows `recent_duration` and `success_ratio` with a mini progress bar
   - session file: `runs/ui_sessions/projects/<project_id>.json`
   - project picker/meta now includes `runtime_health` snapshot from current task execution (`status`, success/failed steps, latest failed step)
 - file input entry:

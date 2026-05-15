@@ -197,6 +197,25 @@ HTML = """
         color: #8a2f2f;
         font-size: 0.72rem;
       }
+      .project-session-runtime {
+        margin-top: 4px;
+        color: #36506f;
+        font-size: 0.72rem;
+      }
+      .project-session-progress {
+        margin-top: 5px;
+        width: 100%;
+        height: 7px;
+        border-radius: 999px;
+        border: 1px solid #d3deef;
+        background: #eef3fb;
+        overflow: hidden;
+      }
+      .project-session-progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #4c8bf5, #2563eb);
+      }
       .project-session-actions {
         display: flex;
         gap: 6px;
@@ -1454,6 +1473,13 @@ HTML = """
           const pid = String(row.project_id || '').trim();
           if (!pid) continue;
           const taskId = String(row.current_task_id || '').trim();
+          const runtime = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+          const successSteps = Number(runtime.success_steps || 0);
+          const failedSteps = Number(runtime.failed_steps || 0);
+          const totalSteps = Math.max(0, successSteps + failedSteps);
+          const successRatio = totalSteps > 0 ? (successSteps / totalSteps) : 0;
+          const runtimeSecRaw = Number((row.last_runtime && row.last_runtime.duration_ms) || 0);
+          const runtimeSec = Number.isFinite(runtimeSecRaw) && runtimeSecRaw > 0 ? (runtimeSecRaw / 1000.0) : 0;
           const latestFailedStep = String((row.runtime_health && row.runtime_health.latest_failed_step) || '').trim();
           const health = formatRuntimeHealth(row.runtime_health || {});
           const updatedAt = String(row.updated_at || '-');
@@ -1482,6 +1508,19 @@ HTML = """
           failed.className = 'project-session-failed';
           failed.textContent = latestFailedStep ? `latest_failed_step=${latestFailedStep}` : 'latest_failed_step=-';
           card.appendChild(failed);
+          const runtimeLine = document.createElement('div');
+          runtimeLine.className = 'project-session-runtime';
+          const ratioText = totalSteps > 0 ? `${Math.round(successRatio * 100)}%` : '-';
+          const durationText = runtimeSec > 0 ? `${runtimeSec.toFixed(2)}s` : '-';
+          runtimeLine.textContent = `recent_duration=${durationText} | success_ratio=${ratioText} (${successSteps}/${totalSteps || 0})`;
+          card.appendChild(runtimeLine);
+          const progress = document.createElement('div');
+          progress.className = 'project-session-progress';
+          const progressBar = document.createElement('div');
+          progressBar.className = 'project-session-progress-bar';
+          progressBar.style.width = `${Math.max(0, Math.min(100, successRatio * 100))}%`;
+          progress.appendChild(progressBar);
+          card.appendChild(progress);
 
           const actions = document.createElement('div');
           actions.className = 'project-session-actions';

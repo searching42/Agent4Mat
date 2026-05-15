@@ -7521,6 +7521,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("loadBatchHistory()", html)
         self.assertIn("replayLatestBatchAction()", html)
         self.assertIn("replayFailedLatestBatchAction()", html)
+        self.assertIn("loadFailedReplayQueueById()", html)
+        self.assertIn("replayFailedQueueNow()", html)
         self.assertIn("readBatchHistoryControls()", html)
         self.assertIn("resetBatchHistoryOffsetAndReload()", html)
         self.assertIn("prevBatchHistoryPage()", html)
@@ -7556,6 +7558,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("session_batch_limit", html)
         self.assertIn("project_batch_history_summary", html)
         self.assertIn("project_batch_history_metrics", html)
+        self.assertIn("project_failed_queue_summary", html)
+        self.assertIn("project_failed_queue", html)
         self.assertIn("project_batch_history", html)
         self.assertIn("project_batch_history_list", html)
         self.assertIn("clearSessionBoardControls()", html)
@@ -7591,6 +7595,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("/batch-exports", html)
         self.assertIn("/batch-exports/compare", html)
         self.assertIn("/batch-exports/replay-latest", html)
+        self.assertIn("/batch-exports/${encodeURIComponent(eid)}/failed-queue", html)
         self.assertIn("?${qs.toString()}", html)
         self.assertIn("/batch-exports/${encodeURIComponent(eid)}", html)
         self.assertIn("/batch-exports/${encodeURIComponent(eid)}/download", html)
@@ -7856,6 +7861,18 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(detail_payload.get("status"), "pass")
                 detail_entry = detail_payload.get("batch_export") if isinstance(detail_payload.get("batch_export"), dict) else {}
                 self.assertEqual(str(detail_entry.get("export_id") or ""), export_id)
+
+                failed_queue_resp = client.get(f"/api/projects/ui_proj_batch/batch-exports/{export_id}/failed-queue")
+                self.assertEqual(failed_queue_resp.status_code, 200)
+                failed_queue_payload = failed_queue_resp.get_json()
+                self.assertEqual(failed_queue_payload.get("status"), "pass")
+                queue = failed_queue_payload.get("queue") if isinstance(failed_queue_payload.get("queue"), dict) else {}
+                self.assertEqual(int(queue.get("count") or 0), 1)
+                queue_rows = queue.get("rows") if isinstance(queue.get("rows"), list) else []
+                self.assertEqual(len(queue_rows), 1)
+                self.assertEqual(str(queue_rows[0].get("task_id") or ""), "ui_proj_batch_missing")
+                reason_rows = queue.get("failure_reasons") if isinstance(queue.get("failure_reasons"), list) else []
+                self.assertGreaterEqual(len(reason_rows), 1)
 
                 replay_by_id_resp = client.post(
                     f"/api/projects/ui_proj_batch/batch-exports/{export_id}/replay",

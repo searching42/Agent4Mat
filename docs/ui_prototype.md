@@ -48,6 +48,8 @@ Open: `http://127.0.0.1:8787`
   - batch history list items support one-click `Use As Compare` to fill `batch_export_compare_id`
   - supports `Replay Latest Batch` to rerun latest exported batch action (`batch_summary` / `batch_validate` / `batch_retry_failed`)
   - supports `Replay Failed Latest` / `Replay Failed By ID` (`failed_only=true`) to only replay previously failed rows
+  - supports `Load Failed Queue By ID` to build second-pass replay queue (`task_id`, `failed_step`, `failure_reason`) from an export
+  - supports `Replay Failed Queue` one-click rerun based on loaded queue source export
   - supports export-id actions: `View Export By ID`, `Replay Export By ID`, `Delete Export By ID`
   - supports export-id compare (`Compare Export IDs`) with JSON path-level diff summary
   - supports export-id download (`Download Export JSON` / `Download Export CSV`)
@@ -99,6 +101,7 @@ Open: `http://127.0.0.1:8787`
   - `POST /api/projects/<project_id>/batch-exports/replay-latest`
     - body supports `{ "options": { "dry_run": bool, "failed_only": bool, "retry_max": 0..3, "retry_backoff_ms": 0..5000, "max_concurrency": 1..8 } }`
   - `GET /api/projects/<project_id>/batch-exports/<export_id>`
+  - `GET /api/projects/<project_id>/batch-exports/<export_id>/failed-queue`
   - `GET /api/projects/<project_id>/batch-exports/<export_id>/download` (`format=json|csv`)
   - `POST /api/projects/<project_id>/batch-exports/<export_id>/replay`
     - body supports same replay `options`

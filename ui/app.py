@@ -672,6 +672,8 @@ HTML = """
             <button type=\"button\" onclick=\"replayFailedBatchExportById()\">Replay Failed By ID</button>
             <button type=\"button\" onclick=\"deleteBatchExportById()\">Delete Export By ID</button>
             <button type=\"button\" onclick=\"compareBatchExportsById()\">Compare Export IDs</button>
+            <button type=\"button\" onclick=\"loadFailedReplayQueueById()\">Load Failed Queue By ID</button>
+            <button type=\"button\" onclick=\"replayFailedQueueNow()\">Replay Failed Queue</button>
             <button type=\"button\" onclick=\"downloadBatchExportById('json')\">Download Export JSON</button>
             <button type=\"button\" onclick=\"downloadBatchExportById('csv')\">Download Export CSV</button>
           </div>
@@ -717,8 +719,10 @@ HTML = """
           </div>
           <div class=\"project-board-summary\" id=\"project_batch_history_summary\">batch_history: -</div>
           <div class=\"project-board-summary\" id=\"project_batch_history_metrics\">batch_metrics: -</div>
+          <div class=\"project-board-summary\" id=\"project_failed_queue_summary\">failed_queue: -</div>
           <div id=\"project_batch_history_list\" class=\"project-batch-history-list\"><div class=\"muted\">(none)</div></div>
           <pre id=\"project_batch_history\" style=\"margin: 0 0 8px 0; max-height: 120px; overflow: auto;\">(none)</pre>
+          <pre id=\"project_failed_queue\" style=\"margin: 0 0 8px 0; max-height: 120px; overflow: auto;\">(none)</pre>
           <div class=\"project-session-list\" id=\"project_session_list\">
             <div class=\"muted\">(empty)</div>
           </div>
@@ -946,6 +950,7 @@ HTML = """
         projects: [],
         batchHistory: [],
         batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
+        failedReplayQueue: {source_export_id: '', action: '', rows: [], count: 0, unique_task_count: 0, failure_reasons: []},
         sessionBoard: {
           filterText: '',
           health: 'all',
@@ -2330,6 +2335,66 @@ HTML = """
         box.textContent = `batch_metrics: shown=${rows.length} | pass=${passN} partial=${partialN} fail=${failN} | replay(ok/fail/skipped/dry)=${okN}/${errN}/${skippedN}/${dryN} | avg_elapsed_ms=${avgElapsedMs}`;
       }
 
+      function renderFailedReplayQueue(queuePayload) {
+        const head = document.getElementById('project_failed_queue_summary');
+        const box = document.getElementById('project_failed_queue');
+        const queue = (queuePayload && typeof queuePayload === 'object') ? queuePayload : {};
+        const rows = Array.isArray(queue.rows) ? queue.rows : [];
+        const sourceExportId = String(queue.source_export_id || '').trim();
+        const action = String(queue.action || '').trim();
+        const reasonRows = Array.isArray(queue.failure_reasons) ? queue.failure_reasons : [];
+        const reasonText = reasonRows.slice(0, 4).map((x) => `${String((x && x.reason) || '-')}:${Number((x && x.count) || 0)}`).join(', ');
+        if (head) {
+          head.textContent = rows.length > 0
+            ? `failed_queue: source=${sourceExportId || '-'} | action=${action || '-'} | count=${rows.length} | unique_tasks=${Number(queue.unique_task_count || 0)}${reasonText ? ` | reasons=${reasonText}` : ''}`
+            : 'failed_queue: empty';
+        }
+        if (box) {
+          box.textContent = rows.length > 0 ? JSON.stringify(rows.slice(0, 60), null, 2) : '(none)';
+        }
+      }
+
+      async function loadFailedReplayQueueById() {
+        const pid = selectedProjectId();
+        const eid = readBatchExportId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!eid) {
+          renderJsonOut({status: 'fail', error: 'missing export_id'});
+          return;
+        }
+        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports/${encodeURIComponent(eid)}/failed-queue`);
+        renderJsonOut(r.data);
+        const q = (r.data && r.data.queue && typeof r.data.queue === 'object') ? r.data.queue : null;
+        if (q) {
+          state.failedReplayQueue = q;
+          renderFailedReplayQueue(q);
+        }
+      }
+
+      async function replayFailedQueueNow() {
+        const pid = selectedProjectId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        const queue = (state.failedReplayQueue && typeof state.failedReplayQueue === 'object') ? state.failedReplayQueue : {};
+        const sourceExportId = String(queue.source_export_id || readBatchExportId() || '').trim();
+        if (!sourceExportId) {
+          renderJsonOut({status: 'fail', error: 'no source export id for failed queue replay'});
+          return;
+        }
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/batch-exports/${encodeURIComponent(sourceExportId)}/replay`, {
+          options: readBatchReplayOptions(true),
+        });
+        renderJsonOut(r.data);
+        await loadBatchHistory();
+        await refreshProjects();
+        await loadFailedReplayQueueById();
+      }
+
       async function compareBatchExportsById() {
         const pid = selectedProjectId();
         const primary = readBatchExportId();
@@ -3065,6 +3130,7 @@ HTML = """
         restoreMessageDraft(pid);
         renderPromptHistory(pid);
         await loadBatchHistory();
+        renderFailedReplayQueue(state.failedReplayQueue);
         return r;
       }
 
@@ -3411,6 +3477,7 @@ HTML = """
         }
         renderPromptHistory(currentProjectKey());
         await loadRunRuntime();
+        renderFailedReplayQueue(state.failedReplayQueue);
         refreshWorkspaceHud();
       }
 
@@ -4797,6 +4864,109 @@ def _filter_failed_only_replay_rows(
     return picked, len(failed_task_ids)
 
 
+def _batch_item_failure_reason(item: Dict[str, Any]) -> str:
+    if not isinstance(item, dict):
+        return "invalid_item"
+    status_text = str(item.get("status") or "").strip().lower()
+    if status_text in {"fail", "failed", "error", "missing"}:
+        return status_text
+    http_status = _as_int(item.get("http_status"), 0)
+    if http_status >= 400:
+        return f"http_{http_status}"
+    data = item.get("data")
+    if isinstance(data, dict):
+        data_status = str(data.get("status") or "").strip().lower()
+        if data_status in {"fail", "failed", "error", "missing"}:
+            return data_status
+        data_error = str(data.get("error") or "").strip().lower()
+        if data_error:
+            return data_error[:96]
+    err = str(item.get("error") or "").strip().lower()
+    if err:
+        return err[:96]
+    return "unknown_failure"
+
+
+def _extract_failed_queue_rows_from_source_batch(
+    *,
+    source_batch: Dict[str, Any],
+    project_id: str,
+    source_export_id: str,
+) -> Dict[str, Any]:
+    action = str(source_batch.get("action") or "").strip()
+    queue_rows: List[Dict[str, Any]] = []
+    reason_counts: Dict[str, int] = {}
+    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for bucket_name in ("results", "retries"):
+        bucket = source_batch.get(bucket_name)
+        if not isinstance(bucket, list):
+            continue
+        for item in bucket:
+            if not isinstance(item, dict):
+                continue
+            if not _row_item_has_failure(item):
+                continue
+            tid = str(item.get("task_id") or "").strip()
+            if not tid:
+                continue
+            failed_step = str(item.get("failed_tool_name") or item.get("latest_failed_step") or "").strip()
+            reason = _batch_item_failure_reason(item)
+            row = {
+                "task_id": tid,
+                "project_id": str(item.get("project_id") or project_id),
+                "latest_failed_step": failed_step,
+                "failed_tool_name": failed_step,
+                "source_export_id": source_export_id,
+                "source_action": action,
+                "source_bucket": bucket_name,
+                "failure_reason": reason,
+            }
+            key = (tid, failed_step)
+            if key in by_key:
+                continue
+            by_key[key] = row
+            queue_rows.append(row)
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+    if not queue_rows and action == "batch_retry_failed":
+        rows = source_batch.get("rows")
+        if isinstance(rows, list):
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                tid = str(item.get("task_id") or "").strip()
+                failed_step = str(item.get("latest_failed_step") or item.get("failed_tool_name") or "").strip()
+                if not tid or not failed_step:
+                    continue
+                key = (tid, failed_step)
+                if key in by_key:
+                    continue
+                row = {
+                    "task_id": tid,
+                    "project_id": str(item.get("project_id") or project_id),
+                    "latest_failed_step": failed_step,
+                    "failed_tool_name": failed_step,
+                    "source_export_id": source_export_id,
+                    "source_action": action,
+                    "source_bucket": "rows",
+                    "failure_reason": "previous_failed_step",
+                }
+                by_key[key] = row
+                queue_rows.append(row)
+                reason_counts["previous_failed_step"] = reason_counts.get("previous_failed_step", 0) + 1
+
+    reason_ranked = sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)
+    return {
+        "status": "pass",
+        "action": action,
+        "source_export_id": source_export_id,
+        "rows": queue_rows,
+        "count": len(queue_rows),
+        "unique_task_count": len({str(row.get("task_id") or "") for row in queue_rows}),
+        "failure_reasons": [{"reason": k, "count": v} for k, v in reason_ranked[:12]],
+    }
+
+
 def _classify_batch_replay_response(status_code: int, data: Dict[str, Any]) -> Tuple[str, str]:
     if int(status_code) >= 400:
         return "fail", f"http_{int(status_code)}"
@@ -6017,6 +6187,31 @@ def api_project_batch_export_detail(project_id: str, export_id: str):
     if not isinstance(payload, dict):
         return jsonify({"status": "missing", "error": "batch_export_not_found", "project_id": pid, "export_id": eid}), 404
     return jsonify({"status": "pass", "project_id": pid, "export_id": eid, "batch_export": payload})
+
+
+@app.get("/api/projects/<project_id>/batch-exports/<export_id>/failed-queue")
+def api_project_batch_export_failed_queue(project_id: str, export_id: str):
+    pid = str(project_id or "").strip()
+    eid = str(export_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    if not _is_safe_export_id(eid):
+        return jsonify({"status": "fail", "error": "invalid export_id"}), 400
+    payload = _load_batch_export_entry(pid, eid)
+    if not isinstance(payload, dict):
+        return jsonify({"status": "missing", "error": "batch_export_not_found", "project_id": pid, "export_id": eid}), 404
+    source_batch = _batch_export_source_payload(payload)
+    out = _extract_failed_queue_rows_from_source_batch(source_batch=source_batch, project_id=pid, source_export_id=eid)
+    return jsonify(
+        {
+            "status": "pass",
+            "project_id": pid,
+            "export_id": eid,
+            "queue": out,
+        }
+    )
 
 
 @app.get("/api/projects/<project_id>/batch-exports/<export_id>/download")

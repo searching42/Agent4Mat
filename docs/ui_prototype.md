@@ -75,6 +75,7 @@ Open: `http://127.0.0.1:8787`
   - task compare / artifact diff shortcuts for two-run diffing
   - recent stage events (intake/approve/run/step)
   - artifact preview and timeline / validation shortcuts
+  - one-click `Download Task Bundle` exports current task run artifacts as `.tar.gz` (run/result/logging/rank + manifest)
 - web search interaction:
   - explicit `Web Search` action button in composer injects a search-first prompt template
 - chat transcript:
@@ -123,6 +124,7 @@ Open: `http://127.0.0.1:8787`
   - `POST /api/task/<task_id>/retry-failed-step`
   - `GET /api/task/<task_id>/summary`
   - `GET /api/task/<task_id>/artifact/<artifact_name>`
+  - `GET /api/task/<task_id>/bundle` (download `.tar.gz` bundle of current task outputs)
   - `GET /api/task/<task_id>/timeline`
   - `GET /api/timeline-groups` (`scope=recent_tasks&limit=N`)
   - `GET /api/task/<task_id>/compare`

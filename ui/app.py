@@ -6,6 +6,7 @@ import io
 import os
 import re
 import subprocess
+import tarfile
 import tempfile
 import time
 import uuid
@@ -932,6 +933,7 @@ HTML = """
               <button onclick=\"previewArtifact()\">Preview Artifact</button>
               <button onclick=\"showTimeline()\">Show Timeline</button>
               <button onclick=\"validateTask()\">Validate Task</button>
+              <button onclick=\"downloadTaskBundle()\">Download Task Bundle</button>
             </div>
           </div>
         </details>
@@ -3268,6 +3270,17 @@ HTML = """
         renderJsonOut(r.data);
       }
 
+      function downloadTaskBundle() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const url = `/api/task/${encodeURIComponent(tid)}/bundle`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        renderEvents([{stage: 'bundle_download', status: 'requested'}]);
+      }
+
       async function showTimeline() {
         const tid = taskId();
         if (!tid || tid === '-') {
@@ -3818,6 +3831,212 @@ def _task_artifact_paths(task_id: str) -> Dict[str, Path]:
     for name, rel in ARTIFACT_NAME_TO_FILE.items():
         out[name] = _task_artifact_path(task_id, rel)
     return out
+
+
+def _path_within(parent: Path, child: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _normalize_repo_path(raw_path: Any) -> Optional[Path]:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+    path = Path(text)
+    if not path.is_absolute():
+        path = (REPO_ROOT / path).resolve()
+    else:
+        path = path.resolve()
+    if not _path_within(REPO_ROOT, path):
+        return None
+    return path
+
+
+def _latest_prefixed_dir(root: Path, prefix: str) -> Optional[Path]:
+    if not root.exists() or not root.is_dir():
+        return None
+    rows: List[Tuple[float, Path]] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        if not str(child.name or "").startswith(prefix):
+            continue
+        try:
+            mtime = float(child.stat().st_mtime)
+        except Exception:
+            mtime = 0.0
+        rows.append((mtime, child.resolve()))
+    if not rows:
+        return None
+    rows.sort(key=lambda item: item[0], reverse=True)
+    return rows[0][1]
+
+
+def _compact_directory_paths(paths: List[Path]) -> List[Path]:
+    ordered = sorted({str(p.resolve()): p.resolve() for p in paths}.values(), key=lambda p: len(str(p)))
+    kept: List[Path] = []
+    for path in ordered:
+        if any(_path_within(parent, path) for parent in kept):
+            continue
+        kept.append(path)
+    return kept
+
+
+def _collect_task_bundle_targets(task_id: str) -> Dict[str, Any]:
+    run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
+    dir_targets: List[Path] = []
+    file_targets: List[Path] = []
+    missing_optional: List[str] = []
+
+    if run_dir.exists() and run_dir.is_dir():
+        dir_targets.append(run_dir)
+    else:
+        return {
+            "status": "missing",
+            "task_id": task_id,
+            "run_dir": str(run_dir),
+            "dirs": [],
+            "files": [],
+            "missing_optional": [],
+        }
+
+    result_dir = _latest_prefixed_dir((REPO_ROOT / "result").resolve(), f"{task_id}-")
+    logging_dir = _latest_prefixed_dir((REPO_ROOT / "logging").resolve(), f"{task_id}-")
+    rank_dir = _latest_prefixed_dir((REPO_ROOT / "runs").resolve(), f"agent_rank_{task_id}_")
+    for label, path in (("result", result_dir), ("logging", logging_dir), ("rank", rank_dir)):
+        if isinstance(path, Path) and path.exists() and path.is_dir():
+            dir_targets.append(path)
+        else:
+            missing_optional.append(label)
+
+    decision_path = run_dir / "decision_summary.json"
+    decision = _load_json_if_exists(decision_path)
+    if isinstance(decision, dict):
+        artifacts = decision.get("artifacts") if isinstance(decision.get("artifacts"), dict) else {}
+        for raw in artifacts.values():
+            path = _normalize_repo_path(raw)
+            if path is None or not path.exists():
+                continue
+            if path.is_dir():
+                dir_targets.append(path)
+            elif path.is_file():
+                file_targets.append(path)
+
+    execution_path = run_dir / "execution.json"
+    execution = _load_json_if_exists(execution_path)
+    if isinstance(execution, dict):
+        records = execution.get("records") if isinstance(execution.get("records"), list) else []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            result = record.get("result")
+            if not isinstance(result, dict):
+                continue
+            for key in ("latest_run_dir", "report", "result_dir", "logging_dir", "output_csv", "output_path"):
+                path = _normalize_repo_path(result.get(key))
+                if path is None or not path.exists():
+                    continue
+                if path.is_dir():
+                    dir_targets.append(path)
+                elif path.is_file():
+                    file_targets.append(path)
+
+    compact_dirs = _compact_directory_paths(dir_targets)
+    filtered_files: List[Path] = []
+    for path in sorted({str(p.resolve()): p.resolve() for p in file_targets}.values(), key=lambda p: str(p)):
+        if any(_path_within(parent, path) for parent in compact_dirs):
+            continue
+        filtered_files.append(path)
+
+    return {
+        "status": "pass",
+        "task_id": task_id,
+        "run_dir": str(run_dir),
+        "dirs": compact_dirs,
+        "files": filtered_files,
+        "missing_optional": missing_optional,
+    }
+
+
+def _write_task_bundle_archive(*, task_id: str, out_path: Path) -> Dict[str, Any]:
+    targets = _collect_task_bundle_targets(task_id)
+    if str(targets.get("status") or "") != "pass":
+        return targets
+
+    dirs = targets.get("dirs") if isinstance(targets.get("dirs"), list) else []
+    files = targets.get("files") if isinstance(targets.get("files"), list) else []
+    bundle_root = Path(f"agent4mat_task_{task_id}")
+    arc_names: set[str] = set()
+    added_paths: List[str] = []
+    file_count = 0
+
+    with tarfile.open(out_path, mode="w:gz") as tf:
+        def _add_file(src: Path) -> None:
+            nonlocal file_count
+            if not src.exists() or not src.is_file() or not _path_within(REPO_ROOT, src):
+                return
+            rel = src.resolve().relative_to(REPO_ROOT.resolve())
+            arcname = (bundle_root / rel).as_posix()
+            if arcname in arc_names:
+                return
+            tf.add(str(src), arcname=arcname, recursive=False)
+            arc_names.add(arcname)
+            added_paths.append(arcname)
+            file_count += 1
+
+        for dir_path in sorted([p for p in dirs if isinstance(p, Path)], key=lambda p: str(p)):
+            if not dir_path.exists() or not dir_path.is_dir():
+                continue
+            for child in sorted(dir_path.rglob("*"), key=lambda p: str(p)):
+                if child.is_file():
+                    _add_file(child)
+
+        for file_path in sorted([p for p in files if isinstance(p, Path)], key=lambda p: str(p)):
+            _add_file(file_path)
+
+        manifest = {
+            "task_id": task_id,
+            "generated_at": _now_iso(),
+            "bundle_path": str(out_path),
+            "bundle_root": bundle_root.as_posix(),
+            "file_count": file_count,
+            "included_dirs": [str(p) for p in dirs if isinstance(p, Path)],
+            "included_extra_files": [str(p) for p in files if isinstance(p, Path)],
+            "added_archive_paths": added_paths,
+            "missing_optional": targets.get("missing_optional") if isinstance(targets.get("missing_optional"), list) else [],
+        }
+        manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        manifest_info = tarfile.TarInfo(name=(bundle_root / "manifest.json").as_posix())
+        manifest_info.size = len(manifest_bytes)
+        manifest_info.mtime = int(time.time())
+        tf.addfile(manifest_info, io.BytesIO(manifest_bytes))
+
+    return {
+        "status": "pass",
+        "task_id": task_id,
+        "bundle_path": str(out_path),
+        "bundle_root": bundle_root.as_posix(),
+        "file_count": file_count,
+        "missing_optional": targets.get("missing_optional") if isinstance(targets.get("missing_optional"), list) else [],
+    }
+
+
+def _stream_file_and_cleanup(path: Path, *, chunk_size: int = 1024 * 1024):
+    try:
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    finally:
+        try:
+            path.unlink()
+        except Exception:
+            pass
 
 
 def _load_json_if_exists(path: Path) -> Any:
@@ -7080,6 +7299,53 @@ def api_task_artifact(task_id: str, artifact_name: str):
     paths = _task_artifact_paths(tid)
     payload = _artifact_preview(artifact_name=name, path=paths[name], max_chars=max_chars)
     return jsonify(payload)
+
+
+@app.get("/api/task/<task_id>/bundle")
+def api_task_bundle(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+
+    fd, tmp_name = tempfile.mkstemp(prefix=f"agent4mat_task_bundle_{tid}_", suffix=".tar.gz")
+    os.close(fd)
+    out_path = Path(tmp_name).resolve()
+    try:
+        bundle = _write_task_bundle_archive(task_id=tid, out_path=out_path)
+        status = str(bundle.get("status") or "")
+        if status == "missing":
+            try:
+                out_path.unlink()
+            except Exception:
+                pass
+            return jsonify(bundle), 404
+        if status != "pass":
+            try:
+                out_path.unlink()
+            except Exception:
+                pass
+            return jsonify(bundle), 500
+        filename = f"agent4mat-task-{tid}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz"
+        size = int(out_path.stat().st_size) if out_path.exists() else 0
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(size),
+            "X-Agent4Mat-Bundle-Task": tid,
+            "X-Agent4Mat-Bundle-Files": str(int(bundle.get("file_count") or 0)),
+        }
+        return Response(
+            _stream_file_and_cleanup(out_path),
+            mimetype="application/gzip",
+            headers=headers,
+        )
+    except Exception as exc:
+        try:
+            out_path.unlink()
+        except Exception:
+            pass
+        return jsonify({"status": "fail", "task_id": tid, "error": f"bundle_build_failed: {type(exc).__name__}: {exc}"}), 500
 
 
 @app.get("/api/task/<task_id>/timeline")

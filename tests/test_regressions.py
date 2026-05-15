@@ -7898,6 +7898,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("hud_project_id", html)
         self.assertIn("current_task_id_hud", html)
         self.assertIn("sendWebSearchHint()", html)
+        self.assertIn("downloadTaskBundle()", html)
+        self.assertIn("Download Task Bundle", html)
         self.assertIn("memory_enabled", html)
         self.assertIn("memory_notes", html)
         self.assertIn("updateMemoryStatus()", html)
@@ -9437,6 +9439,99 @@ class UiPrototypeTests(unittest.TestCase):
         payload = resp.get_json()
         self.assertEqual(payload.get("status"), "fail")
         self.assertEqual(payload.get("error"), "invalid task_id")
+
+    def test_ui_task_bundle_download_includes_run_and_output_dirs(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_bundle_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            result_dir = root / "result" / f"{task_id}-20260515-010101"
+            logging_dir = root / "logging" / f"{task_id}-20260515-010101"
+            rank_dir = root / "runs" / f"agent_rank_{task_id}_20260515T010101.000000+0000"
+            result_dir.mkdir(parents=True, exist_ok=True)
+            logging_dir.mkdir(parents=True, exist_ok=True)
+            rank_dir.mkdir(parents=True, exist_ok=True)
+
+            (run_dir / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "status": "success",
+                        "records": [
+                            {
+                                "name": "make_report",
+                                "status": "success",
+                                "result": {
+                                    "latest_run_dir": str(rank_dir),
+                                    "report": str(rank_dir / "06_report.md"),
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "decision_summary.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "artifacts": {
+                            "final_output": str(rank_dir / "06_report.md"),
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "task_state.json").write_text(json.dumps({"task_id": task_id}, ensure_ascii=False) + "\n", encoding="utf-8")
+            (run_dir / "plan.json").write_text(json.dumps({"summary": "ok"}, ensure_ascii=False) + "\n", encoding="utf-8")
+            (run_dir / "tool_state.json").write_text(json.dumps({"ok": True}, ensure_ascii=False) + "\n", encoding="utf-8")
+            (result_dir / "metadata.json").write_text(json.dumps({"task_id": task_id}, ensure_ascii=False) + "\n", encoding="utf-8")
+            (logging_dir / "task.json").write_text(json.dumps({"task_id": task_id}, ensure_ascii=False) + "\n", encoding="utf-8")
+            (rank_dir / "06_report.md").write_text("# report\n", encoding="utf-8")
+
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/bundle")
+
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("application/gzip", str(resp.content_type or ""))
+            disp = str(resp.headers.get("Content-Disposition") or "")
+            self.assertIn("attachment;", disp)
+            self.assertIn(f"agent4mat-task-{task_id}", disp)
+
+            buf = io.BytesIO(resp.get_data())
+            with tarfile.open(fileobj=buf, mode="r:gz") as tf:
+                names = tf.getnames()
+                self.assertTrue(any(name.endswith("manifest.json") for name in names))
+                self.assertTrue(any(name.endswith(f"runs/agent/{task_id}/execution.json") for name in names))
+                self.assertTrue(any(name.endswith(f"result/{result_dir.name}/metadata.json") for name in names))
+                self.assertTrue(any(name.endswith(f"logging/{logging_dir.name}/task.json") for name in names))
+                self.assertTrue(any(name.endswith(f"runs/{rank_dir.name}/06_report.md") for name in names))
+                manifest_name = next((name for name in names if name.endswith("manifest.json")), "")
+                self.assertTrue(manifest_name)
+                manifest_file = tf.extractfile(manifest_name)
+                self.assertIsNotNone(manifest_file)
+                manifest = json.loads((manifest_file.read() if manifest_file is not None else b"{}").decode("utf-8"))
+                self.assertEqual(manifest.get("task_id"), task_id)
+                self.assertGreaterEqual(int(manifest.get("file_count") or 0), 5)
+
+    def test_ui_task_bundle_returns_missing_for_unknown_task(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get("/api/task/ui_bundle_missing/bundle")
+        self.assertEqual(resp.status_code, 404)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "missing")
+        self.assertEqual(payload.get("task_id"), "ui_bundle_missing")
 
     def test_ui_task_artifact_preview_reads_json(self) -> None:
         ui_app_mod = self._load_ui_module()

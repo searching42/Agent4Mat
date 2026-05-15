@@ -222,6 +222,10 @@ HTML = """
         border-color: #9bbcff;
         box-shadow: inset 0 0 0 1px #cddfff;
       }
+      .project-session-item.pinned {
+        border-color: #ffd27a;
+        box-shadow: inset 0 0 0 1px #ffe6b1;
+      }
       .project-session-head {
         display: flex;
         justify-content: space-between;
@@ -584,6 +588,8 @@ HTML = """
             <button type=\"button\" onclick=\"quickFilterFailedOnly()\">Failed Only</button>
             <button type=\"button\" onclick=\"quickSortPriority()\">Priority First</button>
             <button type=\"button\" onclick=\"openTopPrioritySession()\">Open Top Priority</button>
+            <button type=\"button\" onclick=\"openNextFailedSession()\">Open Next Failed</button>
+            <button type=\"button\" onclick=\"togglePinnedOnly()\">Pinned Only</button>
             <button type=\"button\" onclick=\"clearSessionBoardControls()\">Reset</button>
             <label><input id=\"session_auto_refresh\" type=\"checkbox\" onchange=\"onSessionAutoRefreshChanged()\" /> Auto Refresh</label>
             <select id=\"session_refresh_seconds\" onchange=\"onSessionAutoRefreshChanged()\">
@@ -825,6 +831,8 @@ HTML = """
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
+          pinnedProjectIds: [],
+          pinnedOnly: false,
         },
         sessionAutoRefreshTimer: null,
       };
@@ -928,7 +936,15 @@ HTML = """
       }
 
       function loadSessionBoardState() {
-        const fallback = {filterText: '', health: 'all', sort: 'updated_desc', autoRefreshEnabled: false, refreshSeconds: 30};
+        const fallback = {
+          filterText: '',
+          health: 'all',
+          sort: 'updated_desc',
+          autoRefreshEnabled: false,
+          refreshSeconds: 30,
+          pinnedProjectIds: [],
+          pinnedOnly: false,
+        };
         try {
           const raw = localStorage.getItem(SESSION_BOARD_KEY);
           if (!raw) return fallback;
@@ -940,7 +956,13 @@ HTML = """
           const autoRefreshEnabled = Boolean(parsed.autoRefreshEnabled);
           const refreshSecondsRaw = Number(parsed.refreshSeconds || 30);
           const refreshSeconds = Number.isFinite(refreshSecondsRaw) ? Math.max(10, Math.min(120, Math.floor(refreshSecondsRaw))) : 30;
-          return {filterText, health, sort, autoRefreshEnabled, refreshSeconds};
+          const pinnedOnly = Boolean(parsed.pinnedOnly);
+          const pinnedRaw = Array.isArray(parsed.pinnedProjectIds) ? parsed.pinnedProjectIds : [];
+          const pinnedProjectIds = pinnedRaw
+            .map((x) => String(x || '').trim())
+            .filter((x) => Boolean(x))
+            .slice(0, 200);
+          return {filterText, health, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, pinnedProjectIds};
         } catch (e) {
           return fallback;
         }
@@ -953,6 +975,13 @@ HTML = """
           sort: String((v && v.sort) || 'updated_desc').trim().toLowerCase(),
           autoRefreshEnabled: Boolean(v && v.autoRefreshEnabled),
           refreshSeconds: Number.isFinite(Number(v && v.refreshSeconds)) ? Math.max(10, Math.min(120, Math.floor(Number(v.refreshSeconds)))) : 30,
+          pinnedOnly: Boolean(v && v.pinnedOnly),
+          pinnedProjectIds: Array.isArray(v && v.pinnedProjectIds)
+            ? (v.pinnedProjectIds
+                .map((x) => String(x || '').trim())
+                .filter((x) => Boolean(x))
+                .slice(0, 200))
+            : [],
         };
         try {
           localStorage.setItem(SESSION_BOARD_KEY, JSON.stringify(payload));
@@ -1627,7 +1656,11 @@ HTML = """
         const autoRefreshEnabled = Boolean(document.getElementById('session_auto_refresh').checked);
         const refreshSecondsRaw = Number(document.getElementById('session_refresh_seconds').value || 30);
         const refreshSeconds = Number.isFinite(refreshSecondsRaw) ? Math.max(10, Math.min(120, Math.floor(refreshSecondsRaw))) : 30;
-        return {filterText, health, sort, autoRefreshEnabled, refreshSeconds};
+        const pinnedOnly = Boolean(state.sessionBoard && state.sessionBoard.pinnedOnly);
+        const pinnedProjectIds = Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
+          ? state.sessionBoard.pinnedProjectIds.slice()
+          : [];
+        return {filterText, health, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, pinnedProjectIds};
       }
 
       function applySessionBoardControls() {
@@ -1654,8 +1687,48 @@ HTML = """
       }
 
       function clearSessionBoardControls() {
-        applySessionBoardStateToControls({filterText: '', health: 'all', sort: 'updated_desc', autoRefreshEnabled: false, refreshSeconds: 30});
+        applySessionBoardStateToControls({
+          filterText: '',
+          health: 'all',
+          sort: 'updated_desc',
+          autoRefreshEnabled: false,
+          refreshSeconds: 30,
+          pinnedOnly: false,
+          pinnedProjectIds: Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
+            ? state.sessionBoard.pinnedProjectIds
+            : [],
+        });
         applySessionBoardControls();
+      }
+
+      function togglePinnedOnly() {
+        const next = !Boolean(state.sessionBoard && state.sessionBoard.pinnedOnly);
+        state.sessionBoard = {
+          ...(state.sessionBoard || {}),
+          pinnedOnly: next,
+          pinnedProjectIds: Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
+            ? state.sessionBoard.pinnedProjectIds.slice()
+            : [],
+        };
+        saveSessionBoardState(state.sessionBoard);
+        renderProjectSessionBoard(state.projects || []);
+      }
+
+      function toggleProjectPin(projectId) {
+        const pid = String(projectId || '').trim();
+        if (!pid) return;
+        const current = Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
+          ? state.sessionBoard.pinnedProjectIds.slice()
+          : [];
+        const set = new Set(current);
+        if (set.has(pid)) set.delete(pid);
+        else set.add(pid);
+        state.sessionBoard = {
+          ...(state.sessionBoard || {}),
+          pinnedProjectIds: Array.from(set).slice(0, 200),
+        };
+        saveSessionBoardState(state.sessionBoard);
+        renderProjectSessionBoard(state.projects || []);
       }
 
       function onSessionAutoRefreshChanged() {
@@ -1687,7 +1760,18 @@ HTML = """
         const controls = readSessionBoardControls();
         state.sessionBoard = controls;
         const baseRows = Array.isArray(projects) ? projects : [];
+        const pinnedIds = new Set(
+          Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
+            ? state.sessionBoard.pinnedProjectIds
+            : []
+        );
         let rows = baseRows.slice();
+        if (Boolean(state.sessionBoard && state.sessionBoard.pinnedOnly)) {
+          rows = rows.filter((row) => {
+            const pid = String((row && row.project_id) || '').trim();
+            return pid && pinnedIds.has(pid);
+          });
+        }
         if (controls.filterText) {
           rows = rows.filter((row) => {
             if (!row || typeof row !== 'object') return false;
@@ -1736,6 +1820,11 @@ HTML = """
         } else {
           rows.sort((a, b) => String((b && b.updated_at) || '').localeCompare(String((a && a.updated_at) || '')));
         }
+        rows.sort((a, b) => {
+          const ap = pinnedIds.has(String((a && a.project_id) || '').trim()) ? 1 : 0;
+          const bp = pinnedIds.has(String((b && b.project_id) || '').trim()) ? 1 : 0;
+          return bp - ap;
+        });
         if (summaryEle) {
           const total = rows.length;
           let failedN = 0;
@@ -1743,8 +1832,11 @@ HTML = """
           let noneN = 0;
           let ratioSum = 0.0;
           let ratioCnt = 0;
+          let pinnedN = 0;
           for (const row of rows) {
             if (!row || typeof row !== 'object') continue;
+            const pid = String(row.project_id || '').trim();
+            if (pid && pinnedIds.has(pid)) pinnedN += 1;
             const rh = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
             const st = String(rh.status || 'none').toLowerCase();
             if (st === 'failed') failedN += 1;
@@ -1757,7 +1849,7 @@ HTML = """
             }
           }
           const avgRatio = ratioCnt > 0 ? Math.round((ratioSum / ratioCnt) * 100) : 0;
-          summaryEle.textContent = `summary: total=${total} | failed=${failedN} | success=${successN} | none=${noneN} | avg_success_ratio=${avgRatio}%`;
+          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | avg_success_ratio=${avgRatio}%`;
         }
         if (rows.length < 1) {
           const empty = document.createElement('div');
@@ -1788,7 +1880,8 @@ HTML = """
           const title = String(row.title || pid);
 
           const card = document.createElement('div');
-          card.className = `project-session-item${pid === activeId ? ' active' : ''}`;
+          const isPinned = pinnedIds.has(pid);
+          card.className = `project-session-item${pid === activeId ? ' active' : ''}${isPinned ? ' pinned' : ''}`;
 
           const head = document.createElement('div');
           head.className = 'project-session-head';
@@ -1842,6 +1935,14 @@ HTML = """
             openProjectWorkspace(pid, {push: true});
           };
           actions.appendChild(openBtn);
+
+          const pinBtn = document.createElement('button');
+          pinBtn.type = 'button';
+          pinBtn.textContent = isPinned ? 'Unpin' : 'Pin';
+          pinBtn.onclick = () => {
+            toggleProjectPin(pid);
+          };
+          actions.appendChild(pinBtn);
 
           const resumeBtn = document.createElement('button');
           resumeBtn.type = 'button';
@@ -1918,6 +2019,35 @@ HTML = """
         const top = rows.find((r) => r && typeof r === 'object' && String(r.project_id || '').trim());
         if (!top) {
           renderJsonOut({status: 'fail', error: 'no valid project'});
+          return;
+        }
+        const pid = String(top.project_id || '').trim();
+        await openProjectWorkspace(pid, {push: true});
+      }
+
+      async function openNextFailedSession() {
+        const rows = Array.isArray(state.projects) ? state.projects.slice() : [];
+        if (rows.length < 1) {
+          renderJsonOut({status: 'fail', error: 'no projects available'});
+          return;
+        }
+        const failedRows = rows.filter((row) => {
+          const st = String((row && row.runtime_health && row.runtime_health.status) || '').toLowerCase();
+          return st === 'failed';
+        });
+        if (failedRows.length < 1) {
+          renderJsonOut({status: 'fail', error: 'no failed project'});
+          return;
+        }
+        failedRows.sort((a, b) => {
+          const ad = Number((a && a.runtime_health && a.runtime_health.recent_duration_ms) || 0);
+          const bd = Number((b && b.runtime_health && b.runtime_health.recent_duration_ms) || 0);
+          if (bd !== ad) return bd - ad;
+          return String((b && b.updated_at) || '').localeCompare(String((a && a.updated_at) || ''));
+        });
+        const top = failedRows.find((r) => r && typeof r === 'object' && String(r.project_id || '').trim());
+        if (!top) {
+          renderJsonOut({status: 'fail', error: 'no valid failed project'});
           return;
         }
         const pid = String(top.project_id || '').trim();

@@ -27,6 +27,7 @@ Open: `http://127.0.0.1:8787`
   - supports one-click `Clone Project` into a new `project_id` with selectable copy policy (messages/attachments/runtime pointers)
   - supports `Clone + Open Window` and `Snapshot Lock Clone` (clone + force `project_read_only=true`)
   - read-only projects block mutating chat/file actions and keep inspection/export flows available
+  - supports `Project Snapshots`: create snapshot, list versions, one-click restore to selected snapshot
   - workspace URL carries `?project_id=...` and restores project context on load/back-forward navigation
   - supports `Open in New Window` and `Copy Workspace Link` for project-isolated windows
   - left drawer includes `Workspace Sessions` board with quick `Open` and `Resume` actions per project
@@ -97,6 +98,9 @@ Open: `http://127.0.0.1:8787`
 - project/chat/session:
   - `GET /api/projects`
   - `POST /api/projects` (supports `memory_notes` + `options.memory_enabled`)
+  - `GET /api/projects/<project_id>/snapshots`
+  - `POST /api/projects/<project_id>/snapshots`
+  - `POST /api/projects/<project_id>/snapshots/<snapshot_id>/restore`
   - `POST /api/projects/<project_id>/clone`
     - supports `target_options` (e.g. `{ "project_read_only": true }`) for cloned project options
   - `GET /api/projects/<project_id>/export`

@@ -7905,6 +7905,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("updateMemoryStatus()", html)
         self.assertIn("project_read_only", html)
         self.assertIn("updateProjectLockStatus()", html)
+        self.assertIn("snapshot_note", html)
+        self.assertIn("createProjectSnapshot()", html)
+        self.assertIn("loadProjectSnapshots()", html)
 
     def test_ui_html_contains_workspace_url_controls(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -8047,6 +8050,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("cloneAndOpenProject()", html)
         self.assertIn("snapshotLockProject()", html)
         self.assertIn("/api/projects/${encodeURIComponent(sourceProjectId)}/clone", html)
+        self.assertIn("/api/projects/${encodeURIComponent(pid)}/snapshots", html)
+        self.assertIn("/api/projects/${encodeURIComponent(pid)}/snapshots/${encodeURIComponent(sid)}/restore", html)
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -8288,6 +8293,97 @@ class UiPrototypeTests(unittest.TestCase):
                 payload = resp.get_json()
                 self.assertEqual(payload.get("status"), "fail")
                 self.assertEqual(payload.get("error"), "project_read_only")
+
+    def test_ui_project_snapshot_create_list_and_restore(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={"project_id": "ui_snap_proj", "title": "snapshot source", "options": {"memory_enabled": True}},
+                )
+                project = ui_app_mod._load_project_state("ui_snap_proj")
+                self.assertIsInstance(project, dict)
+                project["current_task_id"] = "snap_task_1"
+                ui_app_mod._append_message(project, role="user", kind="chat", content="before snapshot")
+                ui_app_mod._save_project_state(project)
+
+                create_resp = client.post(
+                    "/api/projects/ui_snap_proj/snapshots",
+                    json={"note": "before edit"},
+                )
+                self.assertEqual(create_resp.status_code, 200)
+                created = create_resp.get_json()
+                self.assertEqual(created.get("status"), "pass")
+                snap = created.get("snapshot") if isinstance(created.get("snapshot"), dict) else {}
+                sid = str(snap.get("snapshot_id") or "")
+                self.assertTrue(sid)
+
+                client.post(
+                    "/api/projects",
+                    json={"project_id": "ui_snap_proj", "title": "after edit", "memory_notes": "changed memory"},
+                )
+                updated = ui_app_mod._load_project_state("ui_snap_proj")
+                self.assertIsInstance(updated, dict)
+                ui_app_mod._append_message(updated, role="user", kind="chat", content="after snapshot mutation")
+                ui_app_mod._save_project_state(updated)
+
+                restore_resp = client.post(
+                    f"/api/projects/ui_snap_proj/snapshots/{sid}/restore",
+                    json={"auto_snapshot_before": True, "restore_note": "rollback test"},
+                )
+                self.assertEqual(restore_resp.status_code, 200)
+                restored_payload = restore_resp.get_json()
+                self.assertEqual(restored_payload.get("status"), "pass")
+                proj_summary = restored_payload.get("project") if isinstance(restored_payload.get("project"), dict) else {}
+                self.assertEqual(proj_summary.get("title"), "snapshot source")
+                auto_before = restored_payload.get("auto_snapshot_before") if isinstance(restored_payload.get("auto_snapshot_before"), dict) else {}
+                self.assertTrue(str(auto_before.get("snapshot_id") or ""))
+
+                hist_resp = client.get("/api/projects/ui_snap_proj/history?limit=200")
+                self.assertEqual(hist_resp.status_code, 200)
+                hist = hist_resp.get_json()
+                messages = hist.get("messages") if isinstance(hist.get("messages"), list) else []
+                self.assertTrue(any("restored from snapshot" in str(m.get("content") or "").lower() for m in messages if isinstance(m, dict)))
+
+                list_resp = client.get("/api/projects/ui_snap_proj/snapshots?limit=20&offset=0")
+                self.assertEqual(list_resp.status_code, 200)
+                listed = list_resp.get_json()
+                self.assertEqual(listed.get("status"), "pass")
+                snaps = listed.get("snapshots") if isinstance(listed.get("snapshots"), list) else []
+                ids = [str(x.get("snapshot_id") or "") for x in snaps if isinstance(x, dict)]
+                self.assertIn(sid, ids)
+                self.assertGreaterEqual(len(ids), 2)
+
+    def test_ui_project_snapshot_restore_rejects_read_only_project(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={"project_id": "ui_snap_ro", "title": "ro", "options": {"project_read_only": True}},
+                )
+                create_resp = client.post(
+                    "/api/projects/ui_snap_ro/snapshots",
+                    json={"note": "ro snapshot"},
+                )
+                self.assertEqual(create_resp.status_code, 200)
+                payload = create_resp.get_json()
+                snap = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+                sid = str(snap.get("snapshot_id") or "")
+                self.assertTrue(sid)
+                restore_resp = client.post(
+                    f"/api/projects/ui_snap_ro/snapshots/{sid}/restore",
+                    json={"auto_snapshot_before": False},
+                )
+                self.assertEqual(restore_resp.status_code, 409)
+                restore_payload = restore_resp.get_json()
+                self.assertEqual(restore_payload.get("status"), "fail")
+                self.assertEqual(restore_payload.get("error"), "project_read_only")
 
     def test_ui_batch_export_list_and_replay_latest(self) -> None:
         ui_app_mod = self._load_ui_module()

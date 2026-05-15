@@ -27,6 +27,7 @@ TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PROJECTS_DIR_REL = Path("runs/ui_sessions/projects")
 UPLOADS_DIR_REL = Path("runs/ui_sessions/uploads")
 BATCH_EXPORTS_DIR_REL = Path("runs/ui_sessions/exports")
+SNAPSHOTS_DIR_REL = Path("runs/ui_sessions/snapshots")
 MAX_PROJECT_HISTORY = 400
 MAX_MEMORY_NOTES_CHARS = 8000
 STEP_OPERATIONS = (
@@ -794,6 +795,23 @@ HTML = """
           </div>
           <label>Import JSON payload</label>
           <textarea id=\"project_import_json\" rows=\"6\" placeholder='{"project": {...}}'></textarea>
+        </div>
+
+        <div class=\"tool-box\">
+          <h3>Project Snapshots</h3>
+          <label>Snapshot note (optional)</label>
+          <input id=\"snapshot_note\" placeholder=\"例如：before major prompt changes\" />
+          <div class=\"btn-row\">
+            <button type=\"button\" onclick=\"createProjectSnapshot()\">Create Snapshot</button>
+            <button type=\"button\" onclick=\"loadProjectSnapshots()\">Load Snapshots</button>
+          </div>
+          <label>Restore snapshot_id</label>
+          <input id=\"snapshot_restore_id\" placeholder=\"snapshot_id\" />
+          <label><input id=\"snapshot_auto_before_restore\" type=\"checkbox\" checked /> Auto snapshot before restore</label>
+          <div class=\"btn-row\">
+            <button type=\"button\" onclick=\"restoreProjectSnapshot()\">Restore Snapshot</button>
+          </div>
+          <div id=\"snapshot_list_out\" class=\"project-batch-history-list\"><div class=\"muted\">(no snapshots loaded)</div></div>
         </div>
       </section>
 
@@ -3237,6 +3255,108 @@ HTML = """
         await cloneProjectInternal({openWindow: true, forceReadOnly: true, targetTitleSuffix: '[snapshot]'});
       }
 
+      function renderProjectSnapshots(payload) {
+        const wrap = document.getElementById('snapshot_list_out');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const snapshots = Array.isArray(payload && payload.snapshots) ? payload.snapshots : [];
+        if (snapshots.length < 1) {
+          const empty = document.createElement('div');
+          empty.className = 'muted';
+          empty.textContent = '(no snapshots)';
+          wrap.appendChild(empty);
+          return;
+        }
+        for (const row of snapshots) {
+          if (!row || typeof row !== 'object') continue;
+          const sid = String(row.snapshot_id || '').trim();
+          if (!sid) continue;
+          const item = document.createElement('div');
+          item.className = 'project-batch-history-item';
+          const createdAt = String(row.created_at || '-');
+          const note = String(row.note || '').trim();
+          item.textContent = `${createdAt} | snapshot_id=${sid}${note ? ` | note=${note}` : ''}`;
+          const useBtn = document.createElement('button');
+          useBtn.type = 'button';
+          useBtn.textContent = 'Use ID';
+          useBtn.onclick = () => {
+            const input = document.getElementById('snapshot_restore_id');
+            if (input) input.value = sid;
+            renderJsonOut({status: 'pass', snapshot: row});
+          };
+          const restoreBtn = document.createElement('button');
+          restoreBtn.type = 'button';
+          restoreBtn.textContent = 'Restore';
+          restoreBtn.onclick = () => {
+            void restoreProjectSnapshotById(sid);
+          };
+          item.appendChild(document.createElement('br'));
+          item.appendChild(useBtn);
+          item.appendChild(restoreBtn);
+          wrap.appendChild(item);
+        }
+      }
+
+      async function loadProjectSnapshots(opts) {
+        const silent = Boolean(opts && opts.silent);
+        const pid = selectedProjectId();
+        if (!pid || !isSafeProjectId(pid)) {
+          if (!silent) renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/snapshots?limit=60&offset=0`);
+        if (!silent) renderJsonOut(r.data);
+        if (r.data && String(r.data.status || '') === 'pass') {
+          renderProjectSnapshots(r.data);
+        }
+      }
+
+      async function createProjectSnapshot() {
+        const pid = selectedProjectId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        const note = String(document.getElementById('snapshot_note').value || '').trim();
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/snapshots`, {note: note});
+        renderJsonOut(r.data);
+        if (r.data && r.data.snapshot && r.data.snapshot.snapshot_id) {
+          document.getElementById('snapshot_restore_id').value = String(r.data.snapshot.snapshot_id);
+        }
+        await loadProjectSnapshots({silent: true});
+      }
+
+      async function restoreProjectSnapshotById(snapshotId) {
+        const input = document.getElementById('snapshot_restore_id');
+        if (input) input.value = String(snapshotId || '').trim();
+        await restoreProjectSnapshot();
+      }
+
+      async function restoreProjectSnapshot() {
+        const pid = selectedProjectId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        const sid = String(document.getElementById('snapshot_restore_id').value || '').trim();
+        if (!sid) {
+          renderJsonOut({status: 'fail', error: 'missing snapshot_id'});
+          return;
+        }
+        const autoBefore = Boolean(document.getElementById('snapshot_auto_before_restore').checked);
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/snapshots/${encodeURIComponent(sid)}/restore`, {
+          auto_snapshot_before: autoBefore,
+        });
+        renderJsonOut(r.data);
+        if (r.data && r.data.project) {
+          state.project = r.data.project;
+          applyProjectStateToUi(r.data.project);
+        }
+        await loadHistory();
+        await loadProjectSnapshots({silent: true});
+        await refreshProjects();
+      }
+
       async function exportProject() {
         const pid = selectedProjectId();
         const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/export`);
@@ -3287,6 +3407,7 @@ HTML = """
         renderChat(messages);
         restoreMessageDraft(pid);
         renderPromptHistory(pid);
+        await loadProjectSnapshots({silent: true});
         await loadBatchHistory();
         renderFailedReplayQueue(state.failedReplayQueue);
         return r;
@@ -3688,6 +3809,7 @@ HTML = """
           await saveProject();
         }
         renderPromptHistory(currentProjectKey());
+        await loadProjectSnapshots({silent: true});
         await loadRunRuntime();
         renderFailedReplayQueue(state.failedReplayQueue);
         refreshWorkspaceHud();
@@ -4805,6 +4927,10 @@ def _is_safe_export_id(export_id: str) -> bool:
     return True
 
 
+def _is_safe_snapshot_id(snapshot_id: str) -> bool:
+    return _is_safe_export_id(snapshot_id)
+
+
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -4823,6 +4949,12 @@ def _ui_uploads_root(project_id: str) -> Path:
 
 def _ui_batch_exports_root(project_id: str) -> Path:
     p = (REPO_ROOT / BATCH_EXPORTS_DIR_REL / project_id).resolve()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _ui_snapshots_root(project_id: str) -> Path:
+    p = (REPO_ROOT / SNAPSHOTS_DIR_REL / project_id).resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -5875,6 +6007,131 @@ def _clone_project_state(
     return clone
 
 
+def _project_snapshot_entry_path(project_id: str, snapshot_id: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(snapshot_id or "").strip()).strip("._") or "snapshot"
+    return (_ui_snapshots_root(project_id) / f"{safe}.json").resolve()
+
+
+def _create_project_snapshot_id() -> str:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tail = str(uuid.uuid4()).replace("-", "")[:8]
+    return f"{stamp}_{tail}"
+
+
+def _snapshot_meta_from_payload(payload: Dict[str, Any], *, path: Path) -> Dict[str, Any]:
+    created_at = str(payload.get("created_at") or "")
+    created_epoch = 0.0
+    if created_at:
+        try:
+            created_epoch = datetime.fromisoformat(created_at).timestamp()
+        except Exception:
+            created_epoch = 0.0
+    if created_epoch <= 0.0:
+        try:
+            created_epoch = float(path.stat().st_mtime)
+        except Exception:
+            created_epoch = 0.0
+    project_payload = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+    project_summary = _project_summary(project_payload) if isinstance(project_payload, dict) else {}
+    return {
+        "snapshot_id": str(payload.get("snapshot_id") or path.stem),
+        "project_id": str(payload.get("project_id") or ""),
+        "created_at": created_at,
+        "created_epoch": created_epoch,
+        "note": str(payload.get("note") or ""),
+        "source_project_updated_at": str(payload.get("source_project_updated_at") or ""),
+        "path": str(path),
+        "project_summary": project_summary,
+    }
+
+
+def _create_project_snapshot(project: Dict[str, Any], *, note: str = "") -> Dict[str, Any]:
+    project_id = str(project.get("project_id") or "").strip()
+    if not _is_safe_project_id(project_id):
+        raise ValueError("invalid project_id")
+    snapshot_id = _create_project_snapshot_id()
+    note_text = str(note or "").strip()
+    if len(note_text) > 500:
+        note_text = note_text[:500]
+    payload = {
+        "schema_version": "1.0.0",
+        "snapshot_id": snapshot_id,
+        "project_id": project_id,
+        "created_at": _now_iso(),
+        "note": note_text,
+        "source_project_updated_at": str(project.get("updated_at") or ""),
+        "project": json.loads(json.dumps(project, ensure_ascii=False)),
+    }
+    path = _project_snapshot_entry_path(project_id, snapshot_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return _snapshot_meta_from_payload(payload, path=path)
+
+
+def _load_project_snapshot(project_id: str, snapshot_id: str) -> Optional[Dict[str, Any]]:
+    if not _is_safe_project_id(project_id) or not _is_safe_snapshot_id(snapshot_id):
+        return None
+    path = _project_snapshot_entry_path(project_id, snapshot_id)
+    payload = _load_json_if_exists(path)
+    if not isinstance(payload, dict):
+        return None
+    payload["snapshot_id"] = str(payload.get("snapshot_id") or snapshot_id)
+    payload["project_id"] = str(payload.get("project_id") or project_id)
+    payload["path"] = str(path)
+    return payload
+
+
+def _list_project_snapshots(project_id: str, *, limit: int = 30, offset: int = 0) -> Dict[str, Any]:
+    root = _ui_snapshots_root(project_id)
+    rows: List[Dict[str, Any]] = []
+    for path in root.glob("*.json"):
+        payload = _load_json_if_exists(path)
+        if not isinstance(payload, dict):
+            continue
+        meta = _snapshot_meta_from_payload(payload, path=path)
+        if meta.get("project_id") and str(meta.get("project_id")) != project_id:
+            continue
+        rows.append(meta)
+    rows.sort(key=lambda item: float(item.get("created_epoch") or 0.0), reverse=True)
+    start = max(0, int(offset))
+    end = start + max(1, int(limit))
+    sliced = rows[start:end]
+    return {
+        "project_id": project_id,
+        "root": str(root),
+        "total_count": len(rows),
+        "limit": max(1, int(limit)),
+        "offset": start,
+        "has_more": end < len(rows),
+        "snapshots": sliced,
+    }
+
+
+def _restore_project_from_snapshot(
+    *,
+    current_project_id: str,
+    snapshot_payload: Dict[str, Any],
+    restore_note: str = "",
+) -> Dict[str, Any]:
+    snapshot_project = snapshot_payload.get("project") if isinstance(snapshot_payload.get("project"), dict) else {}
+    restored = _normalize_import_project(snapshot_project, project_id=current_project_id)
+    restored["project_id"] = current_project_id
+    restored["updated_at"] = _now_iso()
+    note = str(restore_note or "").strip()
+    sid = str(snapshot_payload.get("snapshot_id") or "")
+    msg = f"Project restored from snapshot {sid}."
+    if note:
+        msg += f"\nrestore_note={note[:300]}"
+    _append_message(
+        restored,
+        role="system",
+        kind="snapshot_restore",
+        content=msg,
+        meta={"snapshot_id": sid, "restore_note": note},
+    )
+    return restored
+
+
 def _append_message(
     project: Dict[str, Any],
     *,
@@ -6707,6 +6964,87 @@ def api_project_import():
     normalized["project_id"] = target_id
     saved = _save_project_state(normalized)
     return jsonify({"status": "pass", "project": _project_summary(saved), "messages": _recent_messages(saved)})
+
+
+@app.get("/api/projects/<project_id>/snapshots")
+def api_project_snapshots(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    limit = _as_int(request.args.get("limit"), 30)
+    limit = max(1, min(limit, 200))
+    offset = _as_int(request.args.get("offset"), 0)
+    offset = max(0, offset)
+    listed = _list_project_snapshots(pid, limit=limit, offset=offset)
+    return jsonify({"status": "pass", **listed})
+
+
+@app.post("/api/projects/<project_id>/snapshots")
+def api_project_snapshot_create(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    body = request.get_json(silent=True) or {}
+    note = str(body.get("note") or "").strip()
+    snapshot = _create_project_snapshot(project, note=note)
+    return jsonify({"status": "pass", "project_id": pid, "snapshot": snapshot})
+
+
+@app.post("/api/projects/<project_id>/snapshots/<snapshot_id>/restore")
+def api_project_snapshot_restore(project_id: str, snapshot_id: str):
+    pid = str(project_id or "").strip()
+    sid = str(snapshot_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    if not sid:
+        return jsonify({"status": "fail", "error": "missing snapshot_id"}), 400
+    if not _is_safe_snapshot_id(sid):
+        return jsonify({"status": "fail", "error": "invalid snapshot_id"}), 400
+
+    current = _load_project_state(pid)
+    if not isinstance(current, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    if _project_is_read_only(current):
+        return jsonify({"status": "fail", "error": "project_read_only", "project_id": pid}), 409
+
+    payload = _load_project_snapshot(pid, sid)
+    if not isinstance(payload, dict):
+        return jsonify({"status": "missing", "error": "snapshot_not_found", "project_id": pid, "snapshot_id": sid}), 404
+    payload_pid = str(payload.get("project_id") or "").strip()
+    if payload_pid and payload_pid != pid:
+        return jsonify({"status": "fail", "error": "snapshot_project_mismatch", "project_id": pid, "snapshot_project_id": payload_pid}), 400
+
+    body = request.get_json(silent=True) or {}
+    restore_note = str(body.get("restore_note") or "").strip()
+    auto_snapshot_before = bool(body.get("auto_snapshot_before", True))
+    before_snapshot: Optional[Dict[str, Any]] = None
+    if auto_snapshot_before:
+        before_snapshot = _create_project_snapshot(current, note=f"auto_before_restore:{sid}")
+
+    restored = _restore_project_from_snapshot(current_project_id=pid, snapshot_payload=payload, restore_note=restore_note)
+    saved = _save_project_state(restored)
+    return jsonify(
+        {
+            "status": "pass",
+            "project_id": pid,
+            "restored_from_snapshot_id": sid,
+            "auto_snapshot_before": before_snapshot,
+            "project": _project_summary(saved),
+            "messages": _recent_messages(saved),
+        }
+    )
 
 
 @app.post("/api/projects/<project_id>/clone")

@@ -7481,6 +7481,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("copyWorkspaceLink()", html)
         self.assertIn("readProjectIdFromUrl()", html)
         self.assertIn("syncWorkspaceUrl(", html)
+        self.assertIn("const hist = await loadHistory();", html)
+        self.assertIn("if (!ok) {", html)
+        self.assertIn("await saveProject();", html)
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()

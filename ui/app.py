@@ -1368,7 +1368,12 @@ HTML = """
         const pid = String(picker.value || '').trim();
         if (!pid) return;
         document.getElementById('project_id').value = pid;
-        await saveProject();
+        syncWorkspaceUrl(pid, {push: true});
+        const hist = await loadHistory();
+        const ok = hist && hist.status === 200 && hist.data && String(hist.data.status || '') === 'pass';
+        if (!ok) {
+          await saveProject();
+        }
       }
 
       async function saveProject() {
@@ -1439,6 +1444,7 @@ HTML = """
         renderChat(messages);
         restoreMessageDraft(pid);
         renderPromptHistory(pid);
+        return r;
       }
 
       async function sendChat(newTask) {
@@ -1773,7 +1779,11 @@ HTML = """
           document.getElementById('project_id').value = urlProjectId;
         }
         await refreshProjects();
-        await saveProject();
+        const hist = await loadHistory();
+        const ok = hist && hist.status === 200 && hist.data && String(hist.data.status || '') === 'pass';
+        if (!ok) {
+          await saveProject();
+        }
         renderPromptHistory(currentProjectKey());
         await loadRunRuntime();
         refreshWorkspaceHud();

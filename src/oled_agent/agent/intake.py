@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +14,45 @@ from oled_agent.agent.task_v2 import (
     infer_task_draft,
     run_duckduckgo_search,
 )
+
+
+TASK_STATE_SCHEMA_VERSION = "1.0.0"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _write_pause_task_state(
+    *,
+    out_dir: Path,
+    task_id: str,
+    current_state: str,
+    status: str,
+    note: str = "",
+) -> Path:
+    now = _now_iso()
+    task_state = {
+        "schema_version": TASK_STATE_SCHEMA_VERSION,
+        "generated_at": now,
+        "task_id": task_id,
+        "status": status,
+        "current_state": current_state,
+        "history": [
+            {"state": "INIT", "status": "completed", "at": now},
+            {"state": "REQUIREMENT_COLLECTION", "status": "completed", "at": now},
+            {"state": "VALIDATION", "status": "completed", "at": now},
+            {"state": current_state, "status": "failed" if status == "failed" else "completed", "at": now, "note": note},
+        ],
+    }
+    out_path = out_dir / "task_state.json"
+    _write_json(out_path, task_state)
+    return out_path
 
 
 def run_intake(
@@ -43,6 +84,8 @@ def run_intake(
     draft["missing_fields"] = missing
     draft["questions"] = questions
     draft["status"] = "need_user_input" if missing else "draft"
+    current_state = "NEED_INFO" if missing else "WAITING_APPROVAL"
+    task_state_status = "failed" if missing else "success"
 
     web_payload = {
         "task_id": task_id,
@@ -53,12 +96,21 @@ def run_intake(
     }
     dump_json(out_dir / "web_evidence.json", web_payload)
     dump_json(out_dir / "task.draft.json", draft)
+    task_state_path = _write_pause_task_state(
+        out_dir=out_dir,
+        task_id=task_id,
+        current_state=current_state,
+        status=task_state_status,
+        note="intake paused before execution",
+    )
 
     return {
         "task_id": task_id,
         "status": draft.get("status"),
         "task_draft_path": str(out_dir / "task.draft.json"),
         "web_evidence_path": str(out_dir / "web_evidence.json"),
+        "task_state_path": str(task_state_path),
+        "current_state": current_state,
         "missing_fields": missing,
         "questions": questions,
     }
@@ -75,17 +127,32 @@ def approve_task(
     validate_task_v2_payload(task_payload, workspace_root)
 
     ok, missing = ensure_task_ready_for_approval(task_payload)
-    if not ok:
-        return {
-            "task_id": str(task_payload.get("task_id") or ""),
-            "status": "need_user_input",
-            "missing_fields": missing,
-            "questions": task_payload.get("questions") if isinstance(task_payload.get("questions"), list) else [],
-        }
-
     task_id = str(task_payload.get("task_id") or "task_default")
     out_dir = (workspace_root / "runs" / "agent" / task_id).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    if not ok:
+        draft_out = dict(task_payload)
+        draft_out["status"] = "need_user_input"
+        draft_out["missing_fields"] = missing
+        if not isinstance(draft_out.get("questions"), list):
+            draft_out["questions"] = []
+        dump_json(out_dir / "task.draft.json", draft_out)
+        task_state_path = _write_pause_task_state(
+            out_dir=out_dir,
+            task_id=task_id,
+            current_state="NEED_INFO",
+            status="failed",
+            note="approval blocked by missing required fields",
+        )
+        return {
+            "task_id": task_id,
+            "status": "need_user_input",
+            "task_draft_path": str(out_dir / "task.draft.json"),
+            "task_state_path": str(task_state_path),
+            "current_state": "NEED_INFO",
+            "missing_fields": missing,
+            "questions": task_payload.get("questions") if isinstance(task_payload.get("questions"), list) else [],
+        }
 
     from oled_agent.agent.task_v2 import task_v2_to_request_payload
 
@@ -103,6 +170,13 @@ def approve_task(
     dump_json(out_dir / "task.json", task_out)
     dump_json(out_dir / "request_from_task.json", request_payload)
     dump_json(out_dir / "plan.json", plan)
+    task_state_path = _write_pause_task_state(
+        out_dir=out_dir,
+        task_id=task_id,
+        current_state="PLAN_GENERATION",
+        status="success",
+        note="plan generated and ready for execution",
+    )
 
     plan_md_lines = [
         "# Plan",
@@ -126,4 +200,6 @@ def approve_task(
         "request_path": str(out_dir / "request_from_task.json"),
         "plan_path": str(out_dir / "plan.json"),
         "plan_md_path": str(out_dir / "plan.md"),
+        "task_state_path": str(task_state_path),
+        "current_state": "PLAN_GENERATION",
     }

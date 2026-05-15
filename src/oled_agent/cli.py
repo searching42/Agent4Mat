@@ -14,7 +14,7 @@ from oled_agent.agent.request_contract import (
     validate_task_v2_payload,
 )
 from oled_agent.agent.step_runner import run_step, run_step_from_request_payload
-from oled_agent.agent.task_v2 import legacy_request_to_task_v2
+from oled_agent.agent.task_v2 import compute_missing_questions, legacy_request_to_task_v2, task_v2_to_request_payload
 from oled_agent.agent.session import (
     execute_request,
     execute_request_from_payload,
@@ -176,6 +176,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail if fallback/local adapters are used",
     )
+    resume_p.add_argument("--candidate-data", default="", help="Override task candidate_data before resume")
+    resume_p.add_argument("--train-data", default="", help="Override task train_data before resume")
+    resume_p.add_argument("--prediction-model", default="", help="Override task prediction_model before resume")
+    resume_p.add_argument("--property", default="", help="Override task property before resume")
+    resume_p.add_argument("--range", default="", help="Override task range before resume")
+    resume_p.add_argument("--n-structures", type=int, default=0, help="Override task n_structures before resume")
+    resume_p.add_argument("--predictor-id", default="", help="Override model_preferences.predictor_id before resume")
+    resume_p.add_argument("--generator-id", default="", help="Override model_preferences.generator_id before resume")
 
     return p.parse_args()
 
@@ -268,6 +276,74 @@ def _assert_no_fallback(result_payload: dict) -> None:
                 f"fallback_code={fallback_code}"
             )
             raise SystemExit(3)
+
+
+def _dump_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _has_resume_overrides(args: argparse.Namespace) -> bool:
+    if str(getattr(args, "candidate_data", "") or "").strip():
+        return True
+    if str(getattr(args, "train_data", "") or "").strip():
+        return True
+    if str(getattr(args, "prediction_model", "") or "").strip():
+        return True
+    if str(getattr(args, "property", "") or "").strip():
+        return True
+    if str(getattr(args, "range", "") or "").strip():
+        return True
+    if int(getattr(args, "n_structures", 0) or 0) > 0:
+        return True
+    if str(getattr(args, "predictor_id", "") or "").strip():
+        return True
+    if str(getattr(args, "generator_id", "") or "").strip():
+        return True
+    return False
+
+
+def _apply_resume_overrides(task_payload: dict, args: argparse.Namespace) -> dict:
+    out = dict(task_payload or {})
+    cand = str(getattr(args, "candidate_data", "") or "").strip()
+    if cand:
+        out["candidate_data"] = cand
+    train = str(getattr(args, "train_data", "") or "").strip()
+    if train:
+        out["train_data"] = train
+    pred_model = str(getattr(args, "prediction_model", "") or "").strip()
+    if pred_model:
+        out["prediction_model"] = pred_model
+    prop = str(getattr(args, "property", "") or "").strip()
+    if prop:
+        out["property"] = prop
+    rng = str(getattr(args, "range", "") or "").strip()
+    if rng:
+        out["range"] = rng
+    n_structures = int(getattr(args, "n_structures", 0) or 0)
+    if n_structures > 0:
+        out["n_structures"] = n_structures
+
+    prefs = out.get("model_preferences")
+    if not isinstance(prefs, dict):
+        prefs = {}
+    predictor_id = str(getattr(args, "predictor_id", "") or "").strip()
+    generator_id = str(getattr(args, "generator_id", "") or "").strip()
+    if predictor_id:
+        prefs["predictor_id"] = predictor_id
+    if generator_id:
+        prefs["generator_id"] = generator_id
+    if pred_model and not predictor_id:
+        prefs["predictor_id"] = pred_model
+    if prefs:
+        out["model_preferences"] = prefs
+
+    missing, questions = compute_missing_questions(out)
+    out["missing_fields"] = missing
+    out["questions"] = questions
+    if str(out.get("status") or "").strip() != "approved":
+        out["status"] = "need_user_input" if missing else "draft"
+    return out
 
 
 def main() -> None:
@@ -504,8 +580,28 @@ def main() -> None:
             raise SystemExit(2)
         task_json = run_dir / "task.json"
         req_json = run_dir / "request_from_task.json"
+        draft_json = run_dir / "task.draft.json"
+
+        def _execute_resume(req_payload: dict) -> None:
+            result_exec = execute_request_from_payload(
+                workspace_root=workspace_root,
+                request_payload=req_payload,
+                planner_provider=args.planner_provider,
+                catalog_path=catalog,
+                resume_existing=True,
+            )
+            print(json.dumps(result_exec, ensure_ascii=False, indent=2))
+            if bool(getattr(args, "require_real_adapters", False)):
+                _assert_no_fallback(result_exec)
+            if result_exec.get("status") != "success":
+                raise SystemExit(1)
+            return
+
         if task_json.exists():
             task = _resolve_and_load_json(str(task_json))
+            if _has_resume_overrides(args):
+                task = _apply_resume_overrides(task, args)
+                _dump_json(task_json, task)
             result = approve_task(
                 workspace_root=workspace_root,
                 task_payload=task,
@@ -516,41 +612,43 @@ def main() -> None:
             if result.get("status") != "approved":
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 raise SystemExit(2)
+            if not req_json.exists():
+                _dump_json(req_json, task_v2_to_request_payload(task))
             req_payload = _resolve_and_load_json(str(req_json))
-            result_exec = execute_request_from_payload(
+            _execute_resume(req_payload)
+            return
+
+        if draft_json.exists():
+            task = _resolve_and_load_json(str(draft_json))
+            if _has_resume_overrides(args):
+                task = _apply_resume_overrides(task, args)
+                _dump_json(draft_json, task)
+            result = approve_task(
                 workspace_root=workspace_root,
-                request_payload=req_payload,
+                task_payload=task,
                 planner_provider=args.planner_provider,
                 catalog_path=catalog,
-                resume_existing=True,
+                plan_fn=plan_request_from_payload,
             )
-            print(json.dumps(result_exec, ensure_ascii=False, indent=2))
-            if bool(getattr(args, "require_real_adapters", False)):
-                _assert_no_fallback(result_exec)
-            if result_exec.get("status") != "success":
-                raise SystemExit(1)
+            if result.get("status") != "approved":
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                raise SystemExit(2)
+            if not req_json.exists():
+                req_json = run_dir / "request_from_task.json"
+            req_payload = _resolve_and_load_json(str(req_json))
+            _execute_resume(req_payload)
             return
+
         # fallback: resume from request.json of legacy agent-run-json
         legacy_req = run_dir / "request.json"
         if legacy_req.exists():
             req_payload = _resolve_and_load_json(str(legacy_req))
             task_v2 = legacy_request_to_task_v2(req_payload)
             out_task = run_dir / "task.json"
-            out_task.write_text(json.dumps(task_v2, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            result_exec = execute_request_from_payload(
-                workspace_root=workspace_root,
-                request_payload=req_payload,
-                planner_provider=args.planner_provider,
-                catalog_path=catalog,
-                resume_existing=True,
-            )
-            print(json.dumps(result_exec, ensure_ascii=False, indent=2))
-            if bool(getattr(args, "require_real_adapters", False)):
-                _assert_no_fallback(result_exec)
-            if result_exec.get("status") != "success":
-                raise SystemExit(1)
+            _dump_json(out_task, task_v2)
+            _execute_resume(req_payload)
             return
-        print(f"[FAIL] no resumable task.json/request.json found under: {run_dir}")
+        print(f"[FAIL] no resumable task.json/task.draft.json/request.json found under: {run_dir}")
         raise SystemExit(2)
 
 

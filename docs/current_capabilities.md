@@ -48,6 +48,13 @@ Implemented stages:
   - validates `request.json` against schema
   - executes from structured request payload
   - writes `request.json` artifact under run directory
+- `agent-intake` / `agent-approve`:
+  - persist pausable task-state artifacts for interactive stages
+  - `task_state.current_state` now explicitly marks `NEED_INFO` or `WAITING_APPROVAL` during intake/approval pauses
+- `agent-resume`:
+  - supports resume from `task.json`, `task.draft.json`, or legacy `request.json`
+  - can patch missing intake fields at resume time (`--candidate-data`, `--train-data`, `--prediction-model`, `--property`, `--range`, `--n-structures`, `--predictor-id`, `--generator-id`)
+  - auto-rebuilds missing `request_from_task.json` when resuming from task payload
 - decision summary validation script:
   - `scripts/validate_decision_summary.py` now reuses `validate_decision_summary_payload()`
   - single source of truth is `schemas/decision_summary.schema.json`

@@ -2215,6 +2215,127 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("questions", payload)
             self.assertTrue(Path(payload["task_draft_path"]).exists())
             self.assertTrue(Path(payload["web_evidence_path"]).exists())
+            self.assertTrue(Path(payload["task_state_path"]).exists())
+            self.assertEqual(payload.get("current_state"), "NEED_INFO")
+            task_state = json.loads(Path(payload["task_state_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(task_state.get("current_state"), "NEED_INFO")
+            self.assertEqual(task_state.get("status"), "failed")
+
+    def test_agent_resume_from_draft_without_overrides_returns_need_user_input(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_id = "task_resume_draft_need_info"
+            run_dir = td_path / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            draft = {
+                "version": "2.0",
+                "task_id": task_id,
+                "request_text": "设计470nm附近且高PLQY分子",
+                "execution_mode": "full_pipeline",
+                "operation": "full_pipeline",
+                "property": "plqy",
+                "range": "458.0-482.0nm",
+                "n_structures": 20,
+                "constraints": {"mw_min": 150.0, "mw_max": 700.0, "domain_threshold": 0.2, "banned_alerts": []},
+                "train_data": None,
+                "candidate_data": None,
+                "prediction_model": "unimol_lambda_plqy_v1",
+                "model_preferences": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                "generation_input": {},
+                "provenance": {},
+                "status": "need_user_input",
+                "missing_fields": ["candidate_data"],
+                "questions": ["候选数据来源是什么？本地CSV路径还是数据库关键词？"],
+                "compatibility_warnings": [],
+            }
+            (run_dir / "task.draft.json").write_text(json.dumps(draft, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-resume",
+                    "--workspace-root",
+                    str(td_path),
+                    "--task-id",
+                    task_id,
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 2, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "need_user_input")
+            missing = payload.get("missing_fields") if isinstance(payload.get("missing_fields"), list) else []
+            self.assertIn("candidate_data", missing)
+            self.assertEqual(payload.get("current_state"), "NEED_INFO")
+            self.assertTrue(Path(payload["task_state_path"]).exists())
+
+    def test_agent_resume_from_draft_with_candidate_data_override_executes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_id = "task_resume_draft_override"
+            run_dir = td_path / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            candidate_csv = td_path / "candidates.csv"
+            candidate_csv.write_text("candidate_id,SMILES\nc1,c1ccccc1\n", encoding="utf-8")
+            draft = {
+                "version": "2.0",
+                "task_id": task_id,
+                "request_text": "设计470nm附近且高PLQY分子",
+                "execution_mode": "full_pipeline",
+                "operation": "full_pipeline",
+                "property": "plqy",
+                "range": "458.0-482.0nm",
+                "n_structures": 20,
+                "constraints": {"mw_min": 150.0, "mw_max": 700.0, "domain_threshold": 0.2, "banned_alerts": []},
+                "train_data": None,
+                "candidate_data": None,
+                "prediction_model": "unimol_lambda_plqy_v1",
+                "model_preferences": {"predictor_id": "unimol_lambda_plqy_v1", "generator_id": "reinvent4_lambda_em_v2"},
+                "generation_input": {},
+                "provenance": {},
+                "status": "need_user_input",
+                "missing_fields": ["candidate_data"],
+                "questions": ["候选数据来源是什么？本地CSV路径还是数据库关键词？"],
+                "compatibility_warnings": [],
+            }
+            (run_dir / "task.draft.json").write_text(json.dumps(draft, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-resume",
+                    "--workspace-root",
+                    str(td_path),
+                    "--task-id",
+                    task_id,
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                    "--candidate-data",
+                    str(candidate_csv),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "success")
+            approved_task = json.loads((run_dir / "task.json").read_text(encoding="utf-8"))
+            self.assertEqual(approved_task.get("candidate_data"), str(candidate_csv))
+            self.assertTrue((run_dir / "request_from_task.json").exists())
+            self.assertTrue((run_dir / "execution.json").exists())
 
     def test_agent_resume_skips_all_steps_when_task_already_successful(self) -> None:
         with tempfile.TemporaryDirectory() as td:

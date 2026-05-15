@@ -44,8 +44,11 @@ Open: `http://127.0.0.1:8787`
   - supports batch history panel (`Load Batch History`) with latest export summary
   - batch history supports filter by action/status and paging (`limit/offset`, prev/next)
   - batch history list items support one-click `Use ID` to fill `batch_export_id`
+  - batch history list items support one-click `Use As Compare` to fill `batch_export_compare_id`
   - supports `Replay Latest Batch` to rerun latest exported batch action (`batch_summary` / `batch_validate` / `batch_retry_failed`)
   - supports export-id actions: `View Export By ID`, `Replay Export By ID`, `Delete Export By ID`
+  - supports export-id compare (`Compare Export IDs`) with JSON path-level diff summary
+  - supports export-id download (`Download Export JSON` / `Download Export CSV`)
   - session card provides quick `Summary` and `Validate` actions for current task
   - runtime health now includes `success_ratio` and `recent_duration_ms` for smarter priority sorting
   - session file: `runs/ui_sessions/projects/<project_id>.json`
@@ -87,8 +90,10 @@ Open: `http://127.0.0.1:8787`
   - `POST /api/projects/<project_id>/upload-ref`
   - `POST /api/projects/<project_id>/batch-export`
   - `GET /api/projects/<project_id>/batch-exports` (`limit`, `offset`, `action`, `status`)
+  - `GET /api/projects/<project_id>/batch-exports/compare` (`primary_export_id`, `other_export_id`)
   - `POST /api/projects/<project_id>/batch-exports/replay-latest`
   - `GET /api/projects/<project_id>/batch-exports/<export_id>`
+  - `GET /api/projects/<project_id>/batch-exports/<export_id>/download` (`format=json|csv`)
   - `POST /api/projects/<project_id>/batch-exports/<export_id>/replay`
   - `DELETE /api/projects/<project_id>/batch-exports/<export_id>`
   - `POST /api/chat/send`

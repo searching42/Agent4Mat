@@ -7528,7 +7528,12 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("viewBatchExportById()", html)
         self.assertIn("replayBatchExportById()", html)
         self.assertIn("deleteBatchExportById()", html)
+        self.assertIn("compareBatchExportsById()", html)
+        self.assertIn("downloadBatchExportById('json')", html)
+        self.assertIn("downloadBatchExportById('csv')", html)
+        self.assertIn("readBatchCompareExportId()", html)
         self.assertIn("batch_export_id", html)
+        self.assertIn("batch_export_compare_id", html)
         self.assertIn("batch_history_action_filter", html)
         self.assertIn("batch_history_status_filter", html)
         self.assertIn("batch_history_page_size", html)
@@ -7568,9 +7573,11 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("batch_export", html)
         self.assertIn("/batch-export", html)
         self.assertIn("/batch-exports", html)
+        self.assertIn("/batch-exports/compare", html)
         self.assertIn("/batch-exports/replay-latest", html)
         self.assertIn("?${qs.toString()}", html)
         self.assertIn("/batch-exports/${encodeURIComponent(eid)}", html)
+        self.assertIn("/batch-exports/${encodeURIComponent(eid)}/download", html)
         self.assertIn("/batch-exports/${encodeURIComponent(eid)}/replay", html)
         self.assertIn("Summary", html)
         self.assertIn("showProjectSummary(", html)
@@ -7763,6 +7770,44 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertGreaterEqual(len(exports), 1)
                 export_id = str(exports[0].get("export_id") or "")
                 self.assertTrue(export_id)
+                other_export_id = str(exports[1].get("export_id") or "") if len(exports) > 1 else ""
+                self.assertTrue(other_export_id)
+                self.assertNotEqual(export_id, other_export_id)
+
+                compare_resp = client.get(
+                    f"/api/projects/ui_proj_batch/batch-exports/compare?primary_export_id={export_id}&other_export_id={other_export_id}"
+                )
+                self.assertEqual(compare_resp.status_code, 200)
+                compare_payload = compare_resp.get_json()
+                self.assertEqual(compare_payload.get("status"), "pass")
+                self.assertEqual(compare_payload.get("primary_export_id"), export_id)
+                self.assertEqual(compare_payload.get("other_export_id"), other_export_id)
+                self.assertIn("diff", compare_payload)
+                compare_lines = compare_payload.get("compare_lines") if isinstance(compare_payload.get("compare_lines"), list) else []
+                self.assertGreaterEqual(len(compare_lines), 1)
+
+                compare_same_resp = client.get(
+                    f"/api/projects/ui_proj_batch/batch-exports/compare?primary_export_id={export_id}&other_export_id={export_id}"
+                )
+                self.assertEqual(compare_same_resp.status_code, 400)
+
+                download_json_resp = client.get(f"/api/projects/ui_proj_batch/batch-exports/{export_id}/download?format=json")
+                self.assertEqual(download_json_resp.status_code, 200)
+                self.assertIn("attachment;", str(download_json_resp.headers.get("Content-Disposition") or ""))
+                self.assertIn("application/json", str(download_json_resp.content_type or ""))
+                downloaded_payload = json.loads(download_json_resp.get_data(as_text=True))
+                self.assertEqual(str(downloaded_payload.get("export_id") or ""), export_id)
+
+                download_csv_resp = client.get(f"/api/projects/ui_proj_batch/batch-exports/{export_id}/download?format=csv")
+                self.assertEqual(download_csv_resp.status_code, 200)
+                self.assertIn("attachment;", str(download_csv_resp.headers.get("Content-Disposition") or ""))
+                self.assertIn("text/csv", str(download_csv_resp.content_type or ""))
+                csv_body = download_csv_resp.get_data(as_text=True)
+                self.assertIn("section,index,export_id,project_id,action,status", csv_body)
+                self.assertIn(export_id, csv_body)
+
+                invalid_format_resp = client.get(f"/api/projects/ui_proj_batch/batch-exports/{export_id}/download?format=txt")
+                self.assertEqual(invalid_format_resp.status_code, 400)
 
                 detail_resp = client.get(f"/api/projects/ui_proj_batch/batch-exports/{export_id}")
                 self.assertEqual(detail_resp.status_code, 200)

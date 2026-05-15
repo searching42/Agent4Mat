@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import csv
+import io
 import os
 import re
 import subprocess
@@ -10,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, Response, jsonify, render_template_string, request
 from oled_agent.agent.task_v2 import compute_missing_questions, legacy_request_to_task_v2
 from oled_agent.agent.request_contract import validate_decision_summary_payload, validate_task_state_payload
 
@@ -665,8 +667,12 @@ HTML = """
             <button type=\"button\" onclick=\"viewBatchExportById()\">View Export By ID</button>
             <button type=\"button\" onclick=\"replayBatchExportById()\">Replay Export By ID</button>
             <button type=\"button\" onclick=\"deleteBatchExportById()\">Delete Export By ID</button>
+            <button type=\"button\" onclick=\"compareBatchExportsById()\">Compare Export IDs</button>
+            <button type=\"button\" onclick=\"downloadBatchExportById('json')\">Download Export JSON</button>
+            <button type=\"button\" onclick=\"downloadBatchExportById('csv')\">Download Export CSV</button>
           </div>
           <input id=\"batch_export_id\" placeholder=\"batch export id\" />
+          <input id=\"batch_export_compare_id\" placeholder=\"compare export id\" />
           <div class=\"project-batch-history-controls\">
             <select id=\"batch_history_action_filter\" onchange=\"resetBatchHistoryOffsetAndReload()\">
               <option value=\"\">action: all</option>
@@ -2110,8 +2116,17 @@ HTML = """
             if (input) input.value = eid;
             renderJsonOut(item);
           };
+          const compareBtn = document.createElement('button');
+          compareBtn.type = 'button';
+          compareBtn.textContent = 'Use As Compare';
+          compareBtn.onclick = () => {
+            const input = document.getElementById('batch_export_compare_id');
+            if (input) input.value = eid;
+            renderJsonOut(item);
+          };
           row.appendChild(document.createElement('br'));
           row.appendChild(btn);
+          row.appendChild(compareBtn);
           wrap.appendChild(row);
         }
       }
@@ -2137,6 +2152,7 @@ HTML = """
         const head = document.getElementById('project_batch_history_summary');
         const box = document.getElementById('project_batch_history');
         const exportIdEle = document.getElementById('batch_export_id');
+        const compareIdEle = document.getElementById('batch_export_compare_id');
         if (head) {
           const page = Math.floor(c.offset / c.limit) + 1;
           const latest = items.length > 0 ? items[0] : null;
@@ -2155,6 +2171,13 @@ HTML = """
             exportIdEle.value = String(items[0].export_id || '');
           }
         }
+        if (compareIdEle && items.length > 1) {
+          const current = String(compareIdEle.value || '').trim();
+          const hit = items.some((x) => String((x && x.export_id) || '') === current);
+          if (!current || !hit) {
+            compareIdEle.value = String(items[1].export_id || items[0].export_id || '');
+          }
+        }
         return r;
       }
 
@@ -2162,6 +2185,46 @@ HTML = """
         const ele = document.getElementById('batch_export_id');
         const eid = String((ele && ele.value) || '').trim();
         return eid;
+      }
+
+      function readBatchCompareExportId() {
+        const ele = document.getElementById('batch_export_compare_id');
+        const eid = String((ele && ele.value) || '').trim();
+        return eid;
+      }
+
+      async function compareBatchExportsById() {
+        const pid = selectedProjectId();
+        const primary = readBatchExportId();
+        const other = readBatchCompareExportId();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!primary || !other) {
+          renderJsonOut({status: 'fail', error: 'missing export_id for compare'});
+          return;
+        }
+        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports/compare?primary_export_id=${encodeURIComponent(primary)}&other_export_id=${encodeURIComponent(other)}`);
+        renderJsonOut(r.data);
+      }
+
+      function downloadBatchExportById(format) {
+        const pid = selectedProjectId();
+        const eid = readBatchExportId();
+        const fmt = String(format || 'json').trim().toLowerCase();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!eid) {
+          renderJsonOut({status: 'fail', error: 'missing export_id'});
+          return;
+        }
+        const q = new URLSearchParams();
+        q.set('format', fmt === 'csv' ? 'csv' : 'json');
+        const url = `/api/projects/${encodeURIComponent(pid)}/batch-exports/${encodeURIComponent(eid)}/download?${q.toString()}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
       }
 
       async function replayLatestBatchAction() {
@@ -4343,6 +4406,127 @@ def _save_batch_export_entry(project_id: str, payload: Dict[str, Any]) -> Dict[s
     return entry
 
 
+def _batch_export_source_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source = payload.get("batch_result")
+    if isinstance(source, dict):
+        return source
+    return payload
+
+
+def _batch_export_summary(payload: Dict[str, Any], *, export_id: str, project_id: str) -> Dict[str, Any]:
+    source = _batch_export_source_payload(payload)
+    rows = source.get("rows") if isinstance(source.get("rows"), list) else []
+    results = source.get("results") if isinstance(source.get("results"), list) else []
+    retries = source.get("retries") if isinstance(source.get("retries"), list) else []
+    count_default = len(results) + len(retries)
+    if count_default < 1:
+        count_default = len(rows)
+    return {
+        "export_id": str(payload.get("export_id") or export_id),
+        "project_id": str(payload.get("project_id") or project_id),
+        "action": str(source.get("action") or payload.get("action") or ""),
+        "status": str(source.get("status") or payload.get("status") or ""),
+        "count": _as_int(source.get("count"), count_default),
+        "limit": _as_int(source.get("limit"), len(rows)),
+        "rows_count": len(rows),
+        "results_count": len(results),
+        "retries_count": len(retries),
+        "created_at": str(payload.get("created_at") or source.get("created_at") or ""),
+        "replayed_from_export_id": str(source.get("replayed_from_export_id") or payload.get("source_export_id") or ""),
+    }
+
+
+def _batch_export_compare_lines(primary: Dict[str, Any], other: Dict[str, Any], diff: Dict[str, Any]) -> List[str]:
+    p_eid = str(primary.get("export_id") or "")
+    o_eid = str(other.get("export_id") or "")
+    out = [
+        f"action {p_eid}={str(primary.get('action') or '')} vs {o_eid}={str(other.get('action') or '')}",
+        f"status {p_eid}={str(primary.get('status') or '')} vs {o_eid}={str(other.get('status') or '')}",
+        f"count {p_eid}={int(primary.get('count') or 0)} vs {o_eid}={int(other.get('count') or 0)} delta={int(primary.get('count') or 0) - int(other.get('count') or 0)}",
+        f"rows {p_eid}={int(primary.get('rows_count') or 0)} vs {o_eid}={int(other.get('rows_count') or 0)} delta={int(primary.get('rows_count') or 0) - int(other.get('rows_count') or 0)}",
+        f"changed_paths={int(diff.get('changed_count') or 0)} only_primary={int(diff.get('only_in_primary_count') or 0)} only_other={int(diff.get('only_in_other_count') or 0)}",
+    ]
+    return out
+
+
+def _batch_export_download_filename(*, project_id: str, export_id: str, action: str, fmt: str) -> str:
+    safe_project = re.sub(r"[^A-Za-z0-9._-]+", "_", str(project_id or "")).strip("._") or "project"
+    safe_export = re.sub(r"[^A-Za-z0-9._-]+", "_", str(export_id or "")).strip("._") or "batch"
+    safe_action = re.sub(r"[^A-Za-z0-9._-]+", "_", str(action or "")).strip("._") or "batch_export"
+    ext = "csv" if str(fmt or "").lower() == "csv" else "json"
+    return f"{safe_project}_{safe_action}_{safe_export}.{ext}"
+
+
+def _batch_export_csv_text(payload: Dict[str, Any], *, export_id: str, project_id: str) -> str:
+    source = _batch_export_source_payload(payload)
+    action = str(source.get("action") or payload.get("action") or "")
+    status = str(source.get("status") or payload.get("status") or "")
+    created_at = str(payload.get("created_at") or source.get("created_at") or "")
+    rows = source.get("rows") if isinstance(source.get("rows"), list) else []
+    results = source.get("results") if isinstance(source.get("results"), list) else []
+    retries = source.get("retries") if isinstance(source.get("retries"), list) else []
+    flattened: List[Dict[str, Any]] = []
+    for section_name, items in (("rows", rows), ("results", results), ("retries", retries)):
+        for idx, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            flattened.append(
+                {
+                    "section": section_name,
+                    "index": idx,
+                    "export_id": str(payload.get("export_id") or export_id),
+                    "project_id": str(payload.get("project_id") or project_id),
+                    "action": action,
+                    "status": status,
+                    "task_id": str(item.get("task_id") or ""),
+                    "item_status": str(item.get("status") or ""),
+                    "http_status": str(item.get("http_status") or ""),
+                    "failed_tool_name": str(item.get("failed_tool_name") or ""),
+                    "created_at": created_at,
+                    "item_json": json.dumps(item, ensure_ascii=False),
+                }
+            )
+    if not flattened:
+        flattened.append(
+            {
+                "section": "meta",
+                "index": 1,
+                "export_id": str(payload.get("export_id") or export_id),
+                "project_id": str(payload.get("project_id") or project_id),
+                "action": action,
+                "status": status,
+                "task_id": "",
+                "item_status": "",
+                "http_status": "",
+                "failed_tool_name": "",
+                "created_at": created_at,
+                "item_json": json.dumps(_batch_export_summary(payload, export_id=export_id, project_id=project_id), ensure_ascii=False),
+            }
+        )
+    buf = io.StringIO()
+    writer = csv.DictWriter(
+        buf,
+        fieldnames=[
+            "section",
+            "index",
+            "export_id",
+            "project_id",
+            "action",
+            "status",
+            "task_id",
+            "item_status",
+            "http_status",
+            "failed_tool_name",
+            "created_at",
+            "item_json",
+        ],
+    )
+    writer.writeheader()
+    for row in flattened:
+        writer.writerow(row)
+    return buf.getvalue()
+
+
 def _extract_response_json_and_status(resp: Any) -> Tuple[int, Dict[str, Any]]:
     status = 200
     response_obj = resp
@@ -5334,6 +5518,57 @@ def api_project_batch_exports(project_id: str):
     )
 
 
+@app.get("/api/projects/<project_id>/batch-exports/compare")
+def api_project_batch_exports_compare(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    primary_export_id = str(request.args.get("primary_export_id") or "").strip()
+    other_export_id = str(request.args.get("other_export_id") or "").strip()
+    if not primary_export_id or not other_export_id:
+        return jsonify({"status": "fail", "error": "missing primary_export_id/other_export_id"}), 400
+    if not _is_safe_export_id(primary_export_id) or not _is_safe_export_id(other_export_id):
+        return jsonify({"status": "fail", "error": "invalid export_id"}), 400
+    if primary_export_id == other_export_id:
+        return jsonify({"status": "fail", "error": "other_export_id must differ from primary_export_id"}), 400
+    primary = _load_batch_export_entry(pid, primary_export_id)
+    other = _load_batch_export_entry(pid, other_export_id)
+    if not isinstance(primary, dict) or not isinstance(other, dict):
+        return (
+            jsonify(
+                {
+                    "status": "missing",
+                    "error": "batch_export_not_found",
+                    "project_id": pid,
+                    "primary_export_id": primary_export_id,
+                    "other_export_id": other_export_id,
+                    "primary_exists": isinstance(primary, dict),
+                    "other_exists": isinstance(other, dict),
+                }
+            ),
+            404,
+        )
+    primary_source = _batch_export_source_payload(primary)
+    other_source = _batch_export_source_payload(other)
+    diff = _artifact_diff_payload(primary_source, other_source)
+    primary_summary = _batch_export_summary(primary, export_id=primary_export_id, project_id=pid)
+    other_summary = _batch_export_summary(other, export_id=other_export_id, project_id=pid)
+    return jsonify(
+        {
+            "status": "pass",
+            "project_id": pid,
+            "primary_export_id": primary_export_id,
+            "other_export_id": other_export_id,
+            "primary": primary_summary,
+            "other": other_summary,
+            "diff": diff,
+            "compare_lines": _batch_export_compare_lines(primary_summary, other_summary, diff),
+        }
+    )
+
+
 @app.post("/api/projects/<project_id>/batch-exports/replay-latest")
 def api_project_batch_exports_replay_latest(project_id: str):
     pid = str(project_id or "").strip()
@@ -5385,6 +5620,40 @@ def api_project_batch_export_detail(project_id: str, export_id: str):
     if not isinstance(payload, dict):
         return jsonify({"status": "missing", "error": "batch_export_not_found", "project_id": pid, "export_id": eid}), 404
     return jsonify({"status": "pass", "project_id": pid, "export_id": eid, "batch_export": payload})
+
+
+@app.get("/api/projects/<project_id>/batch-exports/<export_id>/download")
+def api_project_batch_export_download(project_id: str, export_id: str):
+    pid = str(project_id or "").strip()
+    eid = str(export_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    if not _is_safe_export_id(eid):
+        return jsonify({"status": "fail", "error": "invalid export_id"}), 400
+    payload = _load_batch_export_entry(pid, eid)
+    if not isinstance(payload, dict):
+        return jsonify({"status": "missing", "error": "batch_export_not_found", "project_id": pid, "export_id": eid}), 404
+    fmt = str(request.args.get("format") or "json").strip().lower()
+    if fmt not in {"json", "csv"}:
+        return jsonify({"status": "fail", "error": "invalid format", "supported": ["json", "csv"]}), 400
+    source = _batch_export_source_payload(payload)
+    action = str(source.get("action") or payload.get("action") or "batch_export")
+    filename = _batch_export_download_filename(project_id=pid, export_id=eid, action=action, fmt=fmt)
+    if fmt == "csv":
+        csv_text = _batch_export_csv_text(payload, export_id=eid, project_id=pid)
+        return Response(
+            csv_text,
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    json_text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    return Response(
+        json_text,
+        mimetype="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/projects/<project_id>/batch-exports/<export_id>/replay")

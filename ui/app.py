@@ -183,6 +183,29 @@ HTML = """
         padding: 5px 8px;
         font-size: 0.71rem;
       }
+      .project-board-quick label {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        margin-top: 0;
+        font-size: 0.72rem;
+        color: #3f4d64;
+      }
+      .project-board-quick select {
+        margin-top: 0;
+        padding: 5px 7px;
+        font-size: 0.72rem;
+        width: auto;
+      }
+      .project-board-summary {
+        margin: 6px 0 8px 0;
+        padding: 6px 7px;
+        border: 1px solid #d8e1f1;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #334155;
+        font-size: 0.72rem;
+      }
       .project-session-list {
         display: grid;
         grid-template-columns: 1fr;
@@ -560,8 +583,17 @@ HTML = """
           <div class=\"project-board-quick\">
             <button type=\"button\" onclick=\"quickFilterFailedOnly()\">Failed Only</button>
             <button type=\"button\" onclick=\"quickSortPriority()\">Priority First</button>
+            <button type=\"button\" onclick=\"openTopPrioritySession()\">Open Top Priority</button>
             <button type=\"button\" onclick=\"clearSessionBoardControls()\">Reset</button>
+            <label><input id=\"session_auto_refresh\" type=\"checkbox\" onchange=\"onSessionAutoRefreshChanged()\" /> Auto Refresh</label>
+            <select id=\"session_refresh_seconds\" onchange=\"onSessionAutoRefreshChanged()\">
+              <option value=\"10\">10s</option>
+              <option value=\"20\">20s</option>
+              <option value=\"30\">30s</option>
+              <option value=\"60\">60s</option>
+            </select>
           </div>
+          <div class=\"project-board-summary\" id=\"project_board_summary\">summary: -</div>
           <div class=\"project-session-list\" id=\"project_session_list\">
             <div class=\"muted\">(empty)</div>
           </div>
@@ -791,7 +823,10 @@ HTML = """
           filterText: '',
           health: 'all',
           sort: 'updated_desc',
+          autoRefreshEnabled: false,
+          refreshSeconds: 30,
         },
+        sessionAutoRefreshTimer: null,
       };
 
       const PROMPT_HISTORY_LIMIT = 8;
@@ -893,7 +928,7 @@ HTML = """
       }
 
       function loadSessionBoardState() {
-        const fallback = {filterText: '', health: 'all', sort: 'updated_desc'};
+        const fallback = {filterText: '', health: 'all', sort: 'updated_desc', autoRefreshEnabled: false, refreshSeconds: 30};
         try {
           const raw = localStorage.getItem(SESSION_BOARD_KEY);
           if (!raw) return fallback;
@@ -902,7 +937,10 @@ HTML = """
           const filterText = String(parsed.filterText || '').trim().toLowerCase();
           const health = String(parsed.health || 'all').trim().toLowerCase();
           const sort = String(parsed.sort || 'updated_desc').trim().toLowerCase();
-          return {filterText, health, sort};
+          const autoRefreshEnabled = Boolean(parsed.autoRefreshEnabled);
+          const refreshSecondsRaw = Number(parsed.refreshSeconds || 30);
+          const refreshSeconds = Number.isFinite(refreshSecondsRaw) ? Math.max(10, Math.min(120, Math.floor(refreshSecondsRaw))) : 30;
+          return {filterText, health, sort, autoRefreshEnabled, refreshSeconds};
         } catch (e) {
           return fallback;
         }
@@ -913,6 +951,8 @@ HTML = """
           filterText: String((v && v.filterText) || '').trim().toLowerCase(),
           health: String((v && v.health) || 'all').trim().toLowerCase(),
           sort: String((v && v.sort) || 'updated_desc').trim().toLowerCase(),
+          autoRefreshEnabled: Boolean(v && v.autoRefreshEnabled),
+          refreshSeconds: Number.isFinite(Number(v && v.refreshSeconds)) ? Math.max(10, Math.min(120, Math.floor(Number(v.refreshSeconds)))) : 30,
         };
         try {
           localStorage.setItem(SESSION_BOARD_KEY, JSON.stringify(payload));
@@ -926,9 +966,13 @@ HTML = """
         const filterEle = document.getElementById('session_filter_text');
         const healthEle = document.getElementById('session_filter_health');
         const sortEle = document.getElementById('session_sort_mode');
+        const autoEle = document.getElementById('session_auto_refresh');
+        const secEle = document.getElementById('session_refresh_seconds');
         if (filterEle) filterEle.value = String(payload.filterText || '');
         if (healthEle) healthEle.value = String(payload.health || 'all');
         if (sortEle) sortEle.value = String(payload.sort || 'updated_desc');
+        if (autoEle) autoEle.checked = Boolean(payload.autoRefreshEnabled);
+        if (secEle) secEle.value = String(payload.refreshSeconds || 30);
       }
 
       function renderPromptHistory(projectId) {
@@ -1580,12 +1624,16 @@ HTML = """
         const filterText = String((document.getElementById('session_filter_text').value || '')).trim().toLowerCase();
         const health = String(document.getElementById('session_filter_health').value || 'all').trim().toLowerCase();
         const sort = String(document.getElementById('session_sort_mode').value || 'updated_desc').trim().toLowerCase();
-        return {filterText, health, sort};
+        const autoRefreshEnabled = Boolean(document.getElementById('session_auto_refresh').checked);
+        const refreshSecondsRaw = Number(document.getElementById('session_refresh_seconds').value || 30);
+        const refreshSeconds = Number.isFinite(refreshSecondsRaw) ? Math.max(10, Math.min(120, Math.floor(refreshSecondsRaw))) : 30;
+        return {filterText, health, sort, autoRefreshEnabled, refreshSeconds};
       }
 
       function applySessionBoardControls() {
         state.sessionBoard = readSessionBoardControls();
         saveSessionBoardState(state.sessionBoard);
+        ensureSessionAutoRefresh();
         renderProjectSessionBoard(state.projects || []);
       }
 
@@ -1606,14 +1654,36 @@ HTML = """
       }
 
       function clearSessionBoardControls() {
-        applySessionBoardStateToControls({filterText: '', health: 'all', sort: 'updated_desc'});
+        applySessionBoardStateToControls({filterText: '', health: 'all', sort: 'updated_desc', autoRefreshEnabled: false, refreshSeconds: 30});
         applySessionBoardControls();
+      }
+
+      function onSessionAutoRefreshChanged() {
+        state.sessionBoard = readSessionBoardControls();
+        saveSessionBoardState(state.sessionBoard);
+        ensureSessionAutoRefresh();
+      }
+
+      function ensureSessionAutoRefresh() {
+        if (state.sessionAutoRefreshTimer) {
+          clearInterval(state.sessionAutoRefreshTimer);
+          state.sessionAutoRefreshTimer = null;
+        }
+        const controls = state.sessionBoard || {};
+        if (!controls.autoRefreshEnabled) {
+          return;
+        }
+        const sec = Number.isFinite(Number(controls.refreshSeconds)) ? Math.max(10, Math.min(120, Math.floor(Number(controls.refreshSeconds)))) : 30;
+        state.sessionAutoRefreshTimer = setInterval(() => {
+          void refreshProjects();
+        }, sec * 1000);
       }
 
       function renderProjectSessionBoard(projects) {
         const wrap = document.getElementById('project_session_list');
         if (!wrap) return;
         wrap.innerHTML = '';
+        const summaryEle = document.getElementById('project_board_summary');
         const controls = readSessionBoardControls();
         state.sessionBoard = controls;
         const baseRows = Array.isArray(projects) ? projects : [];
@@ -1665,6 +1735,29 @@ HTML = """
           });
         } else {
           rows.sort((a, b) => String((b && b.updated_at) || '').localeCompare(String((a && a.updated_at) || '')));
+        }
+        if (summaryEle) {
+          const total = rows.length;
+          let failedN = 0;
+          let successN = 0;
+          let noneN = 0;
+          let ratioSum = 0.0;
+          let ratioCnt = 0;
+          for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
+            const rh = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+            const st = String(rh.status || 'none').toLowerCase();
+            if (st === 'failed') failedN += 1;
+            else if (st === 'success') successN += 1;
+            else noneN += 1;
+            const ratio = Number(rh.success_ratio || 0);
+            if (Number.isFinite(ratio)) {
+              ratioSum += ratio;
+              ratioCnt += 1;
+            }
+          }
+          const avgRatio = ratioCnt > 0 ? Math.round((ratioSum / ratioCnt) * 100) : 0;
+          summaryEle.textContent = `summary: total=${total} | failed=${failedN} | success=${successN} | none=${noneN} | avg_success_ratio=${avgRatio}%`;
         }
         if (rows.length < 1) {
           const empty = document.createElement('div');
@@ -1806,6 +1899,29 @@ HTML = """
           card.appendChild(actions);
           wrap.appendChild(card);
         }
+      }
+
+      async function openTopPrioritySession() {
+        const rows = Array.isArray(state.projects) ? state.projects.slice() : [];
+        if (rows.length < 1) {
+          renderJsonOut({status: 'fail', error: 'no projects available'});
+          return;
+        }
+        const scoreRow = (row) => {
+          const rh = (row && row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+          const failed = Number(rh.failed_steps || 0);
+          const dur = Number(rh.recent_duration_ms || 0);
+          const ratio = Number(rh.success_ratio || 0);
+          return (failed * 1000) + (dur / 1000) - (ratio * 100);
+        };
+        rows.sort((a, b) => scoreRow(b) - scoreRow(a));
+        const top = rows.find((r) => r && typeof r === 'object' && String(r.project_id || '').trim());
+        if (!top) {
+          renderJsonOut({status: 'fail', error: 'no valid project'});
+          return;
+        }
+        const pid = String(top.project_id || '').trim();
+        await openProjectWorkspace(pid, {push: true});
       }
 
       async function openProjectWorkspace(projectId, opts) {
@@ -2356,6 +2472,7 @@ HTML = """
         const savedSessionBoard = loadSessionBoardState();
         state.sessionBoard = savedSessionBoard;
         applySessionBoardStateToControls(savedSessionBoard);
+        ensureSessionAutoRefresh();
         const urlProjectId = readProjectIdFromUrl();
         if (urlProjectId) {
           document.getElementById('project_id').value = urlProjectId;

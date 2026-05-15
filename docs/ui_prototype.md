@@ -40,6 +40,9 @@ Open: `http://127.0.0.1:8787`
   - supports `Batch Export JSON` to emit latest batch payload for copy/save
   - supports `Batch Limit` (1-20) to cap batch action scope
   - supports one-click health count filters (`Failed Count` / `Success Count` / `None Count`) with live counters
+  - batch actions are persisted to `runs/ui_sessions/exports/<project_id>/` via API
+  - supports batch history panel (`Load Batch History`) with latest export summary
+  - supports `Replay Latest Batch` to rerun latest exported batch action (`batch_summary` / `batch_validate` / `batch_retry_failed`)
   - session card provides quick `Summary` and `Validate` actions for current task
   - runtime health now includes `success_ratio` and `recent_duration_ms` for smarter priority sorting
   - session file: `runs/ui_sessions/projects/<project_id>.json`
@@ -79,6 +82,9 @@ Open: `http://127.0.0.1:8787`
   - `POST /api/projects/import`
   - `GET /api/projects/<project_id>/history`
   - `POST /api/projects/<project_id>/upload-ref`
+  - `POST /api/projects/<project_id>/batch-export`
+  - `GET /api/projects/<project_id>/batch-exports`
+  - `POST /api/projects/<project_id>/batch-exports/replay-latest`
   - `POST /api/chat/send`
 - existing execution and inspector APIs:
   - `GET /api/health`

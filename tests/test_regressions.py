@@ -7516,7 +7516,13 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("batchValidateProjectTask()", html)
         self.assertIn("batchRetryFailedProjectStep()", html)
         self.assertIn("exportSessionBoardBatchResult()", html)
+        self.assertIn("exportSessionBoardBatchResultPersisted()", html)
+        self.assertIn("persistBatchPayload(", html)
+        self.assertIn("loadBatchHistory()", html)
+        self.assertIn("replayLatestBatchAction()", html)
         self.assertIn("session_batch_limit", html)
+        self.assertIn("project_batch_history_summary", html)
+        self.assertIn("project_batch_history", html)
         self.assertIn("clearSessionBoardControls()", html)
         self.assertIn("session_auto_refresh", html)
         self.assertIn("session_refresh_seconds", html)
@@ -7546,6 +7552,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("None Count (", html)
         self.assertIn("batch_retry_failed", html)
         self.assertIn("batch_export", html)
+        self.assertIn("/batch-export", html)
+        self.assertIn("/batch-exports", html)
+        self.assertIn("/batch-exports/replay-latest", html)
         self.assertIn("Summary", html)
         self.assertIn("showProjectSummary(", html)
         self.assertIn("Validate", html)
@@ -7620,6 +7629,78 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(conflict_resp.status_code, 409)
                 conflict_payload = conflict_resp.get_json()
                 self.assertEqual(conflict_payload.get("error"), "project_exists")
+
+    def test_ui_batch_export_list_and_replay_latest(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_proj_batch", "title": "batch"})
+
+                task_id = "ui_proj_batch_t1"
+                run_dir = root / "runs" / "agent" / task_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "execution.json").write_text(
+                    json.dumps(
+                        {
+                            "task_id": task_id,
+                            "status": "success",
+                            "records": [
+                                {"name": "search_dataset", "status": "success"},
+                            ],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "decision_summary.json").write_text(
+                    json.dumps({"task_id": task_id, "status": "success", "inference_step": {"status": "success"}}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "task_state.json").write_text(
+                    json.dumps({"task_id": task_id, "current_stage": "DONE", "status": "success"}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+
+                save_resp = client.post(
+                    "/api/projects/ui_proj_batch/batch-export",
+                    json={
+                        "payload": {
+                            "status": "pass",
+                            "action": "batch_summary",
+                            "limit": 1,
+                            "count": 1,
+                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "created_at": "2026-05-15T08:00:00+08:00",
+                        }
+                    },
+                )
+                self.assertEqual(save_resp.status_code, 200)
+                saved = save_resp.get_json()
+                self.assertEqual(saved.get("status"), "pass")
+                entry = saved.get("batch_export") if isinstance(saved.get("batch_export"), dict) else {}
+                export_path = Path(str(entry.get("path") or ""))
+                self.assertTrue(export_path.exists())
+                self.assertIn("runs/ui_sessions/exports/ui_proj_batch", str(export_path))
+
+                list_resp = client.get("/api/projects/ui_proj_batch/batch-exports?limit=10")
+                self.assertEqual(list_resp.status_code, 200)
+                listed = list_resp.get_json()
+                self.assertEqual(listed.get("status"), "pass")
+                exports = listed.get("exports") if isinstance(listed.get("exports"), list) else []
+                self.assertGreaterEqual(len(exports), 1)
+
+                replay_resp = client.post("/api/projects/ui_proj_batch/batch-exports/replay-latest", json={})
+                self.assertEqual(replay_resp.status_code, 200)
+                replayed = replay_resp.get_json()
+                self.assertEqual(replayed.get("status"), "pass")
+                replay_entry = replayed.get("batch_export") if isinstance(replayed.get("batch_export"), dict) else {}
+                replay_path = Path(str(replay_entry.get("path") or ""))
+                self.assertTrue(replay_path.exists())
+                self.assertEqual(replayed.get("action"), "batch_summary")
 
     def test_ui_chat_send_need_user_input_path(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -192,6 +192,11 @@ HTML = """
         color: #4b5568;
         line-height: 1.45;
       }
+      .project-session-failed {
+        margin-top: 4px;
+        color: #8a2f2f;
+        font-size: 0.72rem;
+      }
       .project-session-actions {
         display: flex;
         gap: 6px;
@@ -1449,6 +1454,7 @@ HTML = """
           const pid = String(row.project_id || '').trim();
           if (!pid) continue;
           const taskId = String(row.current_task_id || '').trim();
+          const latestFailedStep = String((row.runtime_health && row.runtime_health.latest_failed_step) || '').trim();
           const health = formatRuntimeHealth(row.runtime_health || {});
           const updatedAt = String(row.updated_at || '-');
           const title = String(row.title || pid);
@@ -1472,6 +1478,10 @@ HTML = """
           meta.className = 'project-session-meta';
           meta.textContent = `task=${taskId || '-'} | health=${health} | updated=${updatedAt}`;
           card.appendChild(meta);
+          const failed = document.createElement('div');
+          failed.className = 'project-session-failed';
+          failed.textContent = latestFailedStep ? `latest_failed_step=${latestFailedStep}` : 'latest_failed_step=-';
+          card.appendChild(failed);
 
           const actions = document.createElement('div');
           actions.className = 'project-session-actions';
@@ -1491,6 +1501,15 @@ HTML = """
             resumeProjectTask(pid, taskId);
           };
           actions.appendChild(resumeBtn);
+
+          const retryFailedBtn = document.createElement('button');
+          retryFailedBtn.type = 'button';
+          retryFailedBtn.textContent = 'Retry Failed';
+          retryFailedBtn.disabled = !(taskId && latestFailedStep);
+          retryFailedBtn.onclick = () => {
+            retryProjectFailedStep(pid, taskId, latestFailedStep);
+          };
+          actions.appendChild(retryFailedBtn);
           card.appendChild(actions);
           wrap.appendChild(card);
         }
@@ -1534,6 +1553,35 @@ HTML = """
         renderJsonOut(r.data);
         const status = String((r.data && r.data.status) || 'unknown');
         renderEvents([{stage: 'resume_project_task', status: status, operation: tid}]);
+        await loadRunRuntime();
+        await refreshProjects();
+      }
+
+      async function retryProjectFailedStep(projectId, taskId, failedToolName) {
+        const pid = String(projectId || '').trim();
+        const tid = String(taskId || '').trim();
+        const failed = String(failedToolName || '').trim();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'project has no current_task_id'});
+          return;
+        }
+        if (!failed) {
+          renderJsonOut({status: 'fail', error: 'project has no latest_failed_step'});
+          return;
+        }
+        await openProjectWorkspace(pid, {push: true});
+        const r = await apiPost(`/api/task/${encodeURIComponent(tid)}/retry-failed-step`, {
+          catalog_path: document.getElementById('catalog').value,
+          failed_tool_name: failed,
+        });
+        renderJsonOut(r.data);
+        const status = String((r.data && r.data.status) || 'unknown');
+        const op = String((r.data && r.data.retry_operation) || failed);
+        renderEvents([{stage: 'retry_project_failed_step', status: status, operation: op}]);
         await loadRunRuntime();
         await refreshProjects();
       }

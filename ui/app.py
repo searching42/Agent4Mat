@@ -143,6 +143,65 @@ HTML = """
         border-radius: 9px;
         font-size: 0.82rem;
       }
+      .project-board {
+        margin-top: 10px;
+        border: 1px solid #dbe4f2;
+        border-radius: 10px;
+        background: #f9fbff;
+        padding: 8px;
+      }
+      .project-board h4 {
+        margin: 0 0 8px 0;
+        font-size: 0.78rem;
+        color: #4b5a73;
+      }
+      .project-session-list {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .project-session-item {
+        border: 1px solid #d9e3f4;
+        border-radius: 8px;
+        background: #fff;
+        padding: 7px;
+        font-size: 0.76rem;
+      }
+      .project-session-item.active {
+        border-color: #9bbcff;
+        box-shadow: inset 0 0 0 1px #cddfff;
+      }
+      .project-session-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+        margin-bottom: 4px;
+      }
+      .project-session-title {
+        font-weight: 700;
+        color: #1f3559;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .project-session-id {
+        color: #6a7280;
+        font-size: 0.7rem;
+      }
+      .project-session-meta {
+        color: #4b5568;
+        line-height: 1.45;
+      }
+      .project-session-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .project-session-actions button {
+        margin-top: 6px;
+        padding: 4px 8px;
+        font-size: 0.72rem;
+      }
       .chat-wrap { display: grid; grid-template-rows: 1fr auto; gap: 10px; min-height: 82vh; }
       .workspace-hud {
         display: flex;
@@ -401,6 +460,12 @@ HTML = """
           <option value=\"\">(select)</option>
         </select>
         <button onclick=\"refreshProjects()\">Refresh Projects</button>
+        <div class=\"project-board\">
+          <h4>Workspace Sessions</h4>
+          <div class=\"project-session-list\" id=\"project_session_list\">
+            <div class=\"muted\">(empty)</div>
+          </div>
+        </div>
 
         <label>Project ID</label>
         <input id=\"project_id\" value=\"demo_chat_project\" />
@@ -621,6 +686,7 @@ HTML = """
         project: null,
         pendingInput: null,
         promptHistory: [],
+        projects: [],
       };
 
       const PROMPT_HISTORY_LIMIT = 8;
@@ -1351,6 +1417,7 @@ HTML = """
         const picker = document.getElementById('project_picker');
         while (picker.options.length > 1) picker.remove(1);
         const projects = Array.isArray(r.data.projects) ? r.data.projects : [];
+        state.projects = projects;
         for (const p of projects) {
           const pid = String(p.project_id || '');
           if (!pid) continue;
@@ -1361,19 +1428,121 @@ HTML = """
           picker.appendChild(opt);
         }
         syncProjectPickerValue(selectedProjectId());
+        renderProjectSessionBoard(projects);
+      }
+
+      function renderProjectSessionBoard(projects) {
+        const wrap = document.getElementById('project_session_list');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const rows = Array.isArray(projects) ? projects : [];
+        if (rows.length < 1) {
+          const empty = document.createElement('div');
+          empty.className = 'muted';
+          empty.textContent = '(empty)';
+          wrap.appendChild(empty);
+          return;
+        }
+        const activeId = selectedProjectId();
+        for (const row of rows.slice(0, 18)) {
+          if (!row || typeof row !== 'object') continue;
+          const pid = String(row.project_id || '').trim();
+          if (!pid) continue;
+          const taskId = String(row.current_task_id || '').trim();
+          const health = formatRuntimeHealth(row.runtime_health || {});
+          const updatedAt = String(row.updated_at || '-');
+          const title = String(row.title || pid);
+
+          const card = document.createElement('div');
+          card.className = `project-session-item${pid === activeId ? ' active' : ''}`;
+
+          const head = document.createElement('div');
+          head.className = 'project-session-head';
+          const titleEle = document.createElement('div');
+          titleEle.className = 'project-session-title';
+          titleEle.textContent = title;
+          const idEle = document.createElement('div');
+          idEle.className = 'project-session-id';
+          idEle.textContent = pid;
+          head.appendChild(titleEle);
+          head.appendChild(idEle);
+          card.appendChild(head);
+
+          const meta = document.createElement('div');
+          meta.className = 'project-session-meta';
+          meta.textContent = `task=${taskId || '-'} | health=${health} | updated=${updatedAt}`;
+          card.appendChild(meta);
+
+          const actions = document.createElement('div');
+          actions.className = 'project-session-actions';
+          const openBtn = document.createElement('button');
+          openBtn.type = 'button';
+          openBtn.textContent = 'Open';
+          openBtn.onclick = () => {
+            openProjectWorkspace(pid, {push: true});
+          };
+          actions.appendChild(openBtn);
+
+          const resumeBtn = document.createElement('button');
+          resumeBtn.type = 'button';
+          resumeBtn.textContent = 'Resume';
+          resumeBtn.disabled = !taskId;
+          resumeBtn.onclick = () => {
+            resumeProjectTask(pid, taskId);
+          };
+          actions.appendChild(resumeBtn);
+          card.appendChild(actions);
+          wrap.appendChild(card);
+        }
+      }
+
+      async function openProjectWorkspace(projectId, opts) {
+        const pid = String(projectId || '').trim();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        document.getElementById('project_id').value = pid;
+        syncProjectPickerValue(pid);
+        syncWorkspaceUrl(pid, opts && opts.push ? {push: true} : {});
+        const hist = await loadHistory();
+        const ok = hist && hist.status === 200 && hist.data && String(hist.data.status || '') === 'pass';
+        if (!ok) {
+          await saveProject();
+        }
+        await loadRunRuntime();
+        await refreshProjects();
+      }
+
+      async function resumeProjectTask(projectId, taskId) {
+        const pid = String(projectId || '').trim();
+        const tid = String(taskId || '').trim();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          return;
+        }
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'project has no current_task_id'});
+          return;
+        }
+        await openProjectWorkspace(pid, {push: true});
+        const r = await apiPost('/api/resume', {
+          task_id: tid,
+          planner_provider: document.getElementById('planner').value,
+          catalog_path: document.getElementById('catalog').value,
+        });
+        renderJsonOut(r.data);
+        const status = String((r.data && r.data.status) || 'unknown');
+        renderEvents([{stage: 'resume_project_task', status: status, operation: tid}]);
+        await loadRunRuntime();
+        await refreshProjects();
       }
 
       async function switchProjectFromPicker() {
         const picker = document.getElementById('project_picker');
         const pid = String(picker.value || '').trim();
         if (!pid) return;
-        document.getElementById('project_id').value = pid;
-        syncWorkspaceUrl(pid, {push: true});
-        const hist = await loadHistory();
-        const ok = hist && hist.status === 200 && hist.data && String(hist.data.status || '') === 'pass';
-        if (!ok) {
-          await saveProject();
-        }
+        await openProjectWorkspace(pid, {push: true});
       }
 
       async function saveProject() {

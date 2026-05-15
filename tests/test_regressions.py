@@ -7484,6 +7484,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("const hist = await loadHistory();", html)
         self.assertIn("if (!ok) {", html)
         self.assertIn("await saveProject();", html)
+        self.assertIn("project_session_list", html)
+        self.assertIn("renderProjectSessionBoard(", html)
+        self.assertIn("openProjectWorkspace(", html)
+        self.assertIn("resumeProjectTask(", html)
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -150,11 +150,21 @@ def parse_args() -> argparse.Namespace:
     run_step_p.add_argument("--workspace-root", default=str(Path.cwd()))
     run_step_p.add_argument("--catalog", default="")
     run_step_p.add_argument("--args-json", default="", help="Optional operation args JSON object string")
+    run_step_p.add_argument(
+        "--require-real-adapters",
+        action="store_true",
+        help="Fail if fallback/local adapters are used",
+    )
 
     run_step_json_p = sub.add_parser("agent-run-step-json", help="Run single operation from step request JSON")
     run_step_json_p.add_argument("--step-request-json", required=True)
     run_step_json_p.add_argument("--workspace-root", default=str(Path.cwd()))
     run_step_json_p.add_argument("--catalog", default="")
+    run_step_json_p.add_argument(
+        "--require-real-adapters",
+        action="store_true",
+        help="Fail if fallback/local adapters are used",
+    )
 
     resume_p = sub.add_parser("agent-resume", help="Resume task from task.json or request.json under runs/agent/<task_id>")
     resume_p.add_argument("--task-id", required=True)
@@ -205,9 +215,14 @@ def _resolve_and_load_json(payload_path: str) -> dict:
 
 
 def _assert_no_fallback(result_payload: dict) -> None:
-    exec_path = Path(str(result_payload.get("execution_path") or "")).resolve()
+    exec_path_raw = str(result_payload.get("execution_path") or "").strip()
+    if not exec_path_raw:
+        print("[FAIL] require-real-adapters missing execution_path")
+        raise SystemExit(3)
+    exec_path = Path(exec_path_raw).resolve()
     if not exec_path.exists():
-        raise SystemExit(1)
+        print(f"[FAIL] require-real-adapters execution_path not found: {exec_path}")
+        raise SystemExit(3)
     execution = json.loads(exec_path.read_text(encoding="utf-8"))
     records = execution.get("records", []) if isinstance(execution, dict) else []
     forbidden = {
@@ -227,6 +242,31 @@ def _assert_no_fallback(result_payload: dict) -> None:
             raise SystemExit(3)
         if res.get("fallback_error"):
             print(f"[FAIL] require-real-adapters found fallback_error in tool: {rec.get('name')}")
+            raise SystemExit(3)
+
+    decision_path_raw = str(result_payload.get("decision_summary_path") or "").strip()
+    if not decision_path_raw:
+        return
+    decision_path = Path(decision_path_raw).resolve()
+    if not decision_path.exists():
+        print(f"[FAIL] require-real-adapters decision_summary_path not found: {decision_path}")
+        raise SystemExit(3)
+    decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    for step_key in ("score_step", "inference_step"):
+        step = decision.get(step_key)
+        if not isinstance(step, dict):
+            continue
+        used_fallback = bool(step.get("used_fallback", False))
+        fallback_code = str(step.get("fallback_code") or "")
+        fallback_reason = str(step.get("fallback_reason") or "")
+        fallback_error = step.get("fallback_error") if isinstance(step.get("fallback_error"), dict) else {}
+        if used_fallback or fallback_code or fallback_reason or fallback_error:
+            adapter = str(step.get("adapter") or "")
+            print(
+                "[FAIL] require-real-adapters decision summary indicates fallback: "
+                f"{step_key} adapter={adapter} used_fallback={used_fallback} "
+                f"fallback_code={fallback_code}"
+            )
             raise SystemExit(3)
 
 
@@ -428,6 +468,8 @@ def main() -> None:
             catalog_path=catalog,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if bool(getattr(args, "require_real_adapters", False)):
+            _assert_no_fallback(result)
         if result.get("status") != "success":
             raise SystemExit(1)
         return
@@ -447,6 +489,8 @@ def main() -> None:
             catalog_path=catalog,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if bool(getattr(args, "require_real_adapters", False)):
+            _assert_no_fallback(result)
         if result.get("status") != "success":
             raise SystemExit(1)
         return

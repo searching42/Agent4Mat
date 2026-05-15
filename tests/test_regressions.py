@@ -2671,6 +2671,185 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(cp.returncode, 3, msg=cp.stderr + cp.stdout)
             self.assertIn("require-real-adapters", cp.stdout)
 
+    def test_agent_run_step_require_real_adapters_fails_on_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_id = f"task_step_require_real_{td_path.name[-8:]}"
+            input_csv = td_path / "step_input.csv"
+            input_csv.write_text("candidate_id,SMILES\nc1,c1ccccc1\n", encoding="utf-8")
+            task_json = td_path / "task_step_require_real.json"
+            task_json.write_text(
+                json.dumps(
+                    {
+                        "version": "2.0",
+                        "task_id": task_id,
+                        "request_text": "score step strict no fallback",
+                        "execution_mode": "single_step",
+                        "operation": "score_candidates",
+                        "property": "plqy",
+                        "range": "60-100",
+                        "n_structures": 10,
+                        "constraints": {},
+                        "prediction_model": "unimol_lambda_plqy_real_v1",
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_real_v1",
+                            "generator_id": "reinvent4_lambda_em_v2",
+                        },
+                        "status": "approved",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env = {**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"}
+            cp_retrieve = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-step",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--task-json",
+                    str(task_json),
+                    "--operation",
+                    "retrieve_candidate_data",
+                    "--args-json",
+                    json.dumps({"candidate_data": str(input_csv)}),
+                    "--require-real-adapters",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(cp_retrieve.returncode, 0, msg=cp_retrieve.stderr + cp_retrieve.stdout)
+
+            cp_score = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-step",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--task-json",
+                    str(task_json),
+                    "--operation",
+                    "score_candidates",
+                    "--require-real-adapters",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**env, "OLED_AGENT_SCORE_CMD": f"{sys.executable} -c 'import sys; sys.exit(7)'"},
+            )
+            self.assertEqual(cp_score.returncode, 3, msg=cp_score.stderr + cp_score.stdout)
+            self.assertIn("require-real-adapters", cp_score.stdout)
+
+    def test_agent_run_step_json_require_real_adapters_fails_on_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            task_id = f"task_step_json_require_real_{td_path.name[-8:]}"
+            input_csv = td_path / "step_json_input.csv"
+            input_csv.write_text("candidate_id,SMILES\nc1,c1ccccc1\n", encoding="utf-8")
+            task_payload = {
+                "version": "2.0",
+                "task_id": task_id,
+                "request_text": "score step-json strict no fallback",
+                "execution_mode": "single_step",
+                "operation": "score_candidates",
+                "property": "plqy",
+                "range": "60-100",
+                "n_structures": 10,
+                "constraints": {},
+                "prediction_model": "unimol_lambda_plqy_real_v1",
+                "model_preferences": {
+                    "predictor_id": "unimol_lambda_plqy_real_v1",
+                    "generator_id": "reinvent4_lambda_em_v2",
+                },
+                "status": "approved",
+            }
+            retrieve_req = td_path / "step_retrieve.json"
+            retrieve_req.write_text(
+                json.dumps(
+                    {
+                        "task": task_payload,
+                        "operation": "retrieve_candidate_data",
+                        "args": {"candidate_data": str(input_csv)},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            score_req = td_path / "step_score.json"
+            score_req.write_text(
+                json.dumps(
+                    {
+                        "task": task_payload,
+                        "operation": "score_candidates",
+                        "args": {},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env = {**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"}
+            cp_retrieve = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-step-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--step-request-json",
+                    str(retrieve_req),
+                    "--require-real-adapters",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(cp_retrieve.returncode, 0, msg=cp_retrieve.stderr + cp_retrieve.stdout)
+
+            cp_score = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-step-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "scripts" / "adapters" / "real_adapters_catalog.json"),
+                    "--step-request-json",
+                    str(score_req),
+                    "--require-real-adapters",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**env, "OLED_AGENT_SCORE_CMD": f"{sys.executable} -c 'import sys; sys.exit(7)'"},
+            )
+            self.assertEqual(cp_score.returncode, 3, msg=cp_score.stderr + cp_score.stdout)
+            self.assertIn("require-real-adapters", cp_score.stdout)
+
     def test_agent_run_json_uses_catalog_generate_and_score_adapters_when_env_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]

@@ -758,6 +758,16 @@ HTML = """
           <button class=\"primary\" onclick=\"saveProject()\">Save/Load Project</button>
           <button onclick=\"sendChat(true)\">Start New Task</button>
         </div>
+        <label>Clone target project_id</label>
+        <input id=\"clone_project_id\" placeholder=\"留空则自动使用: <current>_clone\" />
+        <div class=\"btn-row\">
+          <label><input id=\"clone_copy_messages\" type=\"checkbox\" checked /> Copy messages</label>
+          <label><input id=\"clone_copy_attachments\" type=\"checkbox\" checked /> Copy attachments</label>
+          <label><input id=\"clone_carry_runtime\" type=\"checkbox\" /> Carry runtime pointers</label>
+        </div>
+        <div class=\"btn-row\">
+          <button type=\"button\" onclick=\"cloneProject()\">Clone Project</button>
+        </div>
         <div class=\"btn-row\">
           <button onclick=\"openWorkspaceWindow()\">Open in New Window</button>
           <button onclick=\"copyWorkspaceLink()\">Copy Workspace Link</button>
@@ -1732,6 +1742,26 @@ HTML = """
         return v || 'demo_chat_project';
       }
 
+      function suggestCloneProjectId(baseProjectId) {
+        let base = String(baseProjectId || '').trim() || 'project';
+        base = base.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[^A-Za-z0-9]+/, 'p');
+        if (!base) base = 'project';
+        let target = `${base}_clone`;
+        if (target.length > 128) target = target.slice(0, 128);
+        if (!isSafeProjectId(target)) {
+          target = 'project_clone';
+        }
+        return target;
+      }
+
+      function refreshCloneTargetSuggestion() {
+        const ele = document.getElementById('clone_project_id');
+        if (!ele) return;
+        const current = String(ele.value || '').trim();
+        if (current) return;
+        ele.value = suggestCloneProjectId(selectedProjectId());
+      }
+
       function isSafeProjectId(projectId) {
         return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(projectId || '').trim());
       }
@@ -1792,6 +1822,8 @@ HTML = """
         renderPendingInput(project.pending_input || null);
         restoreMessageDraft(pid);
         renderPromptHistory(pid);
+        document.getElementById('clone_project_id').value = '';
+        refreshCloneTargetSuggestion();
         refreshWorkspaceHud();
       }
 
@@ -3116,6 +3148,50 @@ HTML = """
         await loadHistory();
       }
 
+      async function cloneProject() {
+        const sourceProjectId = selectedProjectId();
+        if (!sourceProjectId || !isSafeProjectId(sourceProjectId)) {
+          renderJsonOut({status: 'fail', error: 'invalid source project_id'});
+          return;
+        }
+        const targetEle = document.getElementById('clone_project_id');
+        let targetProjectId = String(targetEle && targetEle.value ? targetEle.value : '').trim();
+        if (!targetProjectId) {
+          targetProjectId = suggestCloneProjectId(sourceProjectId);
+          if (targetEle) targetEle.value = targetProjectId;
+        }
+        if (!isSafeProjectId(targetProjectId)) {
+          renderJsonOut({status: 'fail', error: 'invalid target project_id'});
+          return;
+        }
+        if (targetProjectId === sourceProjectId) {
+          renderJsonOut({status: 'fail', error: 'target project_id must differ from source'});
+          return;
+        }
+        const copyMessages = Boolean(document.getElementById('clone_copy_messages').checked);
+        const copyAttachments = Boolean(document.getElementById('clone_copy_attachments').checked);
+        const carryRuntime = Boolean(document.getElementById('clone_carry_runtime').checked);
+        const r = await apiPost(`/api/projects/${encodeURIComponent(sourceProjectId)}/clone`, {
+          target_project_id: targetProjectId,
+          options: {
+            copy_messages: copyMessages,
+            copy_attachments: copyAttachments,
+            carry_runtime: carryRuntime,
+          },
+        });
+        renderJsonOut(r.data);
+        if (!r.data || String(r.data.status || '') !== 'pass') {
+          return;
+        }
+        const project = r.data.project && typeof r.data.project === 'object' ? r.data.project : null;
+        if (project) {
+          state.project = project;
+          applyProjectStateToUi(project, {push: true});
+        }
+        await refreshProjects();
+        await loadHistory();
+      }
+
       async function exportProject() {
         const pid = selectedProjectId();
         const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/export`);
@@ -3548,6 +3624,7 @@ HTML = """
       async function boot() {
         applyStepArgsTemplate(true);
         updateMemoryStatus();
+        refreshCloneTargetSuggestion();
         bindComposerShortcuts();
         bindWorkspaceUrlNavigation();
         const savedSessionBoard = loadSessionBoardState();
@@ -5692,6 +5769,53 @@ def _normalize_import_project(raw: Dict[str, Any], *, project_id: str) -> Dict[s
     return base
 
 
+def _clone_project_state(
+    *,
+    source_project: Dict[str, Any],
+    source_project_id: str,
+    target_project_id: str,
+    target_title: str,
+    options: Dict[str, Any],
+) -> Dict[str, Any]:
+    clone = _normalize_import_project(source_project, project_id=target_project_id)
+    clone["project_id"] = target_project_id
+
+    source_title = str(source_project.get("title") or source_project_id).strip() or source_project_id
+    clone["title"] = target_title or f"{source_title} (clone)"
+    clone["created_at"] = _now_iso()
+
+    copy_messages = bool(options.get("copy_messages", True))
+    copy_attachments = bool(options.get("copy_attachments", True))
+    carry_runtime = bool(options.get("carry_runtime", False))
+    copy_pending_input = bool(options.get("copy_pending_input", False))
+
+    if not copy_messages:
+        clone["messages"] = []
+    if not copy_attachments:
+        clone["attachments"] = []
+    if not copy_pending_input:
+        clone["pending_input"] = {}
+    if not carry_runtime:
+        clone["current_task_id"] = ""
+        clone["task_draft_path"] = ""
+        clone["task_json_path"] = ""
+        clone["request_path"] = ""
+        clone["last_runtime"] = {}
+        clone["pending_input"] = {}
+
+    _append_message(
+        clone,
+        role="system",
+        kind="project_clone",
+        content=(
+            f"Project cloned from {source_project_id}."
+            f"\ncopy_messages={copy_messages}, copy_attachments={copy_attachments}, carry_runtime={carry_runtime}"
+        ),
+        meta={"source_project_id": source_project_id, "clone_options": options},
+    )
+    return clone
+
+
 def _append_message(
     project: Dict[str, Any],
     *,
@@ -6524,6 +6648,54 @@ def api_project_import():
     normalized["project_id"] = target_id
     saved = _save_project_state(normalized)
     return jsonify({"status": "pass", "project": _project_summary(saved), "messages": _recent_messages(saved)})
+
+
+@app.post("/api/projects/<project_id>/clone")
+def api_project_clone(project_id: str):
+    source_id = str(project_id or "").strip()
+    if not source_id:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(source_id):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+
+    source = _load_project_state(source_id)
+    if not isinstance(source, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": source_id}), 404
+
+    body = request.get_json(silent=True) or {}
+    target_id = str(body.get("target_project_id") or "").strip()
+    target_title = str(body.get("target_title") or "").strip()
+    clone_options = body.get("options") if isinstance(body.get("options"), dict) else {}
+    override = bool(body.get("override"))
+
+    if not target_id:
+        return jsonify({"status": "fail", "error": "missing target_project_id"}), 400
+    if not _is_safe_project_id(target_id):
+        return jsonify({"status": "fail", "error": "invalid target_project_id"}), 400
+    if target_id == source_id:
+        return jsonify({"status": "fail", "error": "target_project_id must differ from source"}), 400
+
+    existing = _load_project_state(target_id)
+    if isinstance(existing, dict) and not override:
+        return jsonify({"status": "fail", "error": "project_exists", "project_id": target_id}), 409
+
+    cloned = _clone_project_state(
+        source_project=source,
+        source_project_id=source_id,
+        target_project_id=target_id,
+        target_title=target_title,
+        options=clone_options,
+    )
+    saved = _save_project_state(cloned)
+    return jsonify(
+        {
+            "status": "pass",
+            "source_project_id": source_id,
+            "project": _project_summary(saved),
+            "messages": _recent_messages(saved),
+            "clone_options": clone_options,
+        }
+    )
 
 
 @app.post("/api/projects/<project_id>/upload-ref")

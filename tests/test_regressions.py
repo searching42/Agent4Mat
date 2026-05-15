@@ -8040,6 +8040,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("success_ratio=", html)
         self.assertIn("records=", html)
         self.assertIn("project-session-progress-bar", html)
+        self.assertIn("clone_project_id", html)
+        self.assertIn("cloneProject()", html)
+        self.assertIn("/api/projects/${encodeURIComponent(sourceProjectId)}/clone", html)
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -8110,6 +8113,128 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(conflict_resp.status_code, 409)
                 conflict_payload = conflict_resp.get_json()
                 self.assertEqual(conflict_payload.get("error"), "project_exists")
+
+    def test_ui_project_clone_default_clears_runtime_and_keeps_context(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_clone_src",
+                        "title": "clone src",
+                        "options": {"memory_enabled": True},
+                        "memory_notes": "memory from source",
+                    },
+                )
+                source = ui_app_mod._load_project_state("ui_clone_src")
+                self.assertIsInstance(source, dict)
+                source["current_task_id"] = "clone_src_task"
+                source["task_draft_path"] = "/tmp/a.json"
+                source["task_json_path"] = "/tmp/b.json"
+                source["request_path"] = "/tmp/c.json"
+                source["last_runtime"] = {"status": "success"}
+                source["pending_input"] = {"stage": "intake", "missing_fields": ["candidate_data"], "questions": []}
+                source["attachments"] = [
+                    {
+                        "id": "att1",
+                        "kind": "path_ref",
+                        "label": "dataset",
+                        "name": "src.csv",
+                        "path": "/tmp/src.csv",
+                        "created_at": "2026-05-15T12:00:00+08:00",
+                    }
+                ]
+                ui_app_mod._append_message(source, role="user", content="source message", kind="chat")
+                ui_app_mod._save_project_state(source)
+
+                clone_resp = client.post(
+                    "/api/projects/ui_clone_src/clone",
+                    json={"target_project_id": "ui_clone_dst"},
+                )
+                self.assertEqual(clone_resp.status_code, 200)
+                payload = clone_resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                proj = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                self.assertEqual(proj.get("project_id"), "ui_clone_dst")
+
+                hist_resp = client.get("/api/projects/ui_clone_dst/history?limit=300")
+                self.assertEqual(hist_resp.status_code, 200)
+                hist = hist_resp.get_json()
+                hist_proj = hist.get("project") if isinstance(hist.get("project"), dict) else {}
+                self.assertEqual(hist_proj.get("current_task_id"), "")
+                self.assertEqual(hist_proj.get("task_draft_path"), "")
+                self.assertEqual(hist_proj.get("task_json_path"), "")
+                self.assertEqual(hist_proj.get("request_path"), "")
+                self.assertEqual(hist_proj.get("pending_input"), {})
+                self.assertIn("memory from source", str(hist_proj.get("memory_notes") or ""))
+                attachments = hist.get("attachments") if isinstance(hist.get("attachments"), list) else []
+                self.assertEqual(len(attachments), 1)
+                messages = hist.get("messages") if isinstance(hist.get("messages"), list) else []
+                contents = [str(m.get("content") or "") for m in messages if isinstance(m, dict)]
+                self.assertTrue(any("source message" in c for c in contents))
+                self.assertTrue(any("Project cloned from ui_clone_src" in c for c in contents))
+
+    def test_ui_project_clone_options_can_drop_messages_and_attachments_and_keep_runtime(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_clone_opt_src", "title": "clone options src"})
+                source = ui_app_mod._load_project_state("ui_clone_opt_src")
+                self.assertIsInstance(source, dict)
+                source["current_task_id"] = "clone_opt_task"
+                source["last_runtime"] = {"status": "failed"}
+                source["attachments"] = [
+                    {"id": "att1", "kind": "path_ref", "label": "dataset", "name": "src.csv", "path": "/tmp/src.csv", "created_at": "2026-05-15T12:00:00+08:00"}
+                ]
+                ui_app_mod._append_message(source, role="user", content="old message", kind="chat")
+                ui_app_mod._save_project_state(source)
+
+                clone_resp = client.post(
+                    "/api/projects/ui_clone_opt_src/clone",
+                    json={
+                        "target_project_id": "ui_clone_opt_dst",
+                        "options": {
+                            "copy_messages": False,
+                            "copy_attachments": False,
+                            "carry_runtime": True,
+                        },
+                    },
+                )
+                self.assertEqual(clone_resp.status_code, 200)
+
+                hist_resp = client.get("/api/projects/ui_clone_opt_dst/history?limit=300")
+                self.assertEqual(hist_resp.status_code, 200)
+                hist = hist_resp.get_json()
+                hist_proj = hist.get("project") if isinstance(hist.get("project"), dict) else {}
+                self.assertEqual(hist_proj.get("current_task_id"), "clone_opt_task")
+                attachments = hist.get("attachments") if isinstance(hist.get("attachments"), list) else []
+                self.assertEqual(len(attachments), 0)
+                messages = hist.get("messages") if isinstance(hist.get("messages"), list) else []
+                self.assertEqual(len(messages), 1)
+                clone_msg = messages[0] if isinstance(messages[0], dict) else {}
+                self.assertEqual(str(clone_msg.get("kind") or ""), "project_clone")
+
+    def test_ui_project_clone_rejects_conflict_without_override(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_clone_conf_src", "title": "src"})
+                client.post("/api/projects", json={"project_id": "ui_clone_conf_dst", "title": "dst"})
+                clone_resp = client.post(
+                    "/api/projects/ui_clone_conf_src/clone",
+                    json={"target_project_id": "ui_clone_conf_dst", "override": False},
+                )
+                self.assertEqual(clone_resp.status_code, 409)
+                payload = clone_resp.get_json()
+                self.assertEqual(payload.get("status"), "fail")
+                self.assertEqual(payload.get("error"), "project_exists")
 
     def test_ui_batch_export_list_and_replay_latest(self) -> None:
         ui_app_mod = self._load_ui_module()

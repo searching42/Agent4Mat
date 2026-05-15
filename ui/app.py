@@ -75,6 +75,7 @@ HTML = """
         gap: 12px;
         min-height: 100vh;
         padding: 12px;
+        align-items: start;
       }
       .panel {
         background: var(--card);
@@ -82,6 +83,19 @@ HTML = """
         border-radius: 14px;
         padding: 12px;
         box-shadow: 0 8px 20px rgba(17, 24, 39, 0.04);
+      }
+      .panel.left-drawer,
+      .panel.right-drawer {
+        position: sticky;
+        top: 12px;
+        max-height: calc(100vh - 24px);
+        overflow: auto;
+      }
+      .panel.chat-workspace {
+        min-height: calc(100vh - 24px);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 10px;
       }
       h2, h3 { margin: 0 0 8px 0; }
       h2 { font-size: 1.0rem; }
@@ -130,6 +144,50 @@ HTML = """
         font-size: 0.82rem;
       }
       .chat-wrap { display: grid; grid-template-rows: 1fr auto; gap: 10px; min-height: 82vh; }
+      .workspace-hud {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border: 1px solid #d8e2ef;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #ffffff, #f7faff);
+      }
+      .hud-label {
+        font-size: 0.74rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #6a7280;
+        margin-bottom: 4px;
+      }
+      .hud-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 0.82rem;
+        color: #334155;
+      }
+      .hud-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 8px;
+        border-radius: 999px;
+        background: #eef4ff;
+        border: 1px solid #d0dcfa;
+        color: #244b8f;
+        font-size: 0.76rem;
+      }
+      .hud-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .hud-actions button {
+        margin-top: 0;
+      }
       .chat-log {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -227,6 +285,29 @@ HTML = """
         margin-top: 10px;
         background: #fbfcff;
       }
+      details.drawer {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 0;
+        margin-top: 10px;
+        background: #fbfcff;
+      }
+      details.drawer > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 9px 11px;
+        font-weight: 700;
+        color: #334155;
+      }
+      details.drawer > summary::-webkit-details-marker {
+        display: none;
+      }
+      details.drawer[open] > summary {
+        border-bottom: 1px solid #e4eaf4;
+      }
+      .drawer-body {
+        padding: 9px 11px 11px 11px;
+      }
       .pending-fields {
         display: grid;
         grid-template-columns: 1fr;
@@ -297,12 +378,22 @@ HTML = """
         .layout { grid-template-columns: 1fr; }
         .chat-wrap { min-height: 65vh; }
         .tg-cols { grid-template-columns: 1fr; }
+        .panel.left-drawer,
+        .panel.right-drawer {
+          position: static;
+          max-height: unset;
+          overflow: visible;
+        }
+        .workspace-hud {
+          flex-direction: column;
+          align-items: flex-start;
+        }
       }
     </style>
   </head>
   <body>
     <div class=\"layout\">
-      <section class=\"panel\">
+      <section class=\"panel left-drawer\">
         <h2>Projects</h2>
         <h3>Independent chat memory per project</h3>
         <label>Project picker</label>
@@ -352,35 +443,23 @@ HTML = """
         </div>
       </section>
 
-      <section class=\"panel chat-wrap\">
-        <div class=\"chat-log\" id=\"chat_log\"></div>
-        <div class=\"timeline-groups\" id=\"timeline_groups_box\">
-          <div class=\"tg-head\" id=\"timeline_groups_head\">Run Timeline Groups (current task)</div>
-          <div class=\"btn-row\">
-            <label style=\"margin-top:0; font-weight:600;\">Scope</label>
-            <select id=\"timeline_scope\" style=\"max-width: 180px;\">
-              <option value=\"current_task\">Current Task</option>
-              <option value=\"recent_tasks\">Recent Tasks</option>
-            </select>
-            <label style=\"margin-top:0; font-weight:600;\">Recent N</label>
-            <input id=\"timeline_recent_limit\" value=\"5\" style=\"max-width: 70px;\" />
-            <button onclick=\"loadTimelineGroupsByScope()\">Apply</button>
+      <section class=\"panel chat-workspace chat-wrap\">
+        <div class=\"workspace-hud\">
+          <div>
+            <div class=\"hud-label\">Current Workspace</div>
+            <div class=\"hud-row\">
+              <span class=\"hud-chip\">project <span id=\"hud_project_id\">-</span></span>
+              <span class=\"hud-chip\">task <span id=\"current_task_id_hud\">-</span></span>
+              <span class=\"hud-chip\">health <span id=\"project_runtime_health_hud\">-</span></span>
+            </div>
           </div>
-          <div class=\"tg-cols\">
-            <div class=\"tg-col\">
-              <h4>Running</h4>
-              <ul id=\"tg_running\"><li>(empty)</li></ul>
-            </div>
-            <div class=\"tg-col\">
-              <h4>Completed</h4>
-              <ul id=\"tg_completed\"><li>(empty)</li></ul>
-            </div>
-            <div class=\"tg-col\">
-              <h4>Failed</h4>
-              <ul id=\"tg_failed\"><li>(empty)</li></ul>
-            </div>
+          <div class=\"hud-actions\">
+            <button class=\"primary\" onclick=\"sendChat(true)\">Start New Task</button>
+            <button onclick=\"loadHistory()\">Reload History</button>
+            <button onclick=\"loadRunRuntime()\">Refresh Runtime</button>
           </div>
         </div>
+        <div class=\"chat-log\" id=\"chat_log\"></div>
         <div class=\"chat-input\">
           <label>Chat with agent</label>
           <textarea id=\"message_input\" placeholder=\"例如：设计470nm附近且高PLQY分子；补充字段：{&quot;candidate_data&quot;:&quot;/abs/path/data.csv&quot;}；或单步：/step clean_dataset {&quot;input_csv&quot;:&quot;/abs/path/data.csv&quot;}\"></textarea>
@@ -389,8 +468,7 @@ HTML = """
           <div class=\"prompt-history\" id=\"prompt_history_box\"></div>
           <div class=\"btn-row\">
             <button class=\"primary\" onclick=\"sendChat(false)\">Send</button>
-            <button onclick=\"loadHistory()\">Reload History</button>
-            <button onclick=\"loadRunRuntime()\">Refresh Runtime</button>
+            <button onclick=\"sendWebSearchHint()\">Web Search</button>
           </div>
 
           <div class=\"tool-box\" id=\"pending_input_box\" style=\"display:none;\">
@@ -405,44 +483,48 @@ HTML = """
             </div>
           </div>
 
-          <div class=\"tool-box\">
-            <h3>File Input Entry</h3>
-            <label>Local file path (recommended)</label>
-            <input id=\"attachment_path\" placeholder=\"/absolute/path/to/file.csv\" />
-            <div class=\"btn-row\">
-              <button onclick=\"attachPath()\">Attach Path</button>
-              <button onclick=\"setCandidateDataFromPath()\">Use As candidate_data</button>
+          <details class=\"drawer\" open>
+            <summary>File Input Entry</summary>
+            <div class=\"drawer-body\">
+              <label>Local file path (recommended)</label>
+              <input id=\"attachment_path\" placeholder=\"/absolute/path/to/file.csv\" />
+              <div class=\"btn-row\">
+                <button onclick=\"attachPath()\">Attach Path</button>
+                <button onclick=\"setCandidateDataFromPath()\">Use As candidate_data</button>
+              </div>
+              <label>Upload file copy (optional)</label>
+              <input id=\"attachment_file\" type=\"file\" />
+              <button onclick=\"uploadFileRef()\">Upload File To Session</button>
+              <div class=\"muted\">上传文件将保存到 runs/ui_sessions/uploads/&lt;project_id&gt;/，并记录到项目会话。</div>
             </div>
-            <label>Upload file copy (optional)</label>
-            <input id=\"attachment_file\" type=\"file\" />
-            <button onclick=\"uploadFileRef()\">Upload File To Session</button>
-            <div class=\"muted\">上传文件将保存到 runs/ui_sessions/uploads/&lt;project_id&gt;/，并记录到项目会话。</div>
-          </div>
+          </details>
 
-          <div class=\"tool-box\">
-            <h3>Single Step Runner</h3>
-            <label>Operation</label>
-            <select id=\"step_operation\" onchange=\"applyStepArgsTemplate(false)\">
-              <option value=\"retrieve_candidate_data\">retrieve_candidate_data</option>
-              <option value=\"clean_dataset\">clean_dataset</option>
-              <option value=\"prepare_train_data\">prepare_train_data</option>
-              <option value=\"train_predictor\">train_predictor</option>
-              <option value=\"generate_candidates\">generate_candidates</option>
-              <option value=\"score_candidates\">score_candidates</option>
-              <option value=\"filter_and_rank\">filter_and_rank</option>
-              <option value=\"make_report\">make_report</option>
-            </select>
-            <label>Args JSON</label>
-            <textarea id=\"step_args_json\" rows=\"4\">{}</textarea>
-            <div class=\"btn-row\">
-              <button onclick=\"applyStepArgsTemplate(true)\">Load Args Template</button>
-              <button onclick=\"runStepPanel()\">Run Step From Panel</button>
+          <details class=\"drawer\">
+            <summary>Single Step Runner</summary>
+            <div class=\"drawer-body\">
+              <label>Operation</label>
+              <select id=\"step_operation\" onchange=\"applyStepArgsTemplate(false)\">
+                <option value=\"retrieve_candidate_data\">retrieve_candidate_data</option>
+                <option value=\"clean_dataset\">clean_dataset</option>
+                <option value=\"prepare_train_data\">prepare_train_data</option>
+                <option value=\"train_predictor\">train_predictor</option>
+                <option value=\"generate_candidates\">generate_candidates</option>
+                <option value=\"score_candidates\">score_candidates</option>
+                <option value=\"filter_and_rank\">filter_and_rank</option>
+                <option value=\"make_report\">make_report</option>
+              </select>
+              <label>Args JSON</label>
+              <textarea id=\"step_args_json\" rows=\"4\">{}</textarea>
+              <div class=\"btn-row\">
+                <button onclick=\"applyStepArgsTemplate(true)\">Load Args Template</button>
+                <button onclick=\"runStepPanel()\">Run Step From Panel</button>
+              </div>
             </div>
-          </div>
+          </details>
         </div>
       </section>
 
-      <section class=\"panel\">
+      <section class=\"panel right-drawer\">
         <h2>Outputs</h2>
         <h3>Runtime + artifacts</h3>
         <div class=\"runtime\" id=\"runtime_box\">runtime: (waiting)</div>
@@ -461,31 +543,71 @@ HTML = """
         </div>
         <label>Recent Events</label>
         <pre id=\"event_out\">(no events)</pre>
-        <label>Artifact</label>
-        <select id=\"artifact_name\">
-          <option value=\"plan\">plan</option>
-          <option value=\"execution\">execution</option>
-          <option value=\"decision_summary\">decision_summary</option>
-          <option value=\"task_state\">task_state</option>
-          <option value=\"tool_state\">tool_state</option>
-          <option value=\"web_evidence\">web_evidence</option>
-          <option value=\"experiment_trace\">experiment_trace</option>
-        </select>
-        <div class=\"btn-row\">
-          <button onclick=\"previewArtifact()\">Preview Artifact</button>
-          <button onclick=\"showTimeline()\">Show Timeline</button>
-          <button onclick=\"validateTask()\">Validate Task</button>
-        </div>
-        <div class=\"tool-box\">
-          <h3>Task Compare</h3>
-          <label>Other Task ID</label>
-          <input id=\"compare_other_task_id\" placeholder=\"e.g. acc_local_20260514_095552\" />
-          <div class=\"btn-row\">
-            <button onclick=\"compareTasks()\">Compare Tasks</button>
-            <button onclick=\"compareSelectedArtifact()\">Compare Selected Artifact Diff</button>
+
+        <details class=\"drawer\" open>
+          <summary>Run Timeline Groups</summary>
+          <div class=\"drawer-body timeline-groups\" id=\"timeline_groups_box\">
+            <div class=\"tg-head\" id=\"timeline_groups_head\">Run Timeline Groups (current task)</div>
+            <div class=\"btn-row\">
+              <label style=\"margin-top:0; font-weight:600;\">Scope</label>
+              <select id=\"timeline_scope\" style=\"max-width: 180px;\">
+                <option value=\"current_task\">Current Task</option>
+                <option value=\"recent_tasks\">Recent Tasks</option>
+              </select>
+              <label style=\"margin-top:0; font-weight:600;\">Recent N</label>
+              <input id=\"timeline_recent_limit\" value=\"5\" style=\"max-width: 70px;\" />
+              <button onclick=\"loadTimelineGroupsByScope()\">Apply</button>
+            </div>
+            <div class=\"tg-cols\">
+              <div class=\"tg-col\">
+                <h4>Running</h4>
+                <ul id=\"tg_running\"><li>(empty)</li></ul>
+              </div>
+              <div class=\"tg-col\">
+                <h4>Completed</h4>
+                <ul id=\"tg_completed\"><li>(empty)</li></ul>
+              </div>
+              <div class=\"tg-col\">
+                <h4>Failed</h4>
+                <ul id=\"tg_failed\"><li>(empty)</li></ul>
+              </div>
+            </div>
           </div>
-          <div class=\"muted\">使用当前 task 与另一个 task 做 summary / artifact diff 对比。</div>
-        </div>
+        </details>
+
+        <details class=\"drawer\" open>
+          <summary>Artifacts & Validation</summary>
+          <div class=\"drawer-body\">
+            <label>Artifact</label>
+            <select id=\"artifact_name\">
+              <option value=\"plan\">plan</option>
+              <option value=\"execution\">execution</option>
+              <option value=\"decision_summary\">decision_summary</option>
+              <option value=\"task_state\">task_state</option>
+              <option value=\"tool_state\">tool_state</option>
+              <option value=\"web_evidence\">web_evidence</option>
+              <option value=\"experiment_trace\">experiment_trace</option>
+            </select>
+            <div class=\"btn-row\">
+              <button onclick=\"previewArtifact()\">Preview Artifact</button>
+              <button onclick=\"showTimeline()\">Show Timeline</button>
+              <button onclick=\"validateTask()\">Validate Task</button>
+            </div>
+          </div>
+        </details>
+
+        <details class=\"drawer\">
+          <summary>Task Compare</summary>
+          <div class=\"drawer-body\">
+            <label>Other Task ID</label>
+            <input id=\"compare_other_task_id\" placeholder=\"e.g. acc_local_20260514_095552\" />
+            <div class=\"btn-row\">
+              <button onclick=\"compareTasks()\">Compare Tasks</button>
+              <button onclick=\"compareSelectedArtifact()\">Compare Selected Artifact Diff</button>
+            </div>
+            <div class=\"muted\">使用当前 task 与另一个 task 做 summary / artifact diff 对比。</div>
+          </div>
+        </details>
         <pre id=\"out\">(waiting)</pre>
       </div>
     </div>
@@ -985,12 +1107,42 @@ HTML = """
         return (span && span.textContent) ? span.textContent.trim() : '';
       }
 
+      function refreshWorkspaceHud() {
+        const projectId = selectedProjectId();
+        const task = taskId();
+        const health = (state.project && state.project.runtime_health && typeof state.project.runtime_health === 'object')
+          ? state.project.runtime_health
+          : {};
+        const pidEle = document.getElementById('hud_project_id');
+        const tidEle = document.getElementById('current_task_id_hud');
+        const hEle = document.getElementById('project_runtime_health_hud');
+        if (pidEle) pidEle.textContent = projectId || '-';
+        if (tidEle) tidEle.textContent = task || '-';
+        if (hEle) hEle.textContent = formatRuntimeHealth(health);
+      }
+
+      function renderProjectOptions(project) {
+        if (!project || typeof project !== 'object') return;
+        const opts = (project.options && typeof project.options === 'object') ? project.options : {};
+        const title = String(project.title || '');
+        if (title) document.getElementById('project_title').value = title;
+        if (opts.planner_provider) document.getElementById('planner').value = String(opts.planner_provider);
+        if (opts.catalog_path) document.getElementById('catalog').value = String(opts.catalog_path);
+        if (Object.prototype.hasOwnProperty.call(opts, 'web_search_enabled')) {
+          document.getElementById('web_enabled').checked = Boolean(opts.web_search_enabled);
+        }
+        if (Object.prototype.hasOwnProperty.call(opts, 'web_topk')) {
+          document.getElementById('web_topk').value = String(opts.web_topk);
+        }
+      }
+
       function renderProjectMeta(project) {
         if (!project) return;
         document.getElementById('current_task_id').textContent = project.current_task_id || '-';
         document.getElementById('project_runtime_health').textContent = formatRuntimeHealth(project.runtime_health);
         document.getElementById('project_updated_at').textContent = project.updated_at || '-';
         document.getElementById('project_file').textContent = project.project_path || '-';
+        refreshWorkspaceHud();
       }
 
       function formatRuntimeHealth(health) {
@@ -1132,6 +1284,7 @@ HTML = """
         const project = r.data && r.data.project ? r.data.project : null;
         if (project) {
           state.project = project;
+          renderProjectOptions(project);
           renderProjectMeta(project);
           renderPendingInput(project.pending_input || null);
         }
@@ -1139,6 +1292,7 @@ HTML = """
         await loadHistory();
         restoreMessageDraft(projectId);
         renderPromptHistory(projectId);
+        refreshWorkspaceHud();
       }
 
       async function exportProject() {
@@ -1173,8 +1327,10 @@ HTML = """
         renderJsonOut(r.data);
         if (r.data && r.data.project) {
           state.project = r.data.project;
+          renderProjectOptions(r.data.project);
           renderProjectMeta(r.data.project);
           renderPendingInput(r.data.project.pending_input || null);
+          refreshWorkspaceHud();
         }
         await refreshProjects();
         await loadHistory();
@@ -1219,7 +1375,9 @@ HTML = """
         renderPendingInput(pending);
         if (r.data && r.data.project) {
           state.project = r.data.project;
+          renderProjectOptions(r.data.project);
           renderProjectMeta(r.data.project);
+          refreshWorkspaceHud();
         }
         const msgs = Array.isArray(r.data.messages) ? r.data.messages : [];
         if (msgs.length > 0) {
@@ -1305,6 +1463,16 @@ HTML = """
           `/api/task/${encodeURIComponent(tid)}/artifact-diff?other_task_id=${encodeURIComponent(other)}&artifact=${encodeURIComponent(artifact)}`
         );
         renderJsonOut(r.data);
+      }
+
+      function sendWebSearchHint() {
+        const topk = String(document.getElementById('web_topk').value || '5').trim();
+        const msg = [
+          "请先做web search证据收集，再进入后续设计流程。",
+          `建议参数: {"web_search_enabled": true, "web_topk": ${topk || "5"}}`,
+          "请输出来源链接和时间范围。"
+        ].join("\n");
+        setMessageInput(msg);
       }
 
       async function attachPath() {
@@ -1515,6 +1683,7 @@ HTML = """
         await saveProject();
         renderPromptHistory(currentProjectKey());
         await loadRunRuntime();
+        refreshWorkspaceHud();
       }
 
       boot();

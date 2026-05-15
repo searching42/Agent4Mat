@@ -12,6 +12,7 @@ Open: `http://127.0.0.1:8787`
 ## Scope
 - chat-first interaction:
   - user sends natural-language messages
+  - center-first chat workspace layout: chat is primary canvas, advanced controls are folded into side drawers
   - backend orchestrates `agent-intake -> agent-approve -> agent-run-json`
   - if info is missing, assistant returns structured clarification questions
   - `need_user_input` 时会弹出缺失字段表单卡片，可直接填写并回传 patch
@@ -36,6 +37,8 @@ Open: `http://127.0.0.1:8787`
   - task compare / artifact diff shortcuts for two-run diffing
   - recent stage events (intake/approve/run/step)
   - artifact preview and timeline / validation shortcuts
+- web search interaction:
+  - explicit `Web Search` action button in composer injects a search-first prompt template
 - chat transcript:
   - stores per-turn event trace messages (`event_trace`) to show stage timeline inline
   - includes grouped timeline board (Running / Completed / Failed) from `/api/task/<task_id>/timeline`

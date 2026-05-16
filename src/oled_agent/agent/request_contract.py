@@ -511,6 +511,40 @@ def _validate_evaluation_report_minimal(instance: Dict[str, Any], schema: Dict[s
         if item.get("status") not in ("pass", "warn", "fail"):
             raise RequestValidationError(f"$.checks[{idx}].status: must be one of: ['pass', 'warn', 'fail']")
 
+    checks_total = len(checks)
+    pass_count_calc = sum(1 for item in checks if item.get("status") == "pass")
+    warn_count_calc = sum(1 for item in checks if item.get("status") == "warn")
+    fail_count_calc = sum(1 for item in checks if item.get("status") == "fail")
+    if summary.get("checks_total") != checks_total:
+        raise RequestValidationError("$.summary.checks_total: must equal len($.checks)")
+    if summary.get("pass_count") != pass_count_calc:
+        raise RequestValidationError("$.summary.pass_count: must equal pass status count in $.checks")
+    if summary.get("warn_count") != warn_count_calc:
+        raise RequestValidationError("$.summary.warn_count: must equal warn status count in $.checks")
+    if summary.get("fail_count") != fail_count_calc:
+        raise RequestValidationError("$.summary.fail_count: must equal fail status count in $.checks")
+
+    if metrics.get("record_count") != (metrics.get("success_count") + metrics.get("failed_count")):
+        raise RequestValidationError("$.metrics.record_count: must equal success_count + failed_count")
+
+    status_expected = "fail" if fail_count_calc > 0 else ("warn" if warn_count_calc > 0 else "pass")
+    if instance.get("status") != status_expected:
+        raise RequestValidationError("$.status: must match summary/checks derived status")
+
+    failure_diag = instance.get("failure_diagnostics")
+    if not isinstance(failure_diag, dict):
+        raise RequestValidationError("$.failure_diagnostics: must be object")
+    failed_count = failure_diag.get("failed_count")
+    if not isinstance(failed_count, int) or failed_count < 0:
+        raise RequestValidationError("$.failure_diagnostics.failed_count: must be integer >= 0")
+    for key in ("latest_failed_step", "latest_failed_error", "latest_failure_kind", "latest_failure_detail"):
+        if not isinstance(failure_diag.get(key), str):
+            raise RequestValidationError(f"$.failure_diagnostics.{key}: must be string")
+    if failed_count != metrics.get("failed_count"):
+        raise RequestValidationError("$.failure_diagnostics.failed_count: must equal $.metrics.failed_count")
+    if failed_count > 0 and not str(failure_diag.get("latest_failed_step") or "").strip():
+        raise RequestValidationError("$.failure_diagnostics.latest_failed_step: must be non-empty when failed_count > 0")
+
 
 def _validate_guardrails_report_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
     _validate_required_and_additional(instance, schema, path="$")
@@ -554,6 +588,57 @@ def _validate_guardrails_report_minimal(instance: Dict[str, Any], schema: Dict[s
             raise RequestValidationError(f"$.checks[{idx}].strict_blocking: must be boolean")
         if not isinstance(item.get("message"), str) or not str(item.get("message")).strip():
             raise RequestValidationError(f"$.checks[{idx}].message: must be non-empty string")
+
+    checks_total = len(checks)
+    pass_count_calc = sum(1 for item in checks if item.get("status") == "pass")
+    warn_count_calc = sum(1 for item in checks if item.get("status") == "warn")
+    fail_count_calc = sum(1 for item in checks if item.get("status") == "fail")
+    if summary.get("checks_total") != checks_total:
+        raise RequestValidationError("$.summary.checks_total: must equal len($.checks)")
+    if summary.get("pass_count") != pass_count_calc:
+        raise RequestValidationError("$.summary.pass_count: must equal pass status count in $.checks")
+    if summary.get("warn_count") != warn_count_calc:
+        raise RequestValidationError("$.summary.warn_count: must equal warn status count in $.checks")
+    if summary.get("fail_count") != fail_count_calc:
+        raise RequestValidationError("$.summary.fail_count: must equal fail status count in $.checks")
+
+    strict_blocking_expected = [
+        str(item.get("name") or "")
+        for item in checks
+        if bool(item.get("strict_blocking")) and item.get("status") in ("warn", "fail")
+    ]
+    if summary.get("strict_blocking_count") != len(strict_blocking_expected):
+        raise RequestValidationError("$.summary.strict_blocking_count: must equal strict blocking check count")
+    strict_blocking_checks = instance.get("strict_blocking_checks")
+    if set(strict_blocking_checks) != set(strict_blocking_expected):
+        raise RequestValidationError("$.strict_blocking_checks: must match strict blocking checks derived from $.checks")
+
+    blocking_expected = [str(item.get("name") or "") for item in checks if item.get("status") == "fail"]
+    blocking_checks = instance.get("blocking_checks")
+    if set(blocking_checks) != set(blocking_expected):
+        raise RequestValidationError("$.blocking_checks: must match fail checks derived from $.checks")
+
+    status_expected = "fail" if fail_count_calc > 0 else ("warn" if warn_count_calc > 0 else "pass")
+    if instance.get("status") != status_expected:
+        raise RequestValidationError("$.status: must match summary/checks derived status")
+    strict_status_expected = "fail" if len(strict_blocking_expected) > 0 else "pass"
+    if instance.get("strict_status") != strict_status_expected:
+        raise RequestValidationError("$.strict_status: must match strict blocking checks derived status")
+
+    failure_diag = instance.get("failure_diagnostics")
+    if not isinstance(failure_diag, dict):
+        raise RequestValidationError("$.failure_diagnostics: must be object")
+    failed_count = failure_diag.get("failed_count")
+    if not isinstance(failed_count, int) or failed_count < 0:
+        raise RequestValidationError("$.failure_diagnostics.failed_count: must be integer >= 0")
+    for key in ("latest_failed_step", "latest_failed_error", "latest_failure_kind", "latest_failure_detail"):
+        if not isinstance(failure_diag.get(key), str):
+            raise RequestValidationError(f"$.failure_diagnostics.{key}: must be string")
+    if instance.get("execution_status") == "failed":
+        if failed_count <= 0:
+            raise RequestValidationError("$.failure_diagnostics.failed_count: must be > 0 when execution_status=failed")
+        if not str(failure_diag.get("latest_failed_step") or "").strip():
+            raise RequestValidationError("$.failure_diagnostics.latest_failed_step: must be non-empty when execution_status=failed")
 
 
 def _validate_memory_context_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:

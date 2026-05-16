@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
+from oled_agent.agent.failure_diagnostics import execution_failure_diagnostics
+
 
 _STUB_ADAPTERS = {
     "stub_generator",
@@ -101,6 +103,7 @@ def build_guardrails_report(
     execution_status = str(execution_payload.get("status") or "").strip()
     if execution_status not in ("success", "failed"):
         execution_status = "failed"
+    failure_diag = execution_failure_diagnostics(execution_payload)
     succeeded_tools = {str(r.get("name") or "") for r in records if str(r.get("status") or "") == "success"}
 
     tool_state = tool_state if isinstance(tool_state, dict) else {}
@@ -129,6 +132,44 @@ def build_guardrails_report(
         _check("execution_status", "pass", "execution status is success", strict_blocking=True)
     else:
         _check("execution_status", "fail", "execution status is failed", strict_blocking=True)
+
+    if execution_status == "failed":
+        failed_count = int(failure_diag.get("failed_count") or 0)
+        latest_step = str(failure_diag.get("latest_failed_step") or "").strip()
+        latest_kind = str(failure_diag.get("latest_failure_kind") or "").strip()
+        if failed_count <= 0:
+            _check(
+                "failure_diagnostics",
+                "fail",
+                "execution failed but no failed execution records were found",
+                strict_blocking=True,
+            )
+        elif not latest_step:
+            _check(
+                "failure_diagnostics",
+                "fail",
+                "execution failed but latest_failed_step is missing",
+                strict_blocking=True,
+                details={"failed_count": failed_count},
+            )
+        elif latest_kind in ("", "unknown"):
+            _check(
+                "failure_diagnostics",
+                "warn",
+                "execution failed but failure kind classification is weak",
+                strict_blocking=False,
+                details={"latest_failed_step": latest_step, "latest_failure_kind": latest_kind},
+            )
+        else:
+            _check(
+                "failure_diagnostics",
+                "pass",
+                "failure diagnostics are available",
+                strict_blocking=False,
+                details={"latest_failed_step": latest_step, "latest_failure_kind": latest_kind},
+            )
+    else:
+        _check("failure_diagnostics", "pass", "execution succeeded; no failure diagnostics required", strict_blocking=False)
 
     adapters = []
     stub_adapters = set()
@@ -306,6 +347,9 @@ def build_guardrails_report(
             "fallback_adapters": sorted(fallback_adapters),
             "candidate_rows": candidate_rows,
             "scored_rows": scored_rows,
+            "latest_failure_kind": str(failure_diag.get("latest_failure_kind") or ""),
+            "latest_failed_step": str(failure_diag.get("latest_failed_step") or ""),
         },
+        "failure_diagnostics": failure_diag,
         "checks": checks,
     }

@@ -13,38 +13,108 @@
     "status",
     "summary",
     "metrics",
+    "failure_diagnostics",
     "checks"
   ],
   "properties": {
-    "schema_version": { "type": "string" },
-    "generated_at": { "type": "string" },
-    "task_id": { "type": "string" },
-    "execution_mode": { "type": "string" },
-    "execution_status": { "type": "string", "enum": ["success", "failed"] },
-    "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
+    "schema_version": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "execution_mode": {
+      "type": "string"
+    },
+    "execution_status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "failed"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ]
+    },
     "summary": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["checks_total", "pass_count", "warn_count", "fail_count"],
+      "required": [
+        "checks_total",
+        "pass_count",
+        "warn_count",
+        "fail_count"
+      ],
       "properties": {
-        "checks_total": { "type": "integer", "minimum": 0 },
-        "pass_count": { "type": "integer", "minimum": 0 },
-        "warn_count": { "type": "integer", "minimum": 0 },
-        "fail_count": { "type": "integer", "minimum": 0 }
+        "checks_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pass_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warn_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fail_count": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "metrics": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["record_count", "success_count", "failed_count", "fallback_count", "adapters"],
+      "required": [
+        "record_count",
+        "success_count",
+        "failed_count",
+        "fallback_count",
+        "adapters"
+      ],
       "properties": {
-        "record_count": { "type": "integer", "minimum": 0 },
-        "success_count": { "type": "integer", "minimum": 0 },
-        "failed_count": { "type": "integer", "minimum": 0 },
-        "fallback_count": { "type": "integer", "minimum": 0 },
-        "decision_fallback": { "type": "boolean" },
-        "adapters": { "type": "array", "items": { "type": "string" } },
-        "duration_seconds": { "type": ["number", "null"], "minimum": 0 }
+        "record_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "success_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fallback_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "decision_fallback": {
+          "type": "boolean"
+        },
+        "adapters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "duration_seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
       }
     },
     "artifact_presence": {
@@ -56,12 +126,65 @@
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["name", "status", "message"],
+        "required": [
+          "name",
+          "status",
+          "message"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
-          "message": { "type": "string" },
-          "details": { "type": ["object", "array", "string", "number", "boolean", "null"] }
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "warn",
+              "fail"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "failure_diagnostics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "failed_count",
+        "latest_failed_step",
+        "latest_failed_error",
+        "latest_failure_kind",
+        "latest_failure_detail"
+      ],
+      "properties": {
+        "failed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latest_failed_step": {
+          "type": "string"
+        },
+        "latest_failed_error": {
+          "type": "string"
+        },
+        "latest_failure_kind": {
+          "type": "string"
+        },
+        "latest_failure_detail": {
+          "type": "string"
         }
       }
     }

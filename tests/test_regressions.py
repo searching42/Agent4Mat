@@ -16,6 +16,8 @@ from pathlib import Path
 from unittest import mock
 
 from oled_agent.agent.intake import approve_task, run_intake
+from oled_agent.agent.evaluator import build_evaluation_report
+from oled_agent.agent.guardrails import build_guardrails_report
 from oled_agent.agent.session import execute_request
 from oled_agent.agent.request_contract import (
     RequestValidationError,
@@ -61,6 +63,73 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) ->
 
 
 class RegressionTests(unittest.TestCase):
+    def test_reports_include_aligned_failure_diagnostics_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            execution_payload = {
+                "status": "failed",
+                "started_at": "2026-05-16T00:00:00+00:00",
+                "ended_at": "2026-05-16T00:00:05+00:00",
+                "records": [
+                    {
+                        "name": "score_candidates",
+                        "status": "failed",
+                        "error": "adapter timeout while waiting remote runtime",
+                        "result": {"error": "adapter_timeout", "returncode": 124},
+                    }
+                ],
+            }
+            evaluation = build_evaluation_report(
+                task_id="task_failure_diag_eval",
+                execution_mode="single_step",
+                execution_payload=execution_payload,
+                decision_summary=None,
+                task_state={"current_state": "FAILED"},
+                tool_state={},
+                workspace_root=td_path,
+            )
+            failure_diag_eval = evaluation.get("failure_diagnostics") if isinstance(evaluation.get("failure_diagnostics"), dict) else {}
+            self.assertEqual(int(failure_diag_eval.get("failed_count") or 0), 1)
+            self.assertEqual(str(failure_diag_eval.get("latest_failed_step") or ""), "score_candidates")
+            self.assertEqual(str(failure_diag_eval.get("latest_failure_kind") or ""), "timeout")
+
+            guardrails = build_guardrails_report(
+                task_id="task_failure_diag_guard",
+                execution_mode="single_step",
+                execution_payload=execution_payload,
+                tool_state={},
+                workspace_root=td_path,
+                constraints={},
+                web_evidence_path=None,
+            )
+            failure_diag_guard = guardrails.get("failure_diagnostics") if isinstance(guardrails.get("failure_diagnostics"), dict) else {}
+            self.assertEqual(int(failure_diag_guard.get("failed_count") or 0), 1)
+            self.assertEqual(str(failure_diag_guard.get("latest_failed_step") or ""), "score_candidates")
+            self.assertEqual(str(failure_diag_guard.get("latest_failure_kind") or ""), "timeout")
+
+    def test_guardrails_failure_diagnostics_check_fails_when_execution_failed_without_failed_records(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "status": "failed",
+                "records": [
+                    {"name": "score_candidates", "status": "success", "result": {"adapter": "unimol_score_adapter_v1"}},
+                ],
+            }
+            report = build_guardrails_report(
+                task_id="task_guard_fail_diag",
+                execution_mode="single_step",
+                execution_payload=payload,
+                tool_state={},
+                workspace_root=td_path,
+                constraints={},
+                web_evidence_path=None,
+            )
+            checks = report.get("checks") if isinstance(report.get("checks"), list) else []
+            row = next((x for x in checks if isinstance(x, dict) and x.get("name") == "failure_diagnostics"), {})
+            self.assertEqual(str(row.get("status") or ""), "fail")
+            self.assertTrue(bool(row.get("strict_blocking")))
+
     def test_clean_dataset_rejects_empty_input_path_instead_of_using_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -1816,6 +1885,13 @@ class RegressionTests(unittest.TestCase):
                     "adapters": ["a1", "a2"],
                     "duration_seconds": 3.5,
                 },
+                "failure_diagnostics": {
+                    "failed_count": 0,
+                    "latest_failed_step": "",
+                    "latest_failed_error": "",
+                    "latest_failure_kind": "",
+                    "latest_failure_detail": "",
+                },
                 "checks": [
                     {"name": "execution_records", "status": "pass", "message": "ok"},
                     {"name": "task_state_terminal", "status": "pass", "message": "ok"},
@@ -1842,9 +1918,46 @@ class RegressionTests(unittest.TestCase):
                     "fallback_count": 0,
                     "adapters": [],
                 },
+                "failure_diagnostics": {
+                    "failed_count": 0,
+                    "latest_failed_step": "",
+                    "latest_failed_error": "",
+                    "latest_failure_kind": "",
+                    "latest_failure_detail": "",
+                },
                 "checks": [
                     {"name": "fallback_usage", "status": "unknown", "message": "x"},
                 ],
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_evaluation_report_payload(payload, workspace_root=td_path)
+
+    def test_evaluation_report_schema_rejects_summary_count_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-16T00:00:00Z",
+                "task_id": "task_eval_bad_counts",
+                "execution_mode": "full_pipeline",
+                "execution_status": "success",
+                "status": "pass",
+                "summary": {"checks_total": 2, "pass_count": 2, "warn_count": 0, "fail_count": 0},
+                "metrics": {
+                    "record_count": 1,
+                    "success_count": 1,
+                    "failed_count": 0,
+                    "fallback_count": 0,
+                    "adapters": [],
+                },
+                "failure_diagnostics": {
+                    "failed_count": 0,
+                    "latest_failed_step": "",
+                    "latest_failed_error": "",
+                    "latest_failure_kind": "",
+                    "latest_failure_detail": "",
+                },
+                "checks": [{"name": "execution_records", "status": "pass", "message": "ok"}],
             }
             with self.assertRaises(RequestValidationError):
                 validate_evaluation_report_payload(payload, workspace_root=td_path)
@@ -1870,6 +1983,13 @@ class RegressionTests(unittest.TestCase):
                 "blocking_checks": [],
                 "strict_blocking_checks": ["fallback_adapters"],
                 "metrics": {"record_count": 8, "adapters": ["a1"]},
+                "failure_diagnostics": {
+                    "failed_count": 0,
+                    "latest_failed_step": "",
+                    "latest_failed_error": "",
+                    "latest_failure_kind": "",
+                    "latest_failure_detail": "",
+                },
                 "checks": [
                     {"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"},
                     {"name": "fallback_adapters", "status": "warn", "strict_blocking": True, "message": "warn"},
@@ -1899,7 +2019,50 @@ class RegressionTests(unittest.TestCase):
                 "blocking_checks": [],
                 "strict_blocking_checks": [],
                 "metrics": {},
+                "failure_diagnostics": {
+                    "failed_count": 0,
+                    "latest_failed_step": "",
+                    "latest_failed_error": "",
+                    "latest_failure_kind": "",
+                    "latest_failure_detail": "",
+                },
                 "checks": [{"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"}],
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_guardrails_report_payload(payload, workspace_root=td_path)
+
+    def test_guardrails_report_schema_rejects_strict_blocking_count_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-16T00:00:00Z",
+                "task_id": "task_guard_bad_counts",
+                "execution_mode": "full_pipeline",
+                "execution_status": "success",
+                "status": "warn",
+                "strict_status": "fail",
+                "summary": {
+                    "checks_total": 2,
+                    "pass_count": 1,
+                    "warn_count": 1,
+                    "fail_count": 0,
+                    "strict_blocking_count": 0,
+                },
+                "blocking_checks": [],
+                "strict_blocking_checks": ["fallback_adapters"],
+                "metrics": {"record_count": 1, "adapters": ["a1"]},
+                "failure_diagnostics": {
+                    "failed_count": 0,
+                    "latest_failed_step": "",
+                    "latest_failed_error": "",
+                    "latest_failure_kind": "",
+                    "latest_failure_detail": "",
+                },
+                "checks": [
+                    {"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"},
+                    {"name": "fallback_adapters", "status": "warn", "strict_blocking": True, "message": "warn"},
+                ],
             }
             with self.assertRaises(RequestValidationError):
                 validate_guardrails_report_payload(payload, workspace_root=td_path)
@@ -6007,6 +6170,13 @@ class RegressionTests(unittest.TestCase):
                             "fallback_count": 0,
                             "adapters": ["template_score_cmd"],
                         },
+                        "failure_diagnostics": {
+                            "failed_count": 0,
+                            "latest_failed_step": "",
+                            "latest_failed_error": "",
+                            "latest_failure_kind": "",
+                            "latest_failure_detail": "",
+                        },
                         "checks": [{"name": "execution_records", "status": "pass", "message": "ok"}],
                     },
                     ensure_ascii=False,
@@ -6042,6 +6212,13 @@ class RegressionTests(unittest.TestCase):
                         "status": "pass",
                         "summary": {"checks_total": 1, "pass_count": 1, "warn_count": 0, "fail_count": 0},
                         "metrics": {"record_count": 1, "success_count": 1, "failed_count": 0, "fallback_count": 0, "adapters": []},
+                        "failure_diagnostics": {
+                            "failed_count": 0,
+                            "latest_failed_step": "",
+                            "latest_failed_error": "",
+                            "latest_failure_kind": "",
+                            "latest_failure_detail": "",
+                        },
                         "checks": [{"name": "execution_records", "status": "invalid", "message": "x"}],
                     },
                     ensure_ascii=False,
@@ -6086,6 +6263,13 @@ class RegressionTests(unittest.TestCase):
                         "blocking_checks": [],
                         "strict_blocking_checks": [],
                         "metrics": {"record_count": 1, "adapters": ["x"]},
+                        "failure_diagnostics": {
+                            "failed_count": 0,
+                            "latest_failed_step": "",
+                            "latest_failed_error": "",
+                            "latest_failure_kind": "",
+                            "latest_failure_detail": "",
+                        },
                         "checks": [{"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"}],
                     },
                     ensure_ascii=False,
@@ -6130,6 +6314,13 @@ class RegressionTests(unittest.TestCase):
                         "blocking_checks": [],
                         "strict_blocking_checks": [],
                         "metrics": {},
+                        "failure_diagnostics": {
+                            "failed_count": 0,
+                            "latest_failed_step": "",
+                            "latest_failed_error": "",
+                            "latest_failure_kind": "",
+                            "latest_failure_detail": "",
+                        },
                         "checks": [{"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"}],
                     },
                     ensure_ascii=False,

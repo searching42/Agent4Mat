@@ -13,43 +13,161 @@
     "status",
     "strict_status",
     "summary",
+    "failure_diagnostics",
     "checks"
   ],
   "properties": {
-    "schema_version": { "type": "string" },
-    "generated_at": { "type": "string" },
-    "task_id": { "type": "string" },
-    "execution_mode": { "type": "string" },
-    "execution_status": { "type": "string", "enum": ["success", "failed"] },
-    "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
-    "strict_status": { "type": "string", "enum": ["pass", "fail"] },
+    "schema_version": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "execution_mode": {
+      "type": "string"
+    },
+    "execution_status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "failed"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ]
+    },
+    "strict_status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
     "summary": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["checks_total", "pass_count", "warn_count", "fail_count", "strict_blocking_count"],
+      "required": [
+        "checks_total",
+        "pass_count",
+        "warn_count",
+        "fail_count",
+        "strict_blocking_count"
+      ],
       "properties": {
-        "checks_total": { "type": "integer", "minimum": 0 },
-        "pass_count": { "type": "integer", "minimum": 0 },
-        "warn_count": { "type": "integer", "minimum": 0 },
-        "fail_count": { "type": "integer", "minimum": 0 },
-        "strict_blocking_count": { "type": "integer", "minimum": 0 }
+        "checks_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pass_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warn_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fail_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "strict_blocking_count": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
-    "blocking_checks": { "type": "array", "items": { "type": "string" } },
-    "strict_blocking_checks": { "type": "array", "items": { "type": "string" } },
-    "metrics": { "type": "object", "additionalProperties": true },
+    "blocking_checks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "strict_blocking_checks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": true
+    },
     "checks": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["name", "status", "strict_blocking", "message"],
+        "required": [
+          "name",
+          "status",
+          "strict_blocking",
+          "message"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
-          "strict_blocking": { "type": "boolean" },
-          "message": { "type": "string" },
-          "details": { "type": ["object", "array", "string", "number", "boolean", "null"] }
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "warn",
+              "fail"
+            ]
+          },
+          "strict_blocking": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "failure_diagnostics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "failed_count",
+        "latest_failed_step",
+        "latest_failed_error",
+        "latest_failure_kind",
+        "latest_failure_detail"
+      ],
+      "properties": {
+        "failed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latest_failed_step": {
+          "type": "string"
+        },
+        "latest_failed_error": {
+          "type": "string"
+        },
+        "latest_failure_kind": {
+          "type": "string"
+        },
+        "latest_failure_detail": {
+          "type": "string"
         }
       }
     }

@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from oled_agent.agent.failure_diagnostics import execution_failure_diagnostics
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -103,6 +105,7 @@ def build_evaluation_report(
     decision_fallback = _decision_has_fallback(decision_summary)
     execution_status = str(execution_payload.get("status") or "").strip()
     execution_status = execution_status if execution_status in ("success", "failed") else "failed"
+    failure_diag = execution_failure_diagnostics(execution_payload)
 
     tool_state = tool_state if isinstance(tool_state, dict) else {}
     artifact_presence = {
@@ -178,6 +181,33 @@ def build_evaluation_report(
     else:
         _check("fallback_usage", "pass", "no fallback path detected")
 
+    if failed_count > 0:
+        latest_step = str(failure_diag.get("latest_failed_step") or "").strip()
+        latest_kind = str(failure_diag.get("latest_failure_kind") or "").strip()
+        if not latest_step:
+            _check(
+                "failure_diagnostics",
+                "fail",
+                "failed records exist but latest_failed_step is missing",
+                {"failed_count": failed_count},
+            )
+        elif not latest_kind:
+            _check(
+                "failure_diagnostics",
+                "warn",
+                "failed records exist but latest_failure_kind is empty",
+                {"latest_failed_step": latest_step},
+            )
+        else:
+            _check(
+                "failure_diagnostics",
+                "pass",
+                "failure diagnostics are available",
+                {"latest_failed_step": latest_step, "latest_failure_kind": latest_kind},
+            )
+    else:
+        _check("failure_diagnostics", "pass", "no failed records")
+
     successful_tools = {
         str(r.get("name") or "")
         for r in records
@@ -230,7 +260,10 @@ def build_evaluation_report(
             "decision_fallback": decision_fallback,
             "adapters": adapters,
             "duration_seconds": _duration_seconds(execution_payload),
+            "latest_failure_kind": str(failure_diag.get("latest_failure_kind") or ""),
+            "latest_failed_step": str(failure_diag.get("latest_failed_step") or ""),
         },
+        "failure_diagnostics": failure_diag,
         "artifact_presence": artifact_presence,
         "checks": checks,
     }

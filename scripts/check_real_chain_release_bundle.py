@@ -11,6 +11,22 @@ def _load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _resolve_path(raw: str, workspace_root: Path) -> Path:
+    p = Path(str(raw or "").strip())
+    if not p.is_absolute():
+        p = (workspace_root / p).resolve()
+    else:
+        p = p.resolve()
+    return p
+
+
+def _to_int(value: Any, *, default: int = -1) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
 def _check_bundle(
     *,
     workspace_root: Path,
@@ -23,6 +39,8 @@ def _check_bundle(
     failures = []
 
     baseline_status = ""
+    baseline_run_count = -1
+    baseline_runs_checked = 0
     archive_status = ""
     missing_required_count = -1
 
@@ -36,6 +54,143 @@ def _check_bundle(
                 failures.append(
                     {"name": "baseline_summary_status", "message": f"baseline_summary.json status is not pass: {baseline_status}"}
                 )
+
+            baseline_run_count = _to_int(baseline_payload.get("run_count"), default=-1)
+            runs = baseline_payload.get("runs") if isinstance(baseline_payload.get("runs"), list) else []
+            if baseline_run_count >= 0 and baseline_run_count == len(runs):
+                checks.append(
+                    {
+                        "name": "baseline_summary_run_count",
+                        "status": "pass",
+                        "message": f"baseline run_count matches runs length: {baseline_run_count}",
+                    }
+                )
+            else:
+                failures.append(
+                    {
+                        "name": "baseline_summary_run_count",
+                        "message": f"baseline run_count mismatch: run_count={baseline_run_count} len(runs)={len(runs)}",
+                    }
+                )
+
+            for idx, item in enumerate(runs, start=1):
+                if not isinstance(item, dict):
+                    failures.append({"name": "baseline_run_row", "message": f"run row #{idx} is not object"})
+                    continue
+                baseline_runs_checked += 1
+                task_id = str(item.get("task_id") or f"run_{idx}")
+
+                strict_raw = str(item.get("strict_summary") or "").strip()
+                release_raw = str(item.get("release_evidence_json") or "").strip()
+                if not strict_raw:
+                    failures.append({"name": f"{task_id}:strict_summary", "message": "strict_summary is missing"})
+                    continue
+                if not release_raw:
+                    failures.append({"name": f"{task_id}:release_evidence_json", "message": "release_evidence_json is missing"})
+                    continue
+
+                strict_path = _resolve_path(strict_raw, workspace_root)
+                release_path = _resolve_path(release_raw, workspace_root)
+                if not strict_path.exists():
+                    failures.append({"name": f"{task_id}:strict_summary", "message": f"strict summary not found: {strict_path}"})
+                    continue
+                if not release_path.exists():
+                    failures.append({"name": f"{task_id}:release_evidence_json", "message": f"release evidence not found: {release_path}"})
+                    continue
+
+                strict_payload = _load_json(strict_path)
+                release_payload = _load_json(release_path)
+
+                guardrails_strict_status = str(
+                    item.get("guardrails_strict_status")
+                    or strict_payload.get("guardrails_strict_status")
+                    or ""
+                ).strip()
+                evaluation_failed_count = _to_int(
+                    item.get("evaluation_failed_count")
+                    if item.get("evaluation_failed_count") is not None
+                    else strict_payload.get("evaluation_failed_count"),
+                    default=-1,
+                )
+                guardrails_failed_count = _to_int(
+                    item.get("guardrails_failed_count")
+                    if item.get("guardrails_failed_count") is not None
+                    else strict_payload.get("guardrails_failed_count"),
+                    default=-1,
+                )
+
+                if guardrails_strict_status == "pass":
+                    checks.append(
+                        {
+                            "name": f"{task_id}:guardrails_strict_status",
+                            "status": "pass",
+                            "message": "guardrails_strict_status=pass",
+                        }
+                    )
+                else:
+                    failures.append(
+                        {
+                            "name": f"{task_id}:guardrails_strict_status",
+                            "message": f"guardrails_strict_status is not pass: {guardrails_strict_status}",
+                        }
+                    )
+
+                if evaluation_failed_count == 0:
+                    checks.append(
+                        {
+                            "name": f"{task_id}:evaluation_failed_count",
+                            "status": "pass",
+                            "message": "evaluation_failed_count=0",
+                        }
+                    )
+                else:
+                    failures.append(
+                        {
+                            "name": f"{task_id}:evaluation_failed_count",
+                            "message": f"evaluation_failed_count is not 0: {evaluation_failed_count}",
+                        }
+                    )
+
+                if guardrails_failed_count == 0:
+                    checks.append(
+                        {
+                            "name": f"{task_id}:guardrails_failed_count",
+                            "status": "pass",
+                            "message": "guardrails_failed_count=0",
+                        }
+                    )
+                else:
+                    failures.append(
+                        {
+                            "name": f"{task_id}:guardrails_failed_count",
+                            "message": f"guardrails_failed_count is not 0: {guardrails_failed_count}",
+                        }
+                    )
+
+                release_checks = release_payload.get("checks") if isinstance(release_payload.get("checks"), dict) else {}
+                release_guardrails_ok = bool(release_checks.get("guardrails_strict_status_pass", False))
+                release_eval_zero = bool(release_checks.get("evaluation_failure_diag_zero", False))
+                release_guard_zero = bool(release_checks.get("guardrails_failure_diag_zero", False))
+                if release_guardrails_ok and release_eval_zero and release_guard_zero:
+                    checks.append(
+                        {
+                            "name": f"{task_id}:release_evidence_diagnostics",
+                            "status": "pass",
+                            "message": "release evidence diagnostics checks all pass",
+                        }
+                    )
+                else:
+                    failures.append(
+                        {
+                            "name": f"{task_id}:release_evidence_diagnostics",
+                            "message": (
+                                "release evidence diagnostics checks failed: "
+                                f"guardrails_strict_status_pass={release_guardrails_ok}, "
+                                f"evaluation_failure_diag_zero={release_eval_zero}, "
+                                f"guardrails_failure_diag_zero={release_guard_zero}"
+                            ),
+                        }
+                    )
         except Exception as exc:
             failures.append({"name": "baseline_summary_parse", "message": f"failed to parse baseline summary: {exc}"})
     else:
@@ -79,6 +234,8 @@ def _check_bundle(
         "base_task_id": base_task_id,
         "workspace_root": str(workspace_root),
         "baseline_summary_path": str(baseline_summary_path),
+        "baseline_run_count": baseline_run_count,
+        "baseline_runs_checked": baseline_runs_checked,
         "archive_manifest_path": str(archive_manifest_path),
         "archive_tar_gz_path": str(tar_gz_path),
         "baseline_status": baseline_status,

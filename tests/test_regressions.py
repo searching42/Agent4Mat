@@ -7997,6 +7997,45 @@ class PlanProgressAssetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
             base_task_id = "demo_bundle_check"
+            run_task_id = f"{base_task_id}_r1"
+            run_dir = td_path / "runs" / "agent" / run_task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            strict_path = run_dir / "strict_acceptance_summary.json"
+            strict_path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "task_id": run_task_id,
+                        "guardrails_strict_status": "pass",
+                        "evaluation_failed_count": 0,
+                        "guardrails_failed_count": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result_path = run_dir / "acceptance_result.json"
+            result_path.write_text(json.dumps({"task_id": run_task_id, "status": "success"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            release_json = run_dir / "release_evidence.json"
+            release_json.write_text(
+                json.dumps(
+                    {
+                        "overall": "pass",
+                        "checks": {
+                            "guardrails_strict_status_pass": True,
+                            "evaluation_failure_diag_zero": True,
+                            "guardrails_failure_diag_zero": True,
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             baseline_dir = td_path / "runs" / "agent" / base_task_id
             baseline_dir.mkdir(parents=True, exist_ok=True)
@@ -8006,8 +8045,18 @@ class PlanProgressAssetsTests(unittest.TestCase):
                     {
                         "status": "pass",
                         "base_task_id": base_task_id,
-                        "run_count": 3,
-                        "runs": [],
+                        "run_count": 1,
+                        "runs": [
+                            {
+                                "task_id": run_task_id,
+                                "strict_summary": str(strict_path.relative_to(td_path)),
+                                "result_json": str(result_path.relative_to(td_path)),
+                                "release_evidence_json": str(release_json.relative_to(td_path)),
+                                "guardrails_strict_status": "pass",
+                                "evaluation_failed_count": 0,
+                                "guardrails_failed_count": 0,
+                            }
+                        ],
                         "failures": [],
                     },
                     ensure_ascii=False,
@@ -8059,6 +8108,117 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(payload.get("status"), "pass")
             self.assertEqual(payload.get("baseline_status"), "pass")
             self.assertEqual(payload.get("archive_status"), "pass")
+            self.assertEqual(int(payload.get("baseline_runs_checked") or 0), 1)
+
+    def test_check_real_chain_release_bundle_script_fails_on_failure_diag_mismatch(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            base_task_id = "demo_bundle_check_bad"
+            run_task_id = f"{base_task_id}_r1"
+            run_dir = td_path / "runs" / "agent" / run_task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            strict_path = run_dir / "strict_acceptance_summary.json"
+            strict_path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "task_id": run_task_id,
+                        "guardrails_strict_status": "pass",
+                        "evaluation_failed_count": 1,
+                        "guardrails_failed_count": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result_path = run_dir / "acceptance_result.json"
+            result_path.write_text(json.dumps({"task_id": run_task_id, "status": "success"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            release_json = run_dir / "release_evidence.json"
+            release_json.write_text(
+                json.dumps(
+                    {
+                        "overall": "pass",
+                        "checks": {
+                            "guardrails_strict_status_pass": True,
+                            "evaluation_failure_diag_zero": False,
+                            "guardrails_failure_diag_zero": True,
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            baseline_dir = td_path / "runs" / "agent" / base_task_id
+            baseline_dir.mkdir(parents=True, exist_ok=True)
+            baseline_summary = baseline_dir / "baseline_summary.json"
+            baseline_summary.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "base_task_id": base_task_id,
+                        "run_count": 1,
+                        "runs": [
+                            {
+                                "task_id": run_task_id,
+                                "strict_summary": str(strict_path.relative_to(td_path)),
+                                "result_json": str(result_path.relative_to(td_path)),
+                                "release_evidence_json": str(release_json.relative_to(td_path)),
+                            }
+                        ],
+                        "failures": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            archive_dir = td_path / "runs" / "archive" / base_task_id
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archive_manifest = archive_dir / "archive_manifest.json"
+            archive_manifest.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "base_task_id": base_task_id,
+                        "missing_required_count": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (archive_dir / "archive_manifest.md").write_text("# manifest\n", encoding="utf-8")
+
+            script = repo_root / "scripts" / "check_real_chain_release_bundle.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--base-task-id",
+                    base_task_id,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "fail")
+            failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
+            self.assertTrue(any("evaluation_failed_count" in str(row.get("name") or "") for row in failures if isinstance(row, dict)))
 
     def test_check_ui_freeze_acceptance_script_smoke(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

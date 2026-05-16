@@ -565,6 +565,9 @@ HTML = """
       body.chat-focus-mode .panel.chat-workspace {
         min-height: calc(100vh - 24px);
       }
+      body.output-simple-mode .right-advanced {
+        display: none !important;
+      }
       .tool-box {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -734,6 +737,28 @@ HTML = """
         padding: 8px;
         margin-bottom: 10px;
         font-size: 0.82rem;
+      }
+      .right-mode-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 8px 0;
+      }
+      .right-mode-controls label {
+        margin-top: 0;
+        font-size: 0.74rem;
+      }
+      .right-mode-controls select {
+        margin-top: 0;
+        width: auto;
+        min-width: 120px;
+        padding: 5px 7px;
+        font-size: 0.74rem;
+      }
+      .right-mode-controls button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
       }
       .progress-wrap {
         width: 100%;
@@ -984,6 +1009,7 @@ HTML = """
               <span class=\"hud-chip\">task <span id=\"current_task_id_hud\">-</span></span>
               <span class=\"hud-chip\">health <span id=\"project_runtime_health_hud\">-</span></span>
               <span class=\"hud-chip\">view <span id=\"focus_mode_state\">standard</span></span>
+              <span class=\"hud-chip\">output <span id=\"output_view_state\">simple</span></span>
             </div>
           </div>
           <div class=\"hud-actions\">
@@ -1091,24 +1117,34 @@ HTML = """
       <section class=\"panel right-drawer\">
         <h2>Outputs</h2>
         <h3>Runtime + artifacts</h3>
+        <div class=\"right-mode-controls\">
+          <label for=\"output_view_mode\">Output View</label>
+          <select id=\"output_view_mode\" onchange=\"onOutputViewModeChanged()\">
+            <option value=\"simple\">Simple</option>
+            <option value=\"advanced\">Advanced</option>
+          </select>
+          <button type=\"button\" id=\"output_view_toggle_btn\" onclick=\"toggleOutputViewMode()\">Use Advanced</button>
+        </div>
         <div class=\"runtime\" id=\"runtime_box\">runtime: (waiting)</div>
         <div class=\"muted\" id=\"runtime_stage_text\">stage: -</div>
         <div class=\"progress-wrap\"><div class=\"progress-bar\" id=\"runtime_progress_bar\"></div></div>
         <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
-        <label>Failed Tool Name (optional)</label>
-        <input id=\"retry_failed_tool_name\" placeholder=\"e.g. score_candidates (empty = latest failed step)\" />
-        <label>Retry Args JSON (optional override)</label>
-        <textarea id=\"retry_failed_args_json\" rows=\"3\">{}</textarea>
-        <div class=\"btn-row\">
-          <button onclick=\"loadSuggestedRetryArgs()\">Load Suggested Retry Args</button>
-          <button onclick=\"previewRetryFailedStep()\">Preview Failed-Step Retry</button>
-          <button onclick=\"retryFailedStep()\">Retry Latest Failed Step</button>
-          <button onclick=\"retryCurrentTask()\">Retry Current Task (resume)</button>
+        <div class=\"right-advanced\" id=\"right_retry_controls\">
+          <label>Failed Tool Name (optional)</label>
+          <input id=\"retry_failed_tool_name\" placeholder=\"e.g. score_candidates (empty = latest failed step)\" />
+          <label>Retry Args JSON (optional override)</label>
+          <textarea id=\"retry_failed_args_json\" rows=\"3\">{}</textarea>
+          <div class=\"btn-row\">
+            <button onclick=\"loadSuggestedRetryArgs()\">Load Suggested Retry Args</button>
+            <button onclick=\"previewRetryFailedStep()\">Preview Failed-Step Retry</button>
+            <button onclick=\"retryFailedStep()\">Retry Latest Failed Step</button>
+            <button onclick=\"retryCurrentTask()\">Retry Current Task (resume)</button>
+          </div>
         </div>
         <label>Recent Events</label>
         <pre id=\"event_out\">(no events)</pre>
 
-        <details class=\"drawer\" open>
+        <details class=\"drawer right-advanced\" open id=\"timeline_groups_drawer\">
           <summary>Run Timeline Groups</summary>
           <div class=\"drawer-body timeline-groups\" id=\"timeline_groups_box\">
             <div class=\"tg-head\" id=\"timeline_groups_head\">Run Timeline Groups (current task)</div>
@@ -1180,7 +1216,7 @@ HTML = """
           </div>
         </details>
 
-        <details class=\"drawer\">
+        <details class=\"drawer right-advanced\" id=\"task_compare_drawer\">
           <summary>Task Compare</summary>
           <div class=\"drawer-body\">
             <label>Other Task ID</label>
@@ -1203,7 +1239,7 @@ HTML = """
         promptHistory: [],
         projects: [],
         memoryExplorer: null,
-        ui: {focusMode: false},
+        ui: {focusMode: false, outputViewMode: 'simple'},
         batchHistory: [],
         batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
         failedReplayQueue: {source_export_id: '', action: '', rows: [], count: 0, unique_task_count: 0, failure_reasons: []},
@@ -1385,14 +1421,17 @@ HTML = """
       }
 
       function loadUiPrefs() {
-        const fallback = {focusMode: false};
+        const fallback = {focusMode: false, outputViewMode: 'simple'};
         try {
           const raw = localStorage.getItem(UI_PREFS_KEY);
           if (!raw) return fallback;
           const parsed = JSON.parse(raw);
           if (!parsed || typeof parsed !== 'object') return fallback;
+          const outputViewModeRaw = String(parsed.outputViewMode || 'simple').trim().toLowerCase();
+          const outputViewMode = outputViewModeRaw === 'advanced' ? 'advanced' : 'simple';
           return {
             focusMode: Boolean(parsed.focusMode),
+            outputViewMode: outputViewMode,
           };
         } catch (e) {
           return fallback;
@@ -1402,6 +1441,7 @@ HTML = """
       function saveUiPrefs(v) {
         const payload = {
           focusMode: Boolean(v && v.focusMode),
+          outputViewMode: String(v && v.outputViewMode).trim().toLowerCase() === 'advanced' ? 'advanced' : 'simple',
         };
         try {
           localStorage.setItem(UI_PREFS_KEY, JSON.stringify(payload));
@@ -1430,6 +1470,38 @@ HTML = """
         const current = Boolean(state.ui && state.ui.focusMode);
         applyFocusMode(!current);
         renderEvents([{stage: 'focus_mode', status: 'pass', operation: state.ui.focusMode ? 'enabled' : 'disabled'}]);
+      }
+
+      function normalizeOutputViewMode(raw) {
+        return String(raw || '').trim().toLowerCase() === 'advanced' ? 'advanced' : 'simple';
+      }
+
+      function applyOutputViewMode(mode) {
+        const next = normalizeOutputViewMode(mode);
+        state.ui = state.ui && typeof state.ui === 'object' ? state.ui : {};
+        state.ui.outputViewMode = next;
+        document.body.classList.toggle('output-simple-mode', next === 'simple');
+        const select = document.getElementById('output_view_mode');
+        if (select) select.value = next;
+        const btn = document.getElementById('output_view_toggle_btn');
+        if (btn) btn.textContent = next === 'advanced' ? 'Use Simple' : 'Use Advanced';
+        const stateEle = document.getElementById('output_view_state');
+        if (stateEle) stateEle.textContent = next;
+        saveUiPrefs(state.ui);
+      }
+
+      function onOutputViewModeChanged() {
+        const select = document.getElementById('output_view_mode');
+        const next = normalizeOutputViewMode(select ? select.value : 'simple');
+        applyOutputViewMode(next);
+        renderEvents([{stage: 'output_view_mode', status: 'pass', operation: next}]);
+      }
+
+      function toggleOutputViewMode() {
+        const current = normalizeOutputViewMode(state.ui && state.ui.outputViewMode);
+        const next = current === 'advanced' ? 'simple' : 'advanced';
+        applyOutputViewMode(next);
+        renderEvents([{stage: 'output_view_mode', status: 'pass', operation: next}]);
       }
 
       function applySessionBoardStateToControls(v) {
@@ -4833,6 +4905,7 @@ HTML = """
         const uiPrefs = loadUiPrefs();
         state.ui = uiPrefs;
         applyFocusMode(Boolean(uiPrefs.focusMode));
+        applyOutputViewMode(String(uiPrefs.outputViewMode || 'simple'));
         setQuickCandidateStatus('quick path: idle');
         refreshCloneTargetSuggestion();
         bindComposerShortcuts();

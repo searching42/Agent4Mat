@@ -23,6 +23,7 @@ class RequestContractPaths:
     data_report_schema: Path
     model_report_schema: Path
     filtering_report_schema: Path
+    evaluation_report_schema: Path
 
 
 def default_contract_paths(workspace_root: Path) -> RequestContractPaths:
@@ -40,6 +41,7 @@ def default_contract_paths(workspace_root: Path) -> RequestContractPaths:
         data_report_schema=base / "data_report.schema.json",
         model_report_schema=base / "model_report.schema.json",
         filtering_report_schema=base / "filtering_report.schema.json",
+        evaluation_report_schema=base / "evaluation_report.schema.json",
     )
 
 
@@ -79,6 +81,8 @@ def _validate_via_jsonschema(
             _validate_model_report_minimal(instance, schema)
         elif contract_kind == "filtering_report":
             _validate_filtering_report_minimal(instance, schema)
+        elif contract_kind == "evaluation_report":
+            _validate_evaluation_report_minimal(instance, schema)
         else:
             raise RequestValidationError(f"Unsupported contract kind: {contract_kind}")
         return
@@ -449,6 +453,57 @@ def _validate_filtering_report_minimal(instance: Dict[str, Any], schema: Dict[st
         raise RequestValidationError("$.report_step.status: must be non-empty string")
 
 
+def _validate_evaluation_report_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    _validate_required_and_additional(instance, schema, path="$")
+    for key in ("schema_version", "generated_at", "task_id", "execution_mode", "execution_status", "status"):
+        if not isinstance(instance.get(key), str) or not str(instance.get(key)).strip():
+            raise RequestValidationError(f"$.{key}: must be non-empty string")
+    if instance.get("execution_status") not in ("success", "failed"):
+        raise RequestValidationError("$.execution_status: must be one of: ['success', 'failed']")
+    if instance.get("status") not in ("pass", "warn", "fail"):
+        raise RequestValidationError("$.status: must be one of: ['pass', 'warn', 'fail']")
+
+    summary = instance.get("summary")
+    if not isinstance(summary, dict):
+        raise RequestValidationError("$.summary: must be object")
+    for key in ("checks_total", "pass_count", "warn_count", "fail_count"):
+        value = summary.get(key)
+        if not isinstance(value, int) or value < 0:
+            raise RequestValidationError(f"$.summary.{key}: must be integer >= 0")
+
+    metrics = instance.get("metrics")
+    if not isinstance(metrics, dict):
+        raise RequestValidationError("$.metrics: must be object")
+    for key in ("record_count", "success_count", "failed_count", "fallback_count"):
+        value = metrics.get(key)
+        if not isinstance(value, int) or value < 0:
+            raise RequestValidationError(f"$.metrics.{key}: must be integer >= 0")
+    adapters = metrics.get("adapters")
+    if not isinstance(adapters, list):
+        raise RequestValidationError("$.metrics.adapters: must be array")
+    for idx, value in enumerate(adapters, start=1):
+        if not isinstance(value, str):
+            raise RequestValidationError(f"$.metrics.adapters[{idx}]: must be string")
+    duration = metrics.get("duration_seconds")
+    if duration is not None and not isinstance(duration, (int, float)):
+        raise RequestValidationError("$.metrics.duration_seconds: must be number|null")
+    if isinstance(duration, (int, float)) and duration < 0:
+        raise RequestValidationError("$.metrics.duration_seconds: must be >= 0")
+
+    checks = instance.get("checks")
+    if not isinstance(checks, list) or len(checks) == 0:
+        raise RequestValidationError("$.checks: must be non-empty array")
+    for idx, item in enumerate(checks, start=1):
+        if not isinstance(item, dict):
+            raise RequestValidationError(f"$.checks[{idx}]: must be object")
+        if not isinstance(item.get("name"), str) or not str(item.get("name")).strip():
+            raise RequestValidationError(f"$.checks[{idx}].name: must be non-empty string")
+        if not isinstance(item.get("message"), str) or not str(item.get("message")).strip():
+            raise RequestValidationError(f"$.checks[{idx}].message: must be non-empty string")
+        if item.get("status") not in ("pass", "warn", "fail"):
+            raise RequestValidationError(f"$.checks[{idx}].status: must be one of: ['pass', 'warn', 'fail']")
+
+
 def load_and_validate_request_json(payload_path: Path, workspace_root: Path) -> Dict[str, Any]:
     payload = _load_json(payload_path)
     validate_request_payload(payload=payload, workspace_root=workspace_root)
@@ -501,6 +556,13 @@ def validate_filtering_report_payload(payload: Dict[str, Any], workspace_root: P
     contract = default_contract_paths(workspace_root)
     schema = _load_json(contract.filtering_report_schema)
     _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="filtering_report")
+    return payload
+
+
+def validate_evaluation_report_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    contract = default_contract_paths(workspace_root)
+    schema = _load_json(contract.evaluation_report_schema)
+    _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="evaluation_report")
     return payload
 
 

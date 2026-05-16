@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from oled_agent.agent.evaluator import build_evaluation_report
 from oled_agent.agent.experiment_trace import build_experiment_trace
 from oled_agent.agent.request_contract import validate_step_request_payload, validate_task_v2_payload
 from oled_agent.agent.task_v2 import task_v2_to_request_payload
@@ -138,6 +139,7 @@ def _write_logging_and_result(
     task_payload: Dict[str, Any],
     execution: Dict[str, Any],
     tool_state: Dict[str, Any],
+    evaluation_report_path: Optional[Path],
     experiment_trace_path: Optional[Path],
 ) -> Dict[str, str]:
     logging_dir = (workspace_root / DEFAULT_LOGGING_OUT / run_label).resolve()
@@ -155,6 +157,8 @@ def _write_logging_and_result(
         encoding="utf-8",
     )
     (logging_dir / "execution.log").write_text(json.dumps(execution, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    logging_evaluation_report_path = logging_dir / "evaluation_report.json"
+    _copy_if_exists(evaluation_report_path, logging_evaluation_report_path)
     logging_experiment_trace_path = logging_dir / "experiment_trace.json"
     _copy_if_exists(experiment_trace_path, logging_experiment_trace_path)
 
@@ -219,6 +223,8 @@ def _write_logging_and_result(
     if final_output:
         src_report = _rel_or_abs(final_output, workspace_root)
         _copy_if_exists(src_report, report_md_out)
+    result_evaluation_report_path = result_dir / "evaluation_report.json"
+    _copy_if_exists(evaluation_report_path, result_evaluation_report_path)
     result_experiment_trace_path = result_dir / "experiment_trace.json"
     _copy_if_exists(experiment_trace_path, result_experiment_trace_path)
 
@@ -235,6 +241,7 @@ def _write_logging_and_result(
         "outputs": {
             "target_structures_csv": str(target_structures_csv) if copied else "",
             "report_md": str(report_md_out) if report_md_out.exists() else "",
+            "evaluation_report_json": str(result_evaluation_report_path) if result_evaluation_report_path.exists() else "",
             "experiment_trace_json": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
         },
     }
@@ -249,9 +256,11 @@ def _write_logging_and_result(
         "logging_data_report_path": str(logging_dir / "data_report.json"),
         "logging_model_report_path": str(logging_dir / "model_report.json"),
         "logging_filtering_report_path": str(logging_dir / "filtering_report.json"),
+        "logging_evaluation_report_path": str(logging_evaluation_report_path) if logging_evaluation_report_path.exists() else "",
         "logging_experiment_trace_path": str(logging_experiment_trace_path) if logging_experiment_trace_path.exists() else "",
         "result_metadata_path": str(metadata_path),
         "result_target_structures_csv_path": str(target_structures_csv) if copied else "",
+        "result_evaluation_report_path": str(result_evaluation_report_path) if result_evaluation_report_path.exists() else "",
         "result_experiment_trace_path": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
     }
 
@@ -380,29 +389,36 @@ def run_step(
     _write_json(execution_path, execution)
     _write_json(tool_state_path, tool_state)
     _write_json(task_path, task_payload)
-    _write_json(
-        decision_summary_path,
-        _build_decision_summary(
-            task_id=task_id,
-            tool_name=tool_name,
-            result=result if isinstance(result, dict) else {},
-            tool_state=tool_state,
-            status=status,
-        ),
+    decision_summary_payload = _build_decision_summary(
+        task_id=task_id,
+        tool_name=tool_name,
+        result=result if isinstance(result, dict) else {},
+        tool_state=tool_state,
+        status=status,
     )
-    _write_json(
-        task_state_path,
-        _build_task_state(
-            task_id=task_id,
-            execution_status=status,
-            tool_name=tool_name,
-            started=started,
-            ended=ended,
-        ),
+    _write_json(decision_summary_path, decision_summary_payload)
+    task_state_payload = _build_task_state(
+        task_id=task_id,
+        execution_status=status,
+        tool_name=tool_name,
+        started=started,
+        ended=ended,
     )
+    _write_json(task_state_path, task_state_payload)
     run_label = _build_run_label(task_id)
     artifact_dir = out_dir / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    evaluation_report = build_evaluation_report(
+        task_id=task_id,
+        execution_mode="single_step",
+        execution_payload=execution,
+        decision_summary=decision_summary_payload,
+        task_state=task_state_payload,
+        tool_state=tool_state,
+        workspace_root=workspace_root.resolve(),
+    )
+    evaluation_report_path = artifact_dir / "evaluation_report.json"
+    _write_json(evaluation_report_path, evaluation_report)
     experiment_trace_path = artifact_dir / "experiment_trace.json"
     artifact_paths: Dict[str, Path] = {
         "execution": execution_path,
@@ -410,6 +426,7 @@ def run_step(
         "task_step": task_path,
         "decision_summary": decision_summary_path,
         "task_state": task_state_path,
+        "evaluation_report": evaluation_report_path,
     }
     web_evidence_path = artifact_dir / "web_evidence.json"
     if web_evidence_path.exists():
@@ -433,6 +450,7 @@ def run_step(
         task_payload=task_payload,
         execution=execution,
         tool_state=tool_state,
+        evaluation_report_path=evaluation_report_path,
         experiment_trace_path=experiment_trace_path,
     )
 
@@ -445,6 +463,7 @@ def run_step(
         "tool_state_path": str(tool_state_path),
         "decision_summary_path": str(decision_summary_path),
         "task_state_path": str(task_state_path),
+        "evaluation_report_path": str(evaluation_report_path),
         "task_path": str(task_path),
         "experiment_trace_path": str(experiment_trace_path),
         "run_label": run_label,

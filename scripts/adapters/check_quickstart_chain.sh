@@ -96,6 +96,16 @@ print(obj["logging_filtering_report_path"])
 PY
 )"
 
+EVALUATION_REPORT_PATH="$(python3 - "${RESULT_JSON}" <<'PY'
+import json
+import pathlib
+import sys
+
+obj = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(obj["logging_evaluation_report_path"])
+PY
+)"
+
 echo "[3/8] validate structured artifacts schema"
 python3 scripts/validate_run_artifacts.py \
   --workspace-root . \
@@ -103,7 +113,8 @@ python3 scripts/validate_run_artifacts.py \
   --task-state "${TASK_STATE_PATH}" \
   --data-report "${DATA_REPORT_PATH}" \
   --model-report "${MODEL_REPORT_PATH}" \
-  --filtering-report "${FILTERING_REPORT_PATH}"
+  --filtering-report "${FILTERING_REPORT_PATH}" \
+  --evaluation-report "${EVALUATION_REPORT_PATH}"
 
 echo "[4/8] summarize adapters"
 python3 - "${RESULT_JSON}" <<'PY'

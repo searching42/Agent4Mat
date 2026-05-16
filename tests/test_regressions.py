@@ -20,6 +20,7 @@ from oled_agent.agent.request_contract import (
     RequestValidationError,
     _validate_via_jsonschema,
     validate_decision_summary_payload,
+    validate_evaluation_report_payload,
     validate_filtering_report_payload,
     validate_model_report_payload,
     validate_plan_payload,
@@ -1032,7 +1033,10 @@ class RegressionTests(unittest.TestCase):
             self.assertTrue((logging_dir / "data_report.json").exists())
             self.assertTrue((logging_dir / "model_report.json").exists())
             self.assertTrue((logging_dir / "filtering_report.json").exists())
+            self.assertTrue((logging_dir / "evaluation_report.json").exists())
             self.assertTrue((result_dir / "metadata.json").exists())
+            self.assertIn("evaluation_report_path", out)
+            self.assertTrue(Path(out["evaluation_report_path"]).exists())
             self.assertIn("experiment_trace_path", out)
             trace_path = Path(out["experiment_trace_path"])
             self.assertTrue(trace_path.exists())
@@ -1777,6 +1781,59 @@ class RegressionTests(unittest.TestCase):
             with self.assertRaises(RequestValidationError):
                 validate_filtering_report_payload(payload, workspace_root=td_path)
 
+    def test_evaluation_report_schema_validates_happy_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-16T00:00:00Z",
+                "task_id": "task_eval_1",
+                "execution_mode": "full_pipeline",
+                "execution_status": "success",
+                "status": "pass",
+                "summary": {"checks_total": 3, "pass_count": 3, "warn_count": 0, "fail_count": 0},
+                "metrics": {
+                    "record_count": 8,
+                    "success_count": 8,
+                    "failed_count": 0,
+                    "fallback_count": 0,
+                    "decision_fallback": False,
+                    "adapters": ["a1", "a2"],
+                    "duration_seconds": 3.5,
+                },
+                "checks": [
+                    {"name": "execution_records", "status": "pass", "message": "ok"},
+                    {"name": "task_state_terminal", "status": "pass", "message": "ok"},
+                    {"name": "artifact_scored_csv", "status": "pass", "message": "ok"},
+                ],
+            }
+            self.assertEqual(validate_evaluation_report_payload(payload, workspace_root=td_path), payload)
+
+    def test_evaluation_report_schema_rejects_invalid_check_status(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-16T00:00:00Z",
+                "task_id": "task_eval_bad",
+                "execution_mode": "single_step",
+                "execution_status": "success",
+                "status": "warn",
+                "summary": {"checks_total": 1, "pass_count": 0, "warn_count": 1, "fail_count": 0},
+                "metrics": {
+                    "record_count": 1,
+                    "success_count": 1,
+                    "failed_count": 0,
+                    "fallback_count": 0,
+                    "adapters": [],
+                },
+                "checks": [
+                    {"name": "fallback_usage", "status": "unknown", "message": "x"},
+                ],
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_evaluation_report_payload(payload, workspace_root=td_path)
+
     def test_agent_plan_json_happy_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -1943,9 +2000,11 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("logging_data_report_path", payload)
             self.assertIn("logging_model_report_path", payload)
             self.assertIn("logging_filtering_report_path", payload)
+            self.assertIn("logging_evaluation_report_path", payload)
             self.assertTrue(Path(payload["logging_data_report_path"]).exists())
             self.assertTrue(Path(payload["logging_model_report_path"]).exists())
             self.assertTrue(Path(payload["logging_filtering_report_path"]).exists())
+            self.assertTrue(Path(payload["logging_evaluation_report_path"]).exists())
 
     def test_agent_run_json_molscribe_smoke_uses_generation_input_source_image(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2631,12 +2690,15 @@ class RegressionTests(unittest.TestCase):
                 "tool_state_path",
                 "decision_summary_path",
                 "task_state_path",
+                "evaluation_report_path",
                 "experiment_trace_path",
                 "logging_data_report_path",
                 "logging_model_report_path",
                 "logging_filtering_report_path",
+                "logging_evaluation_report_path",
                 "logging_experiment_trace_path",
                 "result_metadata_path",
+                "result_evaluation_report_path",
                 "result_experiment_trace_path",
             ):
                 self.assertTrue(Path(payload[key]).exists(), msg=f"missing artifact: {key}")
@@ -5547,6 +5609,82 @@ class RegressionTests(unittest.TestCase):
             validated = validate_task_state_payload(payload=payload, workspace_root=td_path)
             self.assertEqual(validated.get("task_id"), "task_task_state_contract")
 
+    def test_validate_evaluation_report_script_accepts_valid_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            eval_path = td_path / "runs" / "agent" / "task_eval_script_ok" / "artifacts" / "evaluation_report.json"
+            eval_path.parent.mkdir(parents=True, exist_ok=True)
+            eval_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-16T00:00:00Z",
+                        "task_id": "task_eval_script_ok",
+                        "execution_mode": "full_pipeline",
+                        "execution_status": "success",
+                        "status": "pass",
+                        "summary": {"checks_total": 1, "pass_count": 1, "warn_count": 0, "fail_count": 0},
+                        "metrics": {
+                            "record_count": 1,
+                            "success_count": 1,
+                            "failed_count": 0,
+                            "fallback_count": 0,
+                            "adapters": ["template_score_cmd"],
+                        },
+                        "checks": [{"name": "execution_records", "status": "pass", "message": "ok"}],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_evaluation_report.py", str(eval_path)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            self.assertIn("[PASS] evaluation report schema valid", cp.stdout)
+
+    def test_validate_evaluation_report_script_rejects_invalid_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            eval_path = td_path / "runs" / "agent" / "task_eval_script_bad" / "artifacts" / "evaluation_report.json"
+            eval_path.parent.mkdir(parents=True, exist_ok=True)
+            eval_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-16T00:00:00Z",
+                        "task_id": "task_eval_script_bad",
+                        "execution_mode": "single_step",
+                        "execution_status": "success",
+                        "status": "pass",
+                        "summary": {"checks_total": 1, "pass_count": 1, "warn_count": 0, "fail_count": 0},
+                        "metrics": {"record_count": 1, "success_count": 1, "failed_count": 0, "fallback_count": 0, "adapters": []},
+                        "checks": [{"name": "execution_records", "status": "invalid", "message": "x"}],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_evaluation_report.py", str(eval_path)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 1)
+            self.assertIn("[FAIL] evaluation report schema invalid", cp.stdout)
+
     def test_validate_run_artifacts_script_accepts_result_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -5580,6 +5718,7 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("[PASS] data report schema valid", cp.stdout)
             self.assertIn("[PASS] model report schema valid", cp.stdout)
             self.assertIn("[PASS] filtering report schema valid", cp.stdout)
+            self.assertIn("[PASS] evaluation report schema valid", cp.stdout)
 
     def test_validate_run_artifacts_script_rejects_missing_result_keys(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -6394,6 +6533,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "collect_real_chain_evidence.py",
             repo_root / "scripts" / "archive_real_chain_baseline.py",
             repo_root / "scripts" / "validate_step_request_examples.py",
+            repo_root / "scripts" / "validate_evaluation_report.py",
             repo_root / "scripts" / "check_experiment_trace.py",
             repo_root / "scripts" / "check_ui_freeze_acceptance.py",
             repo_root / "scripts" / "summarize_experiments.py",

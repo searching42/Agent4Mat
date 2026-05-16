@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/evaluation_report.schema.json",
+  "title": "Agent4Mat Evaluation Report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "task_id",
+    "execution_mode",
+    "execution_status",
+    "status",
+    "summary",
+    "metrics",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "task_id": { "type": "string" },
+    "execution_mode": { "type": "string" },
+    "execution_status": { "type": "string", "enum": ["success", "failed"] },
+    "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["checks_total", "pass_count", "warn_count", "fail_count"],
+      "properties": {
+        "checks_total": { "type": "integer", "minimum": 0 },
+        "pass_count": { "type": "integer", "minimum": 0 },
+        "warn_count": { "type": "integer", "minimum": 0 },
+        "fail_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["record_count", "success_count", "failed_count", "fallback_count", "adapters"],
+      "properties": {
+        "record_count": { "type": "integer", "minimum": 0 },
+        "success_count": { "type": "integer", "minimum": 0 },
+        "failed_count": { "type": "integer", "minimum": 0 },
+        "fallback_count": { "type": "integer", "minimum": 0 },
+        "decision_fallback": { "type": "boolean" },
+        "adapters": { "type": "array", "items": { "type": "string" } },
+        "duration_seconds": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "artifact_presence": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name", "status", "message"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
+          "message": { "type": "string" },
+          "details": { "type": ["object", "array", "string", "number", "boolean", "null"] }
+        }
+      }
+    }
+  }
+}

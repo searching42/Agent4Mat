@@ -7583,6 +7583,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("collect_real_chain_evidence.py", content)
         self.assertIn("--require-real-adapters", content)
         self.assertIn("strict_acceptance_summary.json", content)
+        self.assertIn("evaluation_failed_count", content)
+        self.assertIn("guardrails_strict_status", content)
 
     def test_real_chain_baseline_script_runs_three_strict_acceptance_rounds(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -7593,6 +7595,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("strict_acceptance_summary.json", content)
         self.assertIn("release_evidence.json", content)
         self.assertIn("baseline_summary.json", content)
+        self.assertIn("evaluation_failed_count", content)
+        self.assertIn("guardrails_failed_count", content)
 
     def test_real_chain_acceptance_script_uses_runtime_task_id_substitution(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -7615,6 +7619,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
             execution_path = run_dir / "execution.json"
             decision_path = run_dir / "decision_summary.json"
             task_state_path = run_dir / "task_state.json"
+            evaluation_path = run_dir / "evaluation_report.json"
+            guardrails_path = run_dir / "guardrails_report.json"
             result_path = run_dir / "acceptance_result.json"
 
             plan_path.write_text(
@@ -7660,6 +7666,73 @@ class PlanProgressAssetsTests(unittest.TestCase):
                 encoding="utf-8",
             )
             task_state_path.write_text(json.dumps({"status": "success"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            evaluation_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-16T00:00:00Z",
+                        "task_id": "demo_task",
+                        "execution_mode": "full_pipeline",
+                        "execution_status": "success",
+                        "status": "pass",
+                        "summary": {"checks_total": 1, "pass_count": 1, "warn_count": 0, "fail_count": 0},
+                        "metrics": {
+                            "record_count": 2,
+                            "success_count": 2,
+                            "failed_count": 0,
+                            "fallback_count": 0,
+                            "adapters": ["reinvent4_generate_adapter_v1", "unimol_score_adapter_v1"],
+                        },
+                        "failure_diagnostics": {
+                            "failed_count": 0,
+                            "latest_failed_step": "",
+                            "latest_failed_error": "",
+                            "latest_failure_kind": "",
+                            "latest_failure_detail": "",
+                        },
+                        "checks": [{"name": "execution_records", "status": "pass", "message": "ok"}],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            guardrails_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-16T00:00:00Z",
+                        "task_id": "demo_task",
+                        "execution_mode": "full_pipeline",
+                        "execution_status": "success",
+                        "status": "pass",
+                        "strict_status": "pass",
+                        "summary": {
+                            "checks_total": 1,
+                            "pass_count": 1,
+                            "warn_count": 0,
+                            "fail_count": 0,
+                            "strict_blocking_count": 0,
+                        },
+                        "blocking_checks": [],
+                        "strict_blocking_checks": [],
+                        "metrics": {"record_count": 2, "adapters": ["reinvent4_generate_adapter_v1", "unimol_score_adapter_v1"]},
+                        "failure_diagnostics": {
+                            "failed_count": 0,
+                            "latest_failed_step": "",
+                            "latest_failed_error": "",
+                            "latest_failure_kind": "",
+                            "latest_failure_detail": "",
+                        },
+                        "checks": [{"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"}],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             result_path.write_text(
                 json.dumps(
                     {
@@ -7669,6 +7742,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
                         "execution_path": str(execution_path),
                         "decision_summary_path": str(decision_path),
                         "task_state_path": str(task_state_path),
+                        "evaluation_report_path": str(evaluation_path),
+                        "guardrails_report_path": str(guardrails_path),
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -7700,6 +7775,9 @@ class PlanProgressAssetsTests(unittest.TestCase):
             evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
             self.assertEqual(evidence["overall"], "pass")
             self.assertTrue(evidence["checks"]["plqy_center_percent_scale"])
+            self.assertTrue(evidence["checks"]["evaluation_failure_diag_zero"])
+            self.assertTrue(evidence["checks"]["guardrails_failure_diag_zero"])
+            self.assertTrue(evidence["checks"]["guardrails_strict_status_pass"])
 
     def test_archive_real_chain_baseline_script_writes_archive_manifest(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

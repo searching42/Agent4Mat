@@ -91,6 +91,17 @@ for i in range(1, run_count + 1):
         )
     if strict.get("score_adapter") != "unimol_score_adapter_v1":
         failures.append(f"{task_id}: score_adapter mismatch ({strict.get('score_adapter')})")
+    if str(strict.get("guardrails_strict_status") or "") != "pass":
+        failures.append(
+            f"{task_id}: guardrails_strict_status is not pass ({strict.get('guardrails_strict_status')})"
+        )
+
+    eval_failed_count = int(strict.get("evaluation_failed_count") or -1)
+    guard_failed_count = int(strict.get("guardrails_failed_count") or -1)
+    if eval_failed_count != 0:
+        failures.append(f"{task_id}: evaluation_failed_count is not 0 ({eval_failed_count})")
+    if guard_failed_count != 0:
+        failures.append(f"{task_id}: guardrails_failed_count is not 0 ({guard_failed_count})")
 
     entries.append(
         {
@@ -101,6 +112,9 @@ for i in range(1, run_count + 1):
             "generate_adapter": strict.get("generate_adapter"),
             "score_adapter": strict.get("score_adapter"),
             "plqy_target_center": strict.get("plqy_target_center"),
+            "guardrails_strict_status": strict.get("guardrails_strict_status"),
+            "evaluation_failed_count": eval_failed_count,
+            "guardrails_failed_count": guard_failed_count,
         }
     )
 

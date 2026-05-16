@@ -136,9 +136,17 @@ result = json.loads(result_path.read_text(encoding="utf-8"))
 execution_path = pathlib.Path(result["execution_path"])
 decision_path = pathlib.Path(result["decision_summary_path"])
 plan_path = pathlib.Path(result["plan_path"])
+evaluation_path = pathlib.Path(result.get("evaluation_report_path") or result.get("logging_evaluation_report_path") or "")
+guardrails_path = pathlib.Path(result.get("guardrails_report_path") or result.get("logging_guardrails_report_path") or "")
 execution = json.loads(execution_path.read_text(encoding="utf-8"))
 decision = json.loads(decision_path.read_text(encoding="utf-8"))
 plan = json.loads(plan_path.read_text(encoding="utf-8"))
+if not evaluation_path or not evaluation_path.exists():
+    raise SystemExit(f"[FAIL] evaluation report path missing or not found: {evaluation_path}")
+if not guardrails_path or not guardrails_path.exists():
+    raise SystemExit(f"[FAIL] guardrails report path missing or not found: {guardrails_path}")
+evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+guardrails = json.loads(guardrails_path.read_text(encoding="utf-8"))
 
 records = {r.get("name"): r.get("result", {}) for r in execution.get("records", []) if isinstance(r, dict)}
 gen = records.get("generate_candidates", {})
@@ -158,6 +166,18 @@ if score.get("fallback_error"):
 score_step = decision.get("score_step", {})
 if bool(score_step.get("used_fallback")):
     raise SystemExit("[FAIL] decision_summary reports used_fallback=true")
+
+eval_diag = evaluation.get("failure_diagnostics") if isinstance(evaluation.get("failure_diagnostics"), dict) else {}
+guard_diag = guardrails.get("failure_diagnostics") if isinstance(guardrails.get("failure_diagnostics"), dict) else {}
+eval_failed_count = int(eval_diag.get("failed_count") or 0)
+guard_failed_count = int(guard_diag.get("failed_count") or 0)
+if eval_failed_count != 0:
+    raise SystemExit(f"[FAIL] evaluation failure_diagnostics.failed_count must be 0 in strict acceptance: {eval_failed_count}")
+if guard_failed_count != 0:
+    raise SystemExit(f"[FAIL] guardrails failure_diagnostics.failed_count must be 0 in strict acceptance: {guard_failed_count}")
+strict_status = str(guardrails.get("strict_status") or "").strip()
+if strict_status != "pass":
+    raise SystemExit(f"[FAIL] guardrails strict_status must be pass in strict acceptance: {strict_status}")
 
 targets = plan.get("design_spec", {}).get("targets", [])
 plqy_target = None
@@ -181,9 +201,16 @@ evidence = {
     "plan_path": str(plan_path),
     "execution_path": str(execution_path),
     "decision_summary_path": str(decision_path),
+    "evaluation_report_path": str(evaluation_path),
+    "guardrails_report_path": str(guardrails_path),
     "generate_adapter": gen_adapter,
     "score_adapter": score_adapter,
     "plqy_target_center": float(center),
+    "guardrails_strict_status": strict_status,
+    "evaluation_failed_count": eval_failed_count,
+    "guardrails_failed_count": guard_failed_count,
+    "evaluation_failure_diagnostics": eval_diag,
+    "guardrails_failure_diagnostics": guard_diag,
     "external_debug_json": str(debug_path),
 }
 strict_path = result_path.parent / "strict_acceptance_summary.json"

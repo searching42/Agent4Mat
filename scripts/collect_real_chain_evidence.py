@@ -76,6 +76,7 @@ def _build_markdown(evidence: Dict[str, Any]) -> str:
     adapters = evidence.get("adapters", {})
     planner = evidence.get("planner", {})
     plqy = evidence.get("plqy_semantics", {})
+    failure_diag = evidence.get("failure_diagnostics", {})
     artifacts = evidence.get("artifacts", {})
     env_snapshot = evidence.get("env_snapshot", {})
 
@@ -99,11 +100,18 @@ def _build_markdown(evidence: Dict[str, Any]) -> str:
     lines.append(f"- generate: `{adapters.get('generate')}`")
     lines.append(f"- score: `{adapters.get('score')}`")
     lines.append(f"- score_used_fallback: `{adapters.get('score_used_fallback')}`")
+    lines.append(f"- guardrails_strict_status: `{adapters.get('guardrails_strict_status')}`")
     lines.append("")
     lines.append("## PLQY Semantics")
     lines.append(f"- target_center: `{plqy.get('target_center')}`")
     lines.append(f"- metadata_plqy_scale: `{plqy.get('metadata_plqy_scale')}`")
     lines.append(f"- percent_scale_check: `{plqy.get('percent_scale_check')}`")
+    lines.append("")
+    lines.append("## Failure Diagnostics")
+    lines.append(f"- evaluation_failed_count: `{failure_diag.get('evaluation_failed_count')}`")
+    lines.append(f"- guardrails_failed_count: `{failure_diag.get('guardrails_failed_count')}`")
+    lines.append(f"- evaluation_latest_failure_kind: `{failure_diag.get('evaluation_latest_failure_kind')}`")
+    lines.append(f"- guardrails_latest_failure_kind: `{failure_diag.get('guardrails_latest_failure_kind')}`")
     lines.append("")
     lines.append("## Artifacts")
     for key, value in artifacts.items():
@@ -138,16 +146,22 @@ def main() -> int:
 
     result = _load_json(result_json)
     required_path_keys = {
-        "plan_path": "plan",
-        "execution_path": "execution",
-        "decision_summary_path": "decision_summary",
-        "task_state_path": "task_state",
+        "plan": ["plan_path"],
+        "execution": ["execution_path"],
+        "decision_summary": ["decision_summary_path"],
+        "task_state": ["task_state_path"],
+        "evaluation_report": ["evaluation_report_path", "logging_evaluation_report_path"],
+        "guardrails_report": ["guardrails_report_path", "logging_guardrails_report_path"],
     }
     resolved_paths: Dict[str, Path] = {}
-    for key, logical in required_path_keys.items():
-        raw = str(result.get(key) or "").strip()
+    for logical, key_list in required_path_keys.items():
+        raw = ""
+        for key in key_list:
+            raw = str(result.get(key) or "").strip()
+            if raw:
+                break
         if not raw:
-            print(f"[FAIL] result json missing key: {key}")
+            print(f"[FAIL] result json missing required key in candidates: {key_list}")
             return 1
         path = _resolve_path(raw, cwd)
         if not path.exists():
@@ -158,6 +172,8 @@ def main() -> int:
     plan = _load_json(resolved_paths["plan"])
     execution = _load_json(resolved_paths["execution"])
     decision = _load_json(resolved_paths["decision_summary"])
+    evaluation = _load_json(resolved_paths["evaluation_report"])
+    guardrails = _load_json(resolved_paths["guardrails_report"])
 
     records = {
         r.get("name"): r.get("result", {})
@@ -167,6 +183,11 @@ def main() -> int:
     gen = records.get("generate_candidates", {}) if isinstance(records.get("generate_candidates", {}), dict) else {}
     score = records.get("score_candidates", {}) if isinstance(records.get("score_candidates", {}), dict) else {}
     score_step = decision.get("score_step", {}) if isinstance(decision.get("score_step", {}), dict) else {}
+    eval_diag = evaluation.get("failure_diagnostics") if isinstance(evaluation.get("failure_diagnostics"), dict) else {}
+    guard_diag = guardrails.get("failure_diagnostics") if isinstance(guardrails.get("failure_diagnostics"), dict) else {}
+    eval_failed_count = int(eval_diag.get("failed_count") or 0)
+    guard_failed_count = int(guard_diag.get("failed_count") or 0)
+    guardrails_strict_status = str(guardrails.get("strict_status") or "")
 
     plqy_target = _pick_plqy_target(plan) or {}
     plqy_center = plqy_target.get("target_center")
@@ -180,6 +201,9 @@ def main() -> int:
         "score_no_fallback_error": not bool(score.get("fallback_error")),
         "score_used_fallback_false": not bool(score_step.get("used_fallback")),
         "plqy_center_percent_scale": plqy_percent_ok,
+        "evaluation_failure_diag_zero": eval_failed_count == 0,
+        "guardrails_failure_diag_zero": guard_failed_count == 0,
+        "guardrails_strict_status_pass": guardrails_strict_status == "pass",
     }
     overall = "pass" if all(bool(v) for v in checks.values()) else "fail"
 
@@ -204,6 +228,13 @@ def main() -> int:
             "generate": gen.get("adapter"),
             "score": score.get("adapter"),
             "score_used_fallback": bool(score_step.get("used_fallback")),
+            "guardrails_strict_status": guardrails_strict_status,
+        },
+        "failure_diagnostics": {
+            "evaluation_failed_count": eval_failed_count,
+            "guardrails_failed_count": guard_failed_count,
+            "evaluation_latest_failure_kind": str(eval_diag.get("latest_failure_kind") or ""),
+            "guardrails_latest_failure_kind": str(guard_diag.get("latest_failure_kind") or ""),
         },
         "plqy_semantics": {
             "target_center": plqy_center,
@@ -216,6 +247,8 @@ def main() -> int:
             "execution_path": str(resolved_paths["execution"]),
             "decision_summary_path": str(resolved_paths["decision_summary"]),
             "task_state_path": str(resolved_paths["task_state"]),
+            "evaluation_report_path": str(resolved_paths["evaluation_report"]),
+            "guardrails_report_path": str(resolved_paths["guardrails_report"]),
         },
         "env_snapshot": _safe_env_snapshot(),
     }

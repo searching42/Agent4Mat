@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 def _run_cli(*, root: Path, args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -17,6 +18,20 @@ def _run_cli(*, root: Path, args: list[str], env: dict[str, str]) -> subprocess.
         text=True,
         env=env,
     )
+
+
+def _extract_last_json_object(text: str) -> Optional[Dict[str, Any]]:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    for line in reversed(lines):
+        if not (line.startswith("{") and line.endswith("}")):
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
 
 
 def main() -> int:
@@ -65,6 +80,63 @@ def main() -> int:
             print(cp.stdout)
             print(cp.stderr)
             return cp.returncode
+        run_payload = _extract_last_json_object(cp.stdout)
+        if not isinstance(run_payload, dict):
+            print(cp.stdout)
+            print(cp.stderr)
+            print(json.dumps({"status": "failed", "reason": "cannot_parse_agent_run_json_output"}, ensure_ascii=False))
+            return 1
+        evaluation_path = Path(
+            str(run_payload.get("evaluation_report_path") or run_payload.get("logging_evaluation_report_path") or "")
+        ).resolve()
+        guardrails_path = Path(
+            str(run_payload.get("guardrails_report_path") or run_payload.get("logging_guardrails_report_path") or "")
+        ).resolve()
+        if not evaluation_path.exists() or not guardrails_path.exists():
+            print(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "reason": "missing_report_paths",
+                        "evaluation_report_path": str(evaluation_path),
+                        "guardrails_report_path": str(guardrails_path),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+        guardrails = json.loads(guardrails_path.read_text(encoding="utf-8"))
+        eval_diag = evaluation.get("failure_diagnostics") if isinstance(evaluation.get("failure_diagnostics"), dict) else {}
+        guard_diag = guardrails.get("failure_diagnostics") if isinstance(guardrails.get("failure_diagnostics"), dict) else {}
+        if int(eval_diag.get("failed_count") or 0) != 0:
+            print(
+                json.dumps(
+                    {"status": "failed", "reason": "evaluation_failed_count_nonzero", "evaluation_diag": eval_diag},
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        if int(guard_diag.get("failed_count") or 0) != 0:
+            print(
+                json.dumps(
+                    {"status": "failed", "reason": "guardrails_failed_count_nonzero", "guardrails_diag": guard_diag},
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        if str(guardrails.get("strict_status") or "").strip() != "pass":
+            print(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "reason": "guardrails_strict_status_not_pass",
+                        "strict_status": guardrails.get("strict_status"),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 1
 
         step_task_id = "ci_real_no_fallback_step"
         step_task = {
@@ -153,6 +225,9 @@ def main() -> int:
                 "check": "require-real-adapters",
                 "full_pipeline_exit_code": cp.returncode,
                 "single_step_block_exit_code": cp_step.returncode,
+                "evaluation_failed_count": int(eval_diag.get("failed_count") or 0),
+                "guardrails_failed_count": int(guard_diag.get("failed_count") or 0),
+                "guardrails_strict_status": str(guardrails.get("strict_status") or ""),
             },
             ensure_ascii=False,
         )

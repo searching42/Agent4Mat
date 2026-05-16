@@ -418,6 +418,33 @@ HTML = """
       .hud-actions button {
         margin-top: 0;
       }
+      .chat-status-ribbon {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border: 1px solid #d7e2f3;
+        border-radius: 10px;
+        background: #f7faff;
+      }
+      .chat-status-ribbon .status-text {
+        font-size: 0.78rem;
+        color: #334155;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .chat-status-ribbon .status-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .chat-status-ribbon .status-actions button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
       .chat-log {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -508,6 +535,36 @@ HTML = """
         background: #fff;
       }
       .chat-input textarea { min-height: 84px; }
+      .chat-quick-strip {
+        margin-top: 8px;
+        display: grid;
+        grid-template-columns: 1fr auto auto auto auto;
+        gap: 6px;
+        align-items: center;
+      }
+      .chat-quick-strip input {
+        margin-top: 0;
+      }
+      .chat-quick-strip button {
+        margin-top: 0;
+        padding: 6px 8px;
+        font-size: 0.72rem;
+      }
+      .chat-quick-status {
+        margin-top: 6px;
+        font-size: 0.74rem;
+        color: #5b6578;
+      }
+      body.chat-focus-mode .layout {
+        grid-template-columns: minmax(620px, 1fr);
+      }
+      body.chat-focus-mode .panel.left-drawer,
+      body.chat-focus-mode .panel.right-drawer {
+        display: none;
+      }
+      body.chat-focus-mode .panel.chat-workspace {
+        min-height: calc(100vh - 24px);
+      }
       .tool-box {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -699,6 +756,7 @@ HTML = """
         .layout { grid-template-columns: 1fr; }
         .chat-wrap { min-height: 65vh; }
         .tg-cols { grid-template-columns: 1fr; }
+        .chat-quick-strip { grid-template-columns: 1fr 1fr; }
         .panel.left-drawer,
         .panel.right-drawer {
           position: static;
@@ -925,12 +983,22 @@ HTML = """
               <span class=\"hud-chip\">project <span id=\"hud_project_id\">-</span></span>
               <span class=\"hud-chip\">task <span id=\"current_task_id_hud\">-</span></span>
               <span class=\"hud-chip\">health <span id=\"project_runtime_health_hud\">-</span></span>
+              <span class=\"hud-chip\">view <span id=\"focus_mode_state\">standard</span></span>
             </div>
           </div>
           <div class=\"hud-actions\">
             <button class=\"primary\" onclick=\"sendChat(true)\">Start New Task</button>
             <button onclick=\"loadHistory()\">Reload History</button>
             <button onclick=\"loadRunRuntime()\">Refresh Runtime</button>
+            <button id=\"focus_mode_btn\" onclick=\"toggleFocusMode()\">Enable Focus Mode</button>
+          </div>
+        </div>
+        <div class=\"chat-status-ribbon\" id=\"chat_status_ribbon\">
+          <div class=\"status-text\" id=\"chat_status_text\">status: waiting for first task</div>
+          <div class=\"status-actions\">
+            <button onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
+            <button onclick=\"showTimeline()\">Timeline</button>
+            <button onclick=\"loadCurrentMemoryContext()\">Memory</button>
           </div>
         </div>
         <div class=\"chat-log\" id=\"chat_log\"></div>
@@ -944,6 +1012,14 @@ HTML = """
             <button class=\"primary\" onclick=\"sendChat(false)\">Send</button>
             <button onclick=\"sendWebSearchHint()\">Web Search</button>
           </div>
+          <div class=\"chat-quick-strip\">
+            <input id=\"quick_candidate_data_path\" placeholder=\"Quick candidate_data path (e.g. /abs/path/candidates.csv)\" />
+            <button onclick=\"quickUseCandidatePath(false)\">Use Path</button>
+            <button onclick=\"quickUseCandidatePath(true)\">Use Path + Resume</button>
+            <button onclick=\"loadCurrentMemoryContext()\">Load Memory</button>
+            <button onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
+          </div>
+          <div class=\"chat-quick-status\" id=\"quick_candidate_status\">quick path: idle</div>
 
           <div class=\"tool-box\" id=\"pending_input_box\" style=\"display:none;\">
             <h3>Need Input</h3>
@@ -1127,6 +1203,7 @@ HTML = """
         promptHistory: [],
         projects: [],
         memoryExplorer: null,
+        ui: {focusMode: false},
         batchHistory: [],
         batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
         failedReplayQueue: {source_export_id: '', action: '', rows: [], count: 0, unique_task_count: 0, failure_reasons: []},
@@ -1146,6 +1223,7 @@ HTML = """
 
       const PROMPT_HISTORY_LIMIT = 8;
       const SESSION_BOARD_KEY = 'agent4mat.ui.session_board.v1';
+      const UI_PREFS_KEY = 'agent4mat.ui.prefs.v1';
 
       const pendingFieldMeta = {
         property: {label: 'property', placeholder: 'plqy / lambda_em / stability'},
@@ -1304,6 +1382,54 @@ HTML = """
         } catch (e) {
           // ignore storage failures
         }
+      }
+
+      function loadUiPrefs() {
+        const fallback = {focusMode: false};
+        try {
+          const raw = localStorage.getItem(UI_PREFS_KEY);
+          if (!raw) return fallback;
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== 'object') return fallback;
+          return {
+            focusMode: Boolean(parsed.focusMode),
+          };
+        } catch (e) {
+          return fallback;
+        }
+      }
+
+      function saveUiPrefs(v) {
+        const payload = {
+          focusMode: Boolean(v && v.focusMode),
+        };
+        try {
+          localStorage.setItem(UI_PREFS_KEY, JSON.stringify(payload));
+        } catch (e) {
+          // ignore storage failures
+        }
+      }
+
+      function applyFocusMode(enabled) {
+        const on = Boolean(enabled);
+        state.ui = state.ui && typeof state.ui === 'object' ? state.ui : {};
+        state.ui.focusMode = on;
+        document.body.classList.toggle('chat-focus-mode', on);
+        const btn = document.getElementById('focus_mode_btn');
+        if (btn) {
+          btn.textContent = on ? 'Disable Focus Mode' : 'Enable Focus Mode';
+        }
+        const stateEle = document.getElementById('focus_mode_state');
+        if (stateEle) {
+          stateEle.textContent = on ? 'focus' : 'standard';
+        }
+        saveUiPrefs(state.ui);
+      }
+
+      function toggleFocusMode() {
+        const current = Boolean(state.ui && state.ui.focusMode);
+        applyFocusMode(!current);
+        renderEvents([{stage: 'focus_mode', status: 'pass', operation: state.ui.focusMode ? 'enabled' : 'disabled'}]);
       }
 
       function applySessionBoardStateToControls(v) {
@@ -1918,6 +2044,28 @@ HTML = """
           lines.push(failLine);
         }
         document.getElementById('event_out').textContent = lines.join('\n');
+      }
+
+      function renderChatStatusRibbon(summaryPayload, timelinePayload) {
+        const textEle = document.getElementById('chat_status_text');
+        if (!textEle) return;
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const task = taskId() || '-';
+        const exec = (s.execution_summary && typeof s.execution_summary === 'object') ? s.execution_summary : {};
+        const fail = (s.failure_diagnostics && typeof s.failure_diagnostics === 'object') ? s.failure_diagnostics : {};
+        const runStatus = String(exec.status || s.status || '-').trim();
+        const records = Number(exec.record_count || 0);
+        const failedN = Number(exec.failed_count || 0);
+        const failureKind = String(fail.latest_failure_kind || '').trim();
+        const failedStep = String(fail.latest_failed_step || '').trim();
+        const totalMs = Number(t.total_duration_ms || 0);
+        const sec = totalMs > 0 ? (totalMs / 1000.0).toFixed(2) : '-';
+        let text = `task=${task} | status=${runStatus || '-'} | records=${records} | failed=${failedN} | duration_sec=${sec}`;
+        if (failureKind || failedStep) {
+          text += ` | failure=${failureKind || '-'} step=${failedStep || '-'}`;
+        }
+        textEle.textContent = text;
       }
 
       function renderRuntimeProgress(summary) {
@@ -4385,6 +4533,88 @@ HTML = """
         setMessageInput(msg);
       }
 
+      function setQuickCandidateStatus(text, level) {
+        const ele = document.getElementById('quick_candidate_status');
+        if (!ele) return;
+        const msg = String(text || '').trim() || 'quick path: idle';
+        const lv = String(level || '').trim().toLowerCase();
+        ele.textContent = msg;
+        if (lv === 'pass') {
+          ele.className = 'chat-quick-status state-pass';
+        } else if (lv === 'fail') {
+          ele.className = 'chat-quick-status state-fail';
+        } else if (lv === 'warn') {
+          ele.className = 'chat-quick-status state-warn';
+        } else {
+          ele.className = 'chat-quick-status';
+        }
+      }
+
+      function syncQuickCandidatePathFromAttachment() {
+        const p = String(document.getElementById('attachment_path').value || '').trim();
+        const quick = document.getElementById('quick_candidate_data_path');
+        if (quick) quick.value = p;
+      }
+
+      function readQuickCandidatePath() {
+        const q = String(document.getElementById('quick_candidate_data_path').value || '').trim();
+        if (q) return q;
+        const p = String(document.getElementById('attachment_path').value || '').trim();
+        return p;
+      }
+
+      async function showCurrentTaskSummaryInline() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          setQuickCandidateStatus('quick summary: no current task', 'fail');
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
+        renderJsonOut(r.data);
+        renderSummaryEventLines(r.data);
+        renderMemoryExplorerFromSummary(r.data);
+        setQuickCandidateStatus(`quick summary loaded for task=${tid}`, r.data && r.data.status === 'pass' ? 'pass' : 'warn');
+      }
+
+      async function quickUseCandidatePath(runNow) {
+        const p = readQuickCandidatePath();
+        if (!p) {
+          renderJsonOut({status: 'fail', error: 'empty candidate_data path'});
+          setQuickCandidateStatus('quick path is empty', 'fail');
+          return;
+        }
+        document.getElementById('attachment_path').value = p;
+        const quick = document.getElementById('quick_candidate_data_path');
+        if (quick) quick.value = p;
+        const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+        const missing = pendingMissingFieldsSet(pending);
+        if (missing.has('candidate_data')) {
+          const input = document.getElementById('pending_field_candidate_data');
+          if (input) {
+            input.value = p;
+            if (runNow) {
+              const out = await sendPendingResume();
+              const st = String((out && out.status) || 'unknown');
+              setQuickCandidateStatus(`quick path resume status=${st}`, st === 'pass' ? 'pass' : (st === 'need_user_input' ? 'warn' : 'fail'));
+            } else {
+              setQuickCandidateStatus('candidate_data filled into pending form', 'pass');
+              renderJsonOut({status: 'pass', mode: 'pending_form', candidate_data: p});
+            }
+            return;
+          }
+        }
+        setMessageInput(JSON.stringify({candidate_data: p}, null, 2));
+        if (runNow) {
+          const out = await sendChat(false);
+          const st = String((out && out.status) || 'unknown');
+          setQuickCandidateStatus(`quick path send status=${st}`, st === 'pass' ? 'pass' : (st === 'need_user_input' ? 'warn' : 'fail'));
+          return;
+        }
+        setQuickCandidateStatus('candidate_data patch prepared in chat input', 'pass');
+        renderJsonOut({status: 'pass', mode: 'chat_patch', candidate_data: p});
+      }
+
       async function attachPath() {
         const pid = selectedProjectId();
         const p = (document.getElementById('attachment_path').value || '').trim();
@@ -4398,6 +4628,8 @@ HTML = """
           kind: 'path',
         });
         renderJsonOut(r.data);
+        syncQuickCandidatePathFromAttachment();
+        setQuickCandidateStatus(`attached path for project=${pid}`, r.data && r.data.status === 'pass' ? 'pass' : 'warn');
         await loadHistory();
       }
 
@@ -4407,6 +4639,8 @@ HTML = """
           renderJsonOut({status: 'fail', error: 'empty attachment_path'});
           return;
         }
+        syncQuickCandidatePathFromAttachment();
+        setQuickCandidateStatus('candidate_data patch prepared from attachment path', 'pass');
         setMessageInput(JSON.stringify({candidate_data: p}, null, 2));
       }
 
@@ -4428,6 +4662,8 @@ HTML = """
         renderJsonOut(data);
         if (data && data.attachment && data.attachment.path) {
           document.getElementById('attachment_path').value = String(data.attachment.path);
+          syncQuickCandidatePathFromAttachment();
+          setQuickCandidateStatus('uploaded file path synced to quick path', 'pass');
         }
         await loadHistory();
       }
@@ -4562,6 +4798,7 @@ HTML = """
           renderRuntimeProgress(null);
           renderTimelineGroups(null);
           renderMemoryExplorerFromPreview(null, 'runtime');
+          renderChatStatusRibbon({}, {});
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -4586,12 +4823,17 @@ HTML = """
         renderRuntimeProgress(tl.summary || null);
         renderTimelineGroups(tl);
         renderMemoryExplorerFromSummary(s);
+        renderChatStatusRibbon(s, tl);
       }
 
       async function boot() {
         applyStepArgsTemplate(true);
         updateMemoryStatus();
         updateProjectLockStatus();
+        const uiPrefs = loadUiPrefs();
+        state.ui = uiPrefs;
+        applyFocusMode(Boolean(uiPrefs.focusMode));
+        setQuickCandidateStatus('quick path: idle');
         refreshCloneTargetSuggestion();
         bindComposerShortcuts();
         bindWorkspaceUrlNavigation();

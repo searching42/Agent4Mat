@@ -735,6 +735,21 @@ HTML = """
         flex-wrap: wrap;
         gap: 6px;
       }
+      .chat-quick-chips {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .chat-quick-chips button {
+        margin-top: 0;
+        padding: 5px 8px;
+        border-radius: 999px;
+        font-size: 0.74rem;
+        background: #f0f5ff;
+        border: 1px solid #c8d7f4;
+        color: #1f3f7f;
+      }
       .prompt-history .empty {
         color: var(--muted);
         font-size: 0.76rem;
@@ -1089,6 +1104,13 @@ HTML = """
           <div class=\"muted\">Step mode: 支持 `/step <operation> {args_json}` 或直接发送 `{\"operation\":\"...\",\"args\":{...}}`。</div>
           <div class=\"muted\">快捷键: Ctrl/Cmd+Enter 发送，Shift+Enter 换行。</div>
           <div class=\"prompt-history\" id=\"prompt_history_box\"></div>
+          <div class=\"chat-quick-chips\" id=\"chat_quick_chips\">
+            <button type=\"button\" id=\"quick_chip_target_btn\" onclick=\"applyQuickChatChip('target_470_plqy')\">470nm + High PLQY</button>
+            <button type=\"button\" id=\"quick_chip_candidate_patch_btn\" onclick=\"applyQuickChatChip('candidate_patch')\">Patch candidate_data</button>
+            <button type=\"button\" id=\"quick_chip_step_clean_btn\" onclick=\"applyQuickChatChip('step_clean_dataset')\">Step clean_dataset</button>
+            <button type=\"button\" id=\"quick_chip_step_train_btn\" onclick=\"applyQuickChatChip('step_train_predictor')\">Step train_predictor</button>
+            <button type=\"button\" id=\"quick_chip_web_hint_btn\" onclick=\"applyQuickChatChip('web_hint')\">Insert Web Hint</button>
+          </div>
           <div class=\"btn-row\">
             <button class=\"primary\" onclick=\"sendChat(false)\">Send</button>
             <button onclick=\"sendWebSearchHint()\">Web Search</button>
@@ -1126,6 +1148,11 @@ HTML = """
               <div class=\"btn-row hint-next-actions\" id=\"pending_hint_next_actions\" style=\"display:none;\"></div>
             </div>
             <div class=\"pending-fields\" id=\"pending_fields\"></div>
+            <div class=\"btn-row\" id=\"pending_auto_actions\" style=\"display:none;\">
+              <button id=\"pending_auto_fill_btn\" onclick=\"pendingAutoFillCandidateData()\">Fill candidate_data</button>
+              <button id=\"pending_auto_patch_btn\" onclick=\"pendingAutoFillAndPatch()\">Fill + Send Patch</button>
+              <button id=\"pending_auto_resume_btn\" onclick=\"pendingAutoFillAndResume()\">Fill + Resume</button>
+            </div>
             <div class=\"btn-row\">
               <button class=\"primary\" onclick=\"sendPendingForm(false)\">Send Form Patch</button>
               <button onclick=\"sendPendingForm(true)\">Send + Run</button>
@@ -1765,6 +1792,7 @@ HTML = """
         document.getElementById('pending_hint_next_actions').style.display = 'none';
         document.getElementById('pending_hint_next_actions').innerHTML = '';
         document.getElementById('pending_fields').innerHTML = '';
+        document.getElementById('pending_auto_actions').style.display = 'none';
       }
 
       function getPendingSuggestedCandidateData() {
@@ -1780,6 +1808,41 @@ HTML = """
           if (p) return p;
         }
         return '';
+      }
+
+      function pendingAutoCandidateSeed() {
+        const suggested = getPendingSuggestedCandidateData();
+        if (suggested) return suggested;
+        return readQuickCandidatePath();
+      }
+
+      function renderPendingAutoActions(pending) {
+        const wrap = document.getElementById('pending_auto_actions');
+        const fillBtn = document.getElementById('pending_auto_fill_btn');
+        const patchBtn = document.getElementById('pending_auto_patch_btn');
+        const resumeBtn = document.getElementById('pending_auto_resume_btn');
+        if (!wrap || !fillBtn || !patchBtn || !resumeBtn) return;
+
+        const missing = pendingMissingFieldsSet(pending);
+        if (!missing.has('candidate_data')) {
+          wrap.style.display = 'none';
+          fillBtn.disabled = true;
+          patchBtn.disabled = true;
+          resumeBtn.disabled = true;
+          return;
+        }
+        wrap.style.display = 'flex';
+        const seed = pendingAutoCandidateSeed();
+        const enabled = Boolean(seed);
+        fillBtn.disabled = !enabled;
+        patchBtn.disabled = !enabled;
+        resumeBtn.disabled = !enabled;
+        const hint = enabled
+          ? `candidate_data seed: ${seed}`
+          : 'No seed found: provide suggested candidate_data or quick path first.';
+        fillBtn.title = hint;
+        patchBtn.title = hint;
+        resumeBtn.title = hint;
       }
 
       function pendingMissingFieldsSet(pending) {
@@ -2198,6 +2261,57 @@ HTML = """
           row.appendChild(input);
           fieldsWrap.appendChild(row);
         }
+        renderPendingAutoActions(pending);
+      }
+
+      async function pendingAutoFillCandidateData() {
+        const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+        const missing = pendingMissingFieldsSet(pending);
+        const candidate = pendingAutoCandidateSeed();
+        if (!candidate) {
+          renderJsonOut({
+            status: 'fail',
+            error: 'no candidate_data seed available (need suggested_candidate_data or quick path)',
+          });
+          setQuickCandidateStatus('pending auto-fill: missing candidate_data seed', 'fail');
+          return {status: 'fail'};
+        }
+        if (!missing.has('candidate_data')) {
+          setMessageInput(JSON.stringify({candidate_data: candidate}, null, 2));
+          renderJsonOut({
+            status: 'pass',
+            mode: 'chat_patch',
+            message: 'pending auto-fill prepared candidate_data patch in chat input',
+            candidate_data: candidate,
+          });
+          setQuickCandidateStatus('pending auto-fill prepared patch in chat input', 'warn');
+          return {status: 'pass', mode: 'chat_patch', candidate_data: candidate};
+        }
+        await applyPendingHintCandidateData(candidate, false);
+        renderPendingAutoActions(state.pendingInput || {});
+        setQuickCandidateStatus('pending auto-fill applied candidate_data', 'pass');
+        renderEvents([{stage: 'pending_auto_fill', status: 'pass'}]);
+        return {status: 'pass', mode: 'pending_form', candidate_data: candidate};
+      }
+
+      async function pendingAutoFillAndPatch() {
+        const filled = await pendingAutoFillCandidateData();
+        if (!filled || String(filled.status || '') === 'fail') return filled;
+        const out = await sendPendingForm(false);
+        const st = String((out && out.status) || 'unknown');
+        setQuickCandidateStatus(`pending auto patch status=${st}`, st === 'pass' ? 'pass' : (st === 'need_user_input' ? 'warn' : 'fail'));
+        renderEvents([{stage: 'pending_auto_patch', status: st}]);
+        return out;
+      }
+
+      async function pendingAutoFillAndResume() {
+        const filled = await pendingAutoFillCandidateData();
+        if (!filled || String(filled.status || '') === 'fail') return filled;
+        const out = await sendPendingResume();
+        const st = String((out && out.status) || 'unknown');
+        setQuickCandidateStatus(`pending auto resume status=${st}`, st === 'pass' ? 'pass' : (st === 'need_user_input' ? 'warn' : 'fail'));
+        renderEvents([{stage: 'pending_auto_resume', status: st}]);
+        return out;
       }
 
       function collectPendingPatch() {
@@ -4978,6 +5092,42 @@ HTML = """
         setQuickCandidateStatus(`web hint inserted${presetName ? ` (${presetName})` : ''}`, 'pass');
       }
 
+      function applyQuickChatChip(kind) {
+        const key = String(kind || '').trim();
+        const candidatePath = readQuickCandidatePath() || '/abs/path/candidates.csv';
+        if (key === 'target_470_plqy') {
+          setMessageInput('设计470nm附近且高PLQY分子');
+          setQuickCandidateStatus('quick chip loaded: target prompt', 'pass');
+          return;
+        }
+        if (key === 'candidate_patch') {
+          setMessageInput(JSON.stringify({candidate_data: candidatePath}, null, 2));
+          setQuickCandidateStatus('quick chip loaded: candidate_data patch', 'pass');
+          return;
+        }
+        if (key === 'step_clean_dataset') {
+          const cmd = `/step clean_dataset ${JSON.stringify({input_csv: candidatePath})}`;
+          setMessageInput(cmd);
+          setQuickCandidateStatus('quick chip loaded: clean_dataset step', 'pass');
+          return;
+        }
+        if (key === 'step_train_predictor') {
+          const cmd = `/step train_predictor ${JSON.stringify({
+            train_csv: candidatePath,
+            target_column: 'target_plqy_percent',
+            predictor_id: 'unimol_lambda_plqy_v1',
+          })}`;
+          setMessageInput(cmd);
+          setQuickCandidateStatus('quick chip loaded: train_predictor step', 'pass');
+          return;
+        }
+        if (key === 'web_hint') {
+          sendWebSearchHint();
+          return;
+        }
+        renderJsonOut({status: 'fail', error: `unknown quick chip: ${key}`});
+      }
+
       function setQuickCandidateStatus(text, level) {
         const ele = document.getElementById('quick_candidate_status');
         if (!ele) return;
@@ -4999,6 +5149,7 @@ HTML = """
         const p = String(document.getElementById('attachment_path').value || '').trim();
         const quick = document.getElementById('quick_candidate_data_path');
         if (quick) quick.value = p;
+        renderPendingAutoActions(state.pendingInput || {});
       }
 
       function readQuickCandidatePath() {

@@ -445,6 +445,10 @@ HTML = """
         padding: 5px 8px;
         font-size: 0.72rem;
       }
+      .chat-status-ribbon .status-actions button:disabled {
+        opacity: 0.54;
+        cursor: not-allowed;
+      }
       .chat-log {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -567,6 +571,18 @@ HTML = """
       }
       body.output-simple-mode .right-advanced {
         display: none !important;
+      }
+      .simple-only {
+        display: none !important;
+      }
+      body.output-simple-mode .simple-only {
+        display: flex !important;
+      }
+      body.output-simple-mode #event_out {
+        max-height: 180px;
+      }
+      body.output-simple-mode #out {
+        max-height: 260px;
       }
       .tool-box {
         border: 1px solid var(--line);
@@ -756,6 +772,16 @@ HTML = """
         font-size: 0.74rem;
       }
       .right-mode-controls button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
+      .right-simple-actions {
+        gap: 6px;
+        flex-wrap: wrap;
+        margin: 8px 0 10px 0;
+      }
+      .right-simple-actions button {
         margin-top: 0;
         padding: 5px 8px;
         font-size: 0.72rem;
@@ -1008,6 +1034,7 @@ HTML = """
               <span class=\"hud-chip\">project <span id=\"hud_project_id\">-</span></span>
               <span class=\"hud-chip\">task <span id=\"current_task_id_hud\">-</span></span>
               <span class=\"hud-chip\">health <span id=\"project_runtime_health_hud\">-</span></span>
+              <span class=\"hud-chip\">runtime <span id=\"runtime_elapsed_hud\">-</span></span>
               <span class=\"hud-chip\">view <span id=\"focus_mode_state\">standard</span></span>
               <span class=\"hud-chip\">output <span id=\"output_view_state\">simple</span></span>
             </div>
@@ -1022,9 +1049,12 @@ HTML = """
         <div class=\"chat-status-ribbon\" id=\"chat_status_ribbon\">
           <div class=\"status-text\" id=\"chat_status_text\">status: waiting for first task</div>
           <div class=\"status-actions\">
-            <button onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
-            <button onclick=\"showTimeline()\">Timeline</button>
-            <button onclick=\"loadCurrentMemoryContext()\">Memory</button>
+            <button id=\"chat_summary_btn\" onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
+            <button id=\"chat_timeline_btn\" onclick=\"showTimeline()\">Timeline</button>
+            <button id=\"chat_memory_btn\" onclick=\"loadCurrentMemoryContext()\">Memory</button>
+            <button id=\"chat_retry_failed_btn\" onclick=\"retryFailedStep()\">Retry Failed</button>
+            <button id=\"chat_resume_btn\" onclick=\"retryCurrentTask()\">Resume</button>
+            <button id=\"chat_bundle_btn\" onclick=\"downloadTaskBundle()\">Bundle</button>
           </div>
         </div>
         <div class=\"chat-log\" id=\"chat_log\"></div>
@@ -1129,6 +1159,13 @@ HTML = """
         <div class=\"muted\" id=\"runtime_stage_text\">stage: -</div>
         <div class=\"progress-wrap\"><div class=\"progress-bar\" id=\"runtime_progress_bar\"></div></div>
         <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
+        <div class=\"right-simple-actions simple-only\" id=\"right_simple_actions\">
+          <button onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
+          <button onclick=\"showTimeline()\">Timeline</button>
+          <button id=\"simple_retry_failed_btn\" onclick=\"retryFailedStep()\">Retry Failed</button>
+          <button id=\"simple_resume_btn\" onclick=\"retryCurrentTask()\">Resume</button>
+          <button onclick=\"downloadTaskBundle()\">Bundle</button>
+        </div>
         <div class=\"right-advanced\" id=\"right_retry_controls\">
           <label>Failed Tool Name (optional)</label>
           <input id=\"retry_failed_tool_name\" placeholder=\"e.g. score_candidates (empty = latest failed step)\" />
@@ -1200,7 +1237,7 @@ HTML = """
           </div>
         </details>
 
-        <details class=\"drawer\" open>
+        <details class=\"drawer right-advanced\" open id=\"memory_explorer_drawer\">
           <summary>Memory Explorer</summary>
           <div class=\"drawer-body\">
             <div class=\"muted\" id=\"memory_explorer_status\">memory context: (not loaded)</div>
@@ -2118,6 +2155,56 @@ HTML = """
         document.getElementById('event_out').textContent = lines.join('\n');
       }
 
+      function formatRuntimeDurationMs(rawMs) {
+        const ms = Number(rawMs || 0);
+        if (!Number.isFinite(ms) || ms <= 0) return '-';
+        const totalSec = Math.max(0, Math.floor(ms / 1000));
+        if (totalSec < 60) return `${totalSec}s`;
+        const min = Math.floor(totalSec / 60);
+        const sec = totalSec % 60;
+        if (min < 60) return `${min}m${String(sec).padStart(2, '0')}s`;
+        const hour = Math.floor(min / 60);
+        const minRem = min % 60;
+        return `${hour}h${String(minRem).padStart(2, '0')}m`;
+      }
+
+      function setRuntimeElapsedHud(rawMs) {
+        const ele = document.getElementById('runtime_elapsed_hud');
+        if (!ele) return;
+        ele.textContent = formatRuntimeDurationMs(rawMs);
+      }
+
+      function _setButtonDisabled(buttonId, disabled, tooltip) {
+        const btn = document.getElementById(buttonId);
+        if (!btn) return;
+        btn.disabled = Boolean(disabled);
+        if (tooltip) {
+          btn.title = String(tooltip);
+        } else {
+          btn.removeAttribute('title');
+        }
+      }
+
+      function syncChatRuntimeActions(meta) {
+        const m = meta && typeof meta === 'object' ? meta : {};
+        const hasTask = Boolean(m.hasTask);
+        const runStatus = String(m.runStatus || '').trim().toLowerCase();
+        const failedN = Number(m.failedN || 0);
+        const failureKind = String(m.failureKind || '').trim();
+        const canRetryFailed = hasTask && (failedN > 0 || Boolean(failureKind));
+        const canResume = hasTask && runStatus !== 'success';
+        const canGeneral = hasTask;
+        const noTaskMsg = 'No current task';
+        _setButtonDisabled('chat_summary_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
+        _setButtonDisabled('chat_timeline_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
+        _setButtonDisabled('chat_memory_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
+        _setButtonDisabled('chat_bundle_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
+        _setButtonDisabled('chat_retry_failed_btn', !canRetryFailed, canRetryFailed ? '' : 'No failed step to retry');
+        _setButtonDisabled('chat_resume_btn', !canResume, canResume ? '' : (hasTask ? 'Task already success' : noTaskMsg));
+        _setButtonDisabled('simple_retry_failed_btn', !canRetryFailed, canRetryFailed ? '' : 'No failed step to retry');
+        _setButtonDisabled('simple_resume_btn', !canResume, canResume ? '' : (hasTask ? 'Task already success' : noTaskMsg));
+      }
+
       function renderChatStatusRibbon(summaryPayload, timelinePayload) {
         const textEle = document.getElementById('chat_status_text');
         if (!textEle) return;
@@ -2132,12 +2219,19 @@ HTML = """
         const failureKind = String(fail.latest_failure_kind || '').trim();
         const failedStep = String(fail.latest_failed_step || '').trim();
         const totalMs = Number(t.total_duration_ms || 0);
-        const sec = totalMs > 0 ? (totalMs / 1000.0).toFixed(2) : '-';
-        let text = `task=${task} | status=${runStatus || '-'} | records=${records} | failed=${failedN} | duration_sec=${sec}`;
+        const durationText = formatRuntimeDurationMs(totalMs);
+        let text = `task=${task} | status=${runStatus || '-'} | records=${records} | failed=${failedN} | elapsed=${durationText}`;
         if (failureKind || failedStep) {
           text += ` | failure=${failureKind || '-'} step=${failedStep || '-'}`;
         }
         textEle.textContent = text;
+        setRuntimeElapsedHud(totalMs);
+        syncChatRuntimeActions({
+          hasTask: task && task !== '-',
+          runStatus: runStatus,
+          failedN: failedN,
+          failureKind: failureKind,
+        });
       }
 
       function renderRuntimeProgress(summary) {

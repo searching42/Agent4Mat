@@ -8695,6 +8695,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("pending_hints_box", html)
         self.assertIn("applyPendingSuggestedCandidateData(true)", html)
         self.assertIn("previewPendingHintTask(", html)
+        self.assertIn("previewPendingHintMemoryContext(", html)
+        self.assertIn("Preview Memory", html)
         self.assertIn("Use + Run", html)
         self.assertIn("project_read_only", html)
         self.assertIn("updateProjectLockStatus()", html)
@@ -9554,11 +9556,31 @@ class UiPrototypeTests(unittest.TestCase):
                 project = ui_app_mod._load_project_state("ui_chat_pending_resume")
                 self.assertIsInstance(project, dict)
                 project["current_task_id"] = "ui_chat_pending_task"
+                draft_path = root / "runs" / "agent" / "ui_chat_pending_task" / "task.draft.json"
+                draft_path.parent.mkdir(parents=True, exist_ok=True)
+                draft_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": "ui_chat_pending_task",
+                            "request_text": "设计470nm附近且高PLQY分子",
+                            "status": "need_user_input",
+                            "property": "plqy",
+                            "range": "470+-12nm",
+                            "n_structures": 100,
+                            "constraints": {"mw_min": 150.0, "mw_max": 700.0, "domain_threshold": 0.2, "banned_alerts": []},
+                            "missing_fields": ["candidate_data"],
+                            "questions": ["候选数据来源是什么？"],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
                 project["pending_input"] = {
                     "stage": "intake",
                     "missing_fields": ["candidate_data"],
                     "questions": ["候选数据来源是什么？"],
-                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_pending_task" / "task.draft.json"),
+                    "task_draft_path": str(draft_path),
                 }
                 ui_app_mod._save_project_state(project)
 
@@ -9595,6 +9617,10 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertIn("agent-resume", cmd)
                 self.assertIn("--candidate-data", cmd)
                 self.assertIn("/tmp/candidates.csv", cmd)
+                draft_saved = json.loads(draft_path.read_text(encoding="utf-8"))
+                self.assertEqual(str(draft_saved.get("candidate_data") or ""), "/tmp/candidates.csv")
+                missing_saved = draft_saved.get("missing_fields") if isinstance(draft_saved.get("missing_fields"), list) else []
+                self.assertNotIn("candidate_data", missing_saved)
 
     def test_ui_chat_pending_submit_resume_need_user_input(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -1361,6 +1361,17 @@ HTML = """
         renderEvents([{stage: 'hint_preview', status: String((r.data && r.data.status) || 'unknown'), task_id: tid}]);
       }
 
+      async function previewPendingHintMemoryContext(taskId) {
+        const tid = String(taskId || '').trim();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'invalid hint task_id'});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact/memory_context?max_chars=20000`);
+        renderJsonOut(r.data);
+        renderEvents([{stage: 'hint_memory_preview', status: String((r.data && r.data.status) || 'unknown'), task_id: tid}]);
+      }
+
       async function applyPendingHintCandidateData(value, runAfter) {
         const candidate = String(value || '').trim();
         const doRun = Boolean(runAfter);
@@ -1440,6 +1451,10 @@ HTML = """
             }
           }
           if (taskId !== '-') {
+            const memoryBtn = document.createElement('button');
+            memoryBtn.textContent = 'Preview Memory';
+            memoryBtn.addEventListener('click', () => { void previewPendingHintMemoryContext(taskId); });
+            actions.appendChild(memoryBtn);
             const previewBtn = document.createElement('button');
             previewBtn.textContent = 'Preview Task';
             previewBtn.addEventListener('click', () => { void previewPendingHintTask(taskId); });
@@ -6695,6 +6710,43 @@ def _pending_input_payload(
     return out
 
 
+def _persist_pending_patch_to_draft(
+    *,
+    project: Dict[str, Any],
+    pending: Dict[str, Any],
+    patch: Dict[str, Any],
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"status": "skipped", "task_draft_path": "", "updated_fields": []}
+    if not isinstance(patch, dict) or len(patch) < 1:
+        return out
+    raw_path = pending.get("task_draft_path") if isinstance(pending, dict) else ""
+    if not str(raw_path or "").strip():
+        raw_path = project.get("task_draft_path")
+    draft_path = _normalize_repo_path(raw_path)
+    if draft_path is None or not draft_path.exists():
+        out["reason"] = "missing_task_draft_path"
+        return out
+    draft = _load_json_path(draft_path)
+    if not isinstance(draft, dict):
+        out["reason"] = "invalid_task_draft"
+        return out
+    merged, updated_fields = _merge_task_draft(draft, patch)
+    if not updated_fields:
+        out["reason"] = "no_supported_patch_fields"
+        out["task_draft_path"] = str(draft_path)
+        return out
+    draft_path.parent.mkdir(parents=True, exist_ok=True)
+    draft_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    project["task_draft_path"] = str(draft_path)
+    if str(project.get("current_task_id") or "").strip() == "":
+        project["current_task_id"] = str(merged.get("task_id") or draft_path.parent.name or "")
+    out["status"] = "pass"
+    out["task_draft_path"] = str(draft_path)
+    out["updated_fields"] = updated_fields
+    out["missing_fields"] = merged.get("missing_fields") if isinstance(merged.get("missing_fields"), list) else []
+    return out
+
+
 def _chat_resume_from_pending(
     *,
     project: Dict[str, Any],
@@ -6735,6 +6787,18 @@ def _chat_resume_from_pending(
             "messages": _recent_messages(project),
             "events": [{"stage": "resume", "status": "fail", "reason": "missing_task_id"}],
         }
+
+    patch_persist = _persist_pending_patch_to_draft(project=project, pending=pending, patch=patch)
+    if str(patch_persist.get("status") or "") == "pass":
+        updated_fields = patch_persist.get("updated_fields") if isinstance(patch_persist.get("updated_fields"), list) else []
+        if updated_fields:
+            _append_message(
+                project,
+                role="system",
+                kind="task_patch",
+                content=f"已写回 task 草案字段: {', '.join(str(x) for x in updated_fields)}",
+                meta={"updated_fields": updated_fields, "task_draft_path": patch_persist.get("task_draft_path")},
+            )
 
     started_at = datetime.now()
     resume = _run_agent_resume(

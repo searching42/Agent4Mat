@@ -9596,11 +9596,30 @@ class UiPrototypeTests(unittest.TestCase):
                 project = ui_app_mod._load_project_state("ui_chat_pending_need_input")
                 self.assertIsInstance(project, dict)
                 project["current_task_id"] = "ui_chat_pending_need_task"
+                draft_path = root / "runs" / "agent" / "ui_chat_pending_need_task" / "task.draft.json"
+                draft_path.parent.mkdir(parents=True, exist_ok=True)
+                draft_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": "ui_chat_pending_need_task",
+                            "status": "need_user_input",
+                            "missing_fields": ["candidate_data"],
+                            "questions": ["候选数据来源是什么？"],
+                            "provenance": {
+                                "suggested_candidate_data": "master_database",
+                                "memory_hints": [{"task_id": "prev_task_r1", "candidate_data": "master_database", "score": 0.79}],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
                 project["pending_input"] = {
                     "stage": "approve",
                     "missing_fields": ["candidate_data"],
                     "questions": ["候选数据来源是什么？"],
-                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_pending_need_task" / "task.draft.json"),
+                    "task_draft_path": str(draft_path),
                 }
                 ui_app_mod._save_project_state(project)
 
@@ -9609,7 +9628,7 @@ class UiPrototypeTests(unittest.TestCase):
                     "status": "need_user_input",
                     "missing_fields": ["candidate_data"],
                     "questions": ["候选数据来源是什么？本地CSV路径还是数据库关键词？"],
-                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_pending_need_task" / "task.draft.json"),
+                    "task_draft_path": str(draft_path),
                 }
                 fake_cp = subprocess.CompletedProcess(
                     args=["python3", "-m", "oled_agent.cli", "agent-resume"],
@@ -9633,6 +9652,85 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(pending.get("stage"), "resume")
                 missing = pending.get("missing_fields") if isinstance(pending.get("missing_fields"), list) else []
                 self.assertIn("candidate_data", missing)
+                self.assertEqual(str(pending.get("suggested_candidate_data") or ""), "master_database")
+                hints = pending.get("memory_hints") if isinstance(pending.get("memory_hints"), list) else []
+                self.assertGreaterEqual(len(hints), 1)
+
+    def test_ui_chat_send_approve_need_user_input_includes_memory_hints(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_chat_approve_need_mem_20260516_000001"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            draft_path = run_dir / "task.draft.json"
+            draft_path.write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "status": "need_user_input",
+                        "missing_fields": ["candidate_data"],
+                        "questions": ["候选数据来源是什么？"],
+                        "provenance": {
+                            "suggested_candidate_data": "master_database",
+                            "memory_hints": [{"task_id": "prev_task_a1", "candidate_data": "master_database", "score": 0.91}],
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_approve_need_mem", "title": "approve need input"})
+                cp_intake = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "task_id": task_id,
+                            "status": "draft",
+                            "task_draft_path": str(draft_path),
+                            "missing_fields": [],
+                            "questions": [],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    stderr="",
+                )
+                cp_approve = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-approve"],
+                    returncode=2,
+                    stdout=json.dumps(
+                        {
+                            "task_id": task_id,
+                            "status": "need_user_input",
+                            "task_draft_path": str(draft_path),
+                            "missing_fields": ["candidate_data"],
+                            "questions": ["候选数据来源是什么？本地CSV路径还是数据库关键词？"],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", side_effect=[cp_intake, cp_approve]):
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_approve_need_mem",
+                            "message": "设计470nm附近且高PLQY分子",
+                            "options": {"planner_provider": "rule_based_v1", "catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                pending = payload.get("pending_input") if isinstance(payload.get("pending_input"), dict) else {}
+                self.assertEqual(str(pending.get("stage") or ""), "approve")
+                self.assertEqual(str(pending.get("suggested_candidate_data") or ""), "master_database")
+                hints = pending.get("memory_hints") if isinstance(pending.get("memory_hints"), list) else []
+                self.assertGreaterEqual(len(hints), 1)
 
     def test_ui_chat_send_happy_path_runs_pipeline(self) -> None:
         ui_app_mod = self._load_ui_module()

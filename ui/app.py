@@ -6657,11 +6657,19 @@ def _chat_resume_from_pending(
     rr = resume.get("result") if isinstance(resume.get("result"), dict) else {}
     rr_status = str(rr.get("status") or "").strip()
     if rr_status == "need_user_input":
+        pending_memory = _pending_memory_from_intake_result(
+            intake_result=rr,
+            draft_path=_resolve_optional_path(rr.get("task_draft_path")),
+        )
         pending_next = _pending_input_payload(
             stage="resume",
             missing_fields=rr.get("missing_fields"),
             questions=rr.get("questions"),
             task_draft_path=rr.get("task_draft_path"),
+            memory_hints_path=pending_memory.get("memory_hints_path"),
+            memory_hints=pending_memory.get("memory_hints"),
+            suggested_candidate_data=pending_memory.get("suggested_candidate_data"),
+            memory_hints_status=pending_memory.get("memory_hints_status"),
         )
         project["pending_input"] = pending_next
         _append_message(
@@ -6993,11 +7001,16 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
 
     approve_status = str(approve_result.get("status") or "")
     if approve_status == "need_user_input":
+        pending_memory = _pending_memory_from_intake_result(intake_result=approve_result, draft_path=draft_path)
         pending = _pending_input_payload(
             stage="approve",
             missing_fields=approve_result.get("missing_fields"),
             questions=approve_result.get("questions"),
             task_draft_path=str(draft_path),
+            memory_hints_path=pending_memory.get("memory_hints_path"),
+            memory_hints=pending_memory.get("memory_hints"),
+            suggested_candidate_data=pending_memory.get("suggested_candidate_data"),
+            memory_hints_status=pending_memory.get("memory_hints_status"),
         )
         project["pending_input"] = pending
         _append_message(

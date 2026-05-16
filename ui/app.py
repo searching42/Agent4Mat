@@ -748,6 +748,8 @@ HTML = """
             <button type=\"button\" onclick=\"quickSortPriority()\">Priority First</button>
             <button type=\"button\" onclick=\"openTopPrioritySession()\">Open Top Priority</button>
             <button type=\"button\" onclick=\"openNextFailedSession()\">Open Next Failed</button>
+            <button type=\"button\" onclick=\"openPinnedSessionWindows()\">Open Pinned Windows</button>
+            <button type=\"button\" onclick=\"openFilteredSessionWindows()\">Open Filtered Windows</button>
             <button type=\"button\" onclick=\"togglePinnedOnly()\">Pinned Only</button>
             <button type=\"button\" onclick=\"toggleSessionBoardGroupedView()\">Status Groups</button>
             <button type=\"button\" onclick=\"batchShowProjectSummary()\">Batch Summary</button>
@@ -1086,6 +1088,22 @@ HTML = """
           </div>
         </details>
 
+        <details class=\"drawer\" open>
+          <summary>Memory Explorer</summary>
+          <div class=\"drawer-body\">
+            <div class=\"muted\" id=\"memory_explorer_status\">memory context: (not loaded)</div>
+            <div class=\"btn-row\">
+              <button onclick=\"loadCurrentMemoryContext()\">Load Memory Context</button>
+              <button onclick=\"appendTopMemoryFactsToNotes()\">Append Top Facts To Notes</button>
+              <button onclick=\"sendFirstMemoryFactToChat()\">Use First Fact In Chat</button>
+            </div>
+            <label>Key Facts</label>
+            <ul id=\"memory_facts_list\" class=\"pending-q\"><li>(none)</li></ul>
+            <label>Snapshot</label>
+            <pre id=\"memory_snapshot_brief\">(none)</pre>
+          </div>
+        </details>
+
         <details class=\"drawer\">
           <summary>Task Compare</summary>
           <div class=\"drawer-body\">
@@ -1108,6 +1126,7 @@ HTML = """
         pendingHintRun: null,
         promptHistory: [],
         projects: [],
+        memoryExplorer: null,
         batchHistory: [],
         batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
         failedReplayQueue: {source_export_id: '', action: '', rows: [], count: 0, unique_task_count: 0, failure_reasons: []},
@@ -2407,9 +2426,70 @@ HTML = """
         });
       }
 
-      function openWorkspaceWindow() {
-        const url = workspaceUrlForProject(selectedProjectId());
+      function openWorkspaceWindowForProject(projectId) {
+        const pid = String(projectId || '').trim();
+        if (!pid || !isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id', project_id: pid});
+          return false;
+        }
+        const url = workspaceUrlForProject(pid);
         window.open(url, '_blank', 'noopener,noreferrer');
+        return true;
+      }
+
+      function openWorkspaceWindow() {
+        const ok = openWorkspaceWindowForProject(selectedProjectId());
+        if (!ok) return;
+        renderEvents([{stage: 'open_workspace_window', status: 'pass', operation: selectedProjectId()}]);
+      }
+
+      function openFilteredSessionWindows() {
+        const payload = recentSessionBatchRows(false);
+        const picked = Array.isArray(payload.picked) ? payload.picked : [];
+        const opened = [];
+        for (const row of picked) {
+          const pid = String((row && row.project_id) || '').trim();
+          if (!pid) continue;
+          if (openWorkspaceWindowForProject(pid)) {
+            opened.push(pid);
+          }
+        }
+        renderJsonOut({
+          status: opened.length > 0 ? 'pass' : 'fail',
+          action: 'open_filtered_session_windows',
+          opened_count: opened.length,
+          opened_projects: opened,
+          batch_limit: payload.limit,
+        });
+        renderEvents([{stage: 'open_filtered_windows', status: opened.length > 0 ? 'pass' : 'fail', operation: String(opened.length)}]);
+      }
+
+      function openPinnedSessionWindows() {
+        const payload = computeSessionBoardRows(state.projects || []);
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        const limit = readSessionBatchLimit();
+        const pinned = rows
+          .filter((row) => {
+            const pid = String((row && row.project_id) || '').trim();
+            return pid && payload.pinnedIds && payload.pinnedIds.has(pid);
+          })
+          .slice(0, limit);
+        const opened = [];
+        for (const row of pinned) {
+          const pid = String((row && row.project_id) || '').trim();
+          if (!pid) continue;
+          if (openWorkspaceWindowForProject(pid)) {
+            opened.push(pid);
+          }
+        }
+        renderJsonOut({
+          status: opened.length > 0 ? 'pass' : 'fail',
+          action: 'open_pinned_session_windows',
+          opened_count: opened.length,
+          opened_projects: opened,
+          batch_limit: limit,
+        });
+        renderEvents([{stage: 'open_pinned_windows', status: opened.length > 0 ? 'pass' : 'fail', operation: String(opened.length)}]);
       }
 
       async function copyWorkspaceLink() {
@@ -2458,6 +2538,141 @@ HTML = """
       function clearMemoryNotes() {
         document.getElementById('memory_notes').value = '';
         updateMemoryStatus();
+      }
+
+      function normalizeMemoryFacts(raw) {
+        const rows = Array.isArray(raw) ? raw : [];
+        const out = [];
+        const seen = new Set();
+        for (const row of rows) {
+          const text = String(row || '').trim();
+          if (!text) continue;
+          const key = text.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(text);
+          if (out.length >= 20) break;
+        }
+        return out;
+      }
+
+      function extractMemoryPreview(payload) {
+        if (payload && typeof payload === 'object') {
+          if (payload.json_preview && typeof payload.json_preview === 'object') {
+            return payload.json_preview;
+          }
+          if (payload.memory_context_preview && typeof payload.memory_context_preview === 'object') {
+            return payload.memory_context_preview;
+          }
+        }
+        return null;
+      }
+
+      function renderMemoryExplorerFromPreview(preview, source) {
+        const statusEle = document.getElementById('memory_explorer_status');
+        const factsEle = document.getElementById('memory_facts_list');
+        const snapEle = document.getElementById('memory_snapshot_brief');
+        const p = (preview && typeof preview === 'object') ? preview : null;
+        if (!p) {
+          statusEle.textContent = 'memory context: missing for current task';
+          factsEle.innerHTML = '<li>(none)</li>';
+          snapEle.textContent = '(none)';
+          state.memoryExplorer = null;
+          return;
+        }
+        const facts = normalizeMemoryFacts(
+          Array.isArray(p.key_facts_head) ? p.key_facts_head : (Array.isArray(p.key_facts) ? p.key_facts : [])
+        );
+        factsEle.innerHTML = '';
+        if (facts.length < 1) {
+          factsEle.innerHTML = '<li>(none)</li>';
+        } else {
+          for (const fact of facts) {
+            const li = document.createElement('li');
+            li.textContent = fact;
+            factsEle.appendChild(li);
+          }
+        }
+        const runLabel = String(p.run_label || '').trim();
+        const task = String(p.task_id || '').trim();
+        const mode = String(p.execution_mode || '').trim();
+        const st = String(p.execution_status || '').trim();
+        statusEle.textContent = `memory context: source=${String(source || '-')} | task=${task || '-'} | run=${runLabel || '-'} | mode=${mode || '-'} | status=${st || '-'} | facts=${facts.length}`;
+        const failedTools = Array.isArray(p.failed_tools) ? p.failed_tools : [];
+        const toolHead = Array.isArray(p.tool_sequence_head) ? p.tool_sequence_head : [];
+        const lines = [];
+        lines.push(`request: ${String(p.request_text || '').trim() || '-'}`);
+        lines.push(`memory_note: ${String(p.project_memory_note || '').trim() || '-'}`);
+        lines.push(`record_count: ${String(p.record_count ?? '-')}`);
+        lines.push(`failed_tools: ${failedTools.length > 0 ? failedTools.join(', ') : '-'}`);
+        lines.push(`tool_sequence_head: ${toolHead.length > 0 ? toolHead.join(' -> ') : '-'}`);
+        snapEle.textContent = lines.join('\n');
+        state.memoryExplorer = {
+          source: String(source || ''),
+          preview: p,
+          facts: facts,
+          loaded_at: new Date().toISOString(),
+        };
+      }
+
+      function renderMemoryExplorerFromSummary(summaryPayload) {
+        const preview = extractMemoryPreview(summaryPayload);
+        if (!preview) {
+          renderMemoryExplorerFromPreview(null, 'summary');
+          return;
+        }
+        renderMemoryExplorerFromPreview(preview, 'summary');
+      }
+
+      async function loadCurrentMemoryContext() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact/memory_context?max_chars=20000`);
+        renderJsonOut(r.data);
+        const preview = extractMemoryPreview(r.data);
+        renderMemoryExplorerFromPreview(preview, 'artifact');
+        renderEvents([{stage: 'memory_context_refresh', status: String((r.data && r.data.status) || 'unknown'), operation: tid}]);
+      }
+
+      function appendTopMemoryFactsToNotes() {
+        const mem = (state.memoryExplorer && typeof state.memoryExplorer === 'object') ? state.memoryExplorer : {};
+        const facts = Array.isArray(mem.facts) ? mem.facts.slice(0, 3) : [];
+        if (facts.length < 1) {
+          renderJsonOut({status: 'fail', error: 'no memory facts available'});
+          return;
+        }
+        const textarea = document.getElementById('memory_notes');
+        const existing = String(textarea.value || '').trim();
+        const existingLower = existing.toLowerCase();
+        const add = [];
+        for (const fact of facts) {
+          if (!fact) continue;
+          if (existingLower.includes(fact.toLowerCase())) continue;
+          add.push(`- ${fact}`);
+        }
+        if (add.length < 1) {
+          renderJsonOut({status: 'pass', message: 'memory notes already include top facts', appended_count: 0});
+          return;
+        }
+        textarea.value = existing ? `${existing}\n${add.join('\n')}` : add.join('\n');
+        updateMemoryStatus();
+        renderJsonOut({status: 'pass', message: 'appended memory facts into project notes', appended_count: add.length, appended: add});
+        renderEvents([{stage: 'memory_notes_append', status: 'pass', operation: String(add.length)}]);
+      }
+
+      function sendFirstMemoryFactToChat() {
+        const mem = (state.memoryExplorer && typeof state.memoryExplorer === 'object') ? state.memoryExplorer : {};
+        const facts = Array.isArray(mem.facts) ? mem.facts : [];
+        const fact = String(facts[0] || '').trim();
+        if (!fact) {
+          renderJsonOut({status: 'fail', error: 'no memory fact available'});
+          return;
+        }
+        setMessageInput(`补充上下文记忆：${fact}`);
+        renderJsonOut({status: 'pass', message: 'first memory fact copied to chat input', fact: fact});
       }
 
       function updateProjectLockStatus() {
@@ -3244,6 +3459,14 @@ HTML = """
         };
         actions.appendChild(openBtn);
 
+        const openWindowBtn = document.createElement('button');
+        openWindowBtn.type = 'button';
+        openWindowBtn.textContent = 'Open Window';
+        openWindowBtn.onclick = () => {
+          openWorkspaceWindowForProject(pid);
+        };
+        actions.appendChild(openWindowBtn);
+
         const pinBtn = document.createElement('button');
         pinBtn.type = 'button';
         pinBtn.textContent = isPinned ? 'Unpin' : 'Pin';
@@ -3686,6 +3909,7 @@ HTML = """
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
         renderJsonOut(r.data);
         renderSummaryEventLines(r.data);
+        renderMemoryExplorerFromSummary(r.data);
       }
 
       async function validateProjectTask(projectId, taskId) {
@@ -4337,6 +4561,7 @@ HTML = """
           document.getElementById('runtime_stage_text').textContent = 'stage: -';
           renderRuntimeProgress(null);
           renderTimelineGroups(null);
+          renderMemoryExplorerFromPreview(null, 'runtime');
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -4360,6 +4585,7 @@ HTML = """
         renderRuntimeStage(s, tl);
         renderRuntimeProgress(tl.summary || null);
         renderTimelineGroups(tl);
+        renderMemoryExplorerFromSummary(s);
       }
 
       async function boot() {

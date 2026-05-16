@@ -8570,6 +8570,13 @@ class UiPrototypeTests(unittest.TestCase):
                                 "web_topk": 9,
                                 "web_domains": ["https://nature.com/articles/abc", "rsc.org"],
                                 "web_time_range": "30d",
+                                "web_custom_presets": {
+                                    "my recent": {
+                                        "topk": 6,
+                                        "domains": ["pubchem.ncbi.nlm.nih.gov"],
+                                        "time_range": "180d",
+                                    }
+                                },
                             },
                         },
                     )
@@ -8586,6 +8593,17 @@ class UiPrototypeTests(unittest.TestCase):
                 opts = proj.get("options") if isinstance(proj.get("options"), dict) else {}
                 self.assertEqual(opts.get("web_domains"), ["nature.com", "rsc.org"])
                 self.assertEqual(opts.get("web_time_range"), "30d")
+                presets = opts.get("web_custom_presets") if isinstance(opts.get("web_custom_presets"), dict) else {}
+                self.assertIn("my_recent", presets)
+                self.assertEqual(
+                    presets.get("my_recent"),
+                    {
+                        "enabled": True,
+                        "topk": 6,
+                        "domains": ["pubchem.ncbi.nlm.nih.gov"],
+                        "time_range": "180d",
+                    },
+                )
 
     def test_ui_chat_send_does_not_inject_memory_when_disabled(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -8749,6 +8767,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("Download Task Bundle", html)
         self.assertIn("web_domains", html)
         self.assertIn("web_time_range", html)
+        self.assertIn("web_custom_presets_json", html)
+        self.assertIn("web_custom_preset_name", html)
+        self.assertIn("web_apply_custom_preset_btn", html)
+        self.assertIn("web_custom_presets_status", html)
         self.assertIn("web_search_status", html)
         self.assertIn("updateWebSearchStatus()", html)
         self.assertIn("web_preset_papers_btn", html)
@@ -8756,6 +8778,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("web_preset_safety_btn", html)
         self.assertIn("web_preset_broad_btn", html)
         self.assertIn("applyWebSearchPreset(", html)
+        self.assertIn("applyCustomWebPreset(", html)
         self.assertIn("webSearchPresets", html)
         self.assertIn("memory_enabled", html)
         self.assertIn("memory_notes", html)
@@ -8835,6 +8858,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("collectWebSearchPrefs(", html)
         self.assertIn("normalizeWebDomains(", html)
         self.assertIn("detectWebPresetName(", html)
+        self.assertIn("parseCustomWebPresetsJson(", html)
+        self.assertIn("collectCustomWebPresets(", html)
+        self.assertIn("getMergedWebSearchPresets(", html)
         self.assertIn("const hist = await loadHistory();", html)
         self.assertIn("if (!ok) {", html)
         self.assertIn("await saveProject();", html)

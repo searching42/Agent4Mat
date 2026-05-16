@@ -568,6 +568,10 @@ HTML = """
         padding: 5px 8px;
         font-size: 0.72rem;
       }
+      .web-preset-row input {
+        margin-top: 0;
+        min-width: 150px;
+      }
       body.chat-focus-mode .layout {
         grid-template-columns: minmax(620px, 1fr);
       }
@@ -971,6 +975,13 @@ HTML = """
         <textarea id=\"web_domains\" rows=\"2\" placeholder=\"nature.com, acs.org, rsc.org\" oninput=\"updateWebSearchStatus()\"></textarea>
         <label>Web time range (optional)</label>
         <input id=\"web_time_range\" placeholder=\"e.g. 30d or 2025-01-01..2026-05-01\" oninput=\"updateWebSearchStatus()\" />
+        <label>Custom web presets JSON (optional)</label>
+        <textarea id=\"web_custom_presets_json\" rows=\"4\" placeholder='{"my_recent": {"topk": 6, "domains": ["nature.com"], "time_range": "90d"}}' oninput=\"updateWebSearchStatus()\"></textarea>
+        <div class=\"btn-row web-preset-row\">
+          <input id=\"web_custom_preset_name\" placeholder=\"custom preset name\" />
+          <button type=\"button\" id=\"web_apply_custom_preset_btn\" onclick=\"applyCustomWebPreset()\">Apply Custom Preset</button>
+        </div>
+        <div class=\"muted\" id=\"web_custom_presets_status\">custom presets: 0</div>
         <div class=\"muted\" id=\"web_search_status\">web: enabled, topk=5, domains=all, time=any</div>
         <label><input id=\"memory_enabled\" type=\"checkbox\" onchange=\"updateMemoryStatus()\" /> Enable project memory injection</label>
         <label>Project memory notes</label>
@@ -1401,6 +1412,66 @@ HTML = """
           time_range: "",
         },
       };
+
+      function normalizeWebPresetName(raw) {
+        const key = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '_').replace(/^[-_.]+|[-_.]+$/g, '');
+        return key.slice(0, 32);
+      }
+
+      function parseCustomWebPresetsJson(raw) {
+        const txt = String(raw || '').trim();
+        if (!txt) return {presets: {}, error: ''};
+        let parsed = {};
+        try {
+          parsed = JSON.parse(txt);
+        } catch (e) {
+          return {presets: {}, error: `invalid json: ${String(e)}`};
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return {presets: {}, error: 'custom presets must be a JSON object'};
+        }
+        const out = {};
+        for (const [rawName, rawCfg] of Object.entries(parsed)) {
+          const name = normalizeWebPresetName(rawName);
+          if (!name) continue;
+          if (Object.prototype.hasOwnProperty.call(out, name)) continue;
+          const cfg = rawCfg && typeof rawCfg === 'object' && !Array.isArray(rawCfg) ? rawCfg : {};
+          const enabled = Boolean(Object.prototype.hasOwnProperty.call(cfg, 'enabled') ? cfg.enabled : true);
+          const topkRaw = Number(cfg.topk || 5);
+          const topk = Number.isFinite(topkRaw) ? Math.max(1, Math.min(20, Math.floor(topkRaw))) : 5;
+          const domainsSource = Array.isArray(cfg.domains) ? cfg.domains.join('\n') : String(cfg.domains || '');
+          const domains = normalizeWebDomains(domainsSource);
+          const timeRange = String(cfg.time_range || '').trim().slice(0, 80);
+          out[name] = {
+            enabled: enabled,
+            topk: topk,
+            domains: domains,
+            time_range: timeRange,
+          };
+          if (Object.keys(out).length >= 12) break;
+        }
+        return {presets: out, error: ''};
+      }
+
+      function collectCustomWebPresets() {
+        const raw = String(document.getElementById('web_custom_presets_json').value || '');
+        return parseCustomWebPresetsJson(raw);
+      }
+
+      function writeCustomWebPresetsToTextarea(presets) {
+        const rows = presets && typeof presets === 'object' ? presets : {};
+        document.getElementById('web_custom_presets_json').value = JSON.stringify(rows, null, 2);
+      }
+
+      function getMergedWebSearchPresets() {
+        const parsed = collectCustomWebPresets();
+        const custom = parsed.presets && typeof parsed.presets === 'object' ? parsed.presets : {};
+        const merged = {...custom};
+        for (const [name, preset] of Object.entries(webSearchPresets)) {
+          merged[name] = preset;
+        }
+        return merged;
+      }
 
       function nowIso() {
         return new Date().toISOString();
@@ -2534,6 +2605,9 @@ HTML = """
         if (Object.prototype.hasOwnProperty.call(opts, 'web_time_range')) {
           document.getElementById('web_time_range').value = String(opts.web_time_range || '');
         }
+        if (Object.prototype.hasOwnProperty.call(opts, 'web_custom_presets')) {
+          writeCustomWebPresetsToTextarea(opts.web_custom_presets);
+        }
         if (Object.prototype.hasOwnProperty.call(opts, 'memory_enabled')) {
           document.getElementById('memory_enabled').checked = Boolean(opts.memory_enabled);
         }
@@ -2929,7 +3003,8 @@ HTML = """
       function detectWebPresetName(prefs) {
         const p = prefs && typeof prefs === 'object' ? prefs : collectWebSearchPrefs();
         const pDomains = sortedDomainKey(p.domains);
-        for (const [name, preset] of Object.entries(webSearchPresets)) {
+        const mergedPresets = getMergedWebSearchPresets();
+        for (const [name, preset] of Object.entries(mergedPresets)) {
           if (!preset || typeof preset !== 'object') continue;
           const enabledMatch = Boolean(p.enabled) === Boolean(preset.enabled);
           const topkMatch = Number(p.topk || 0) === Number(preset.topk || 0);
@@ -2943,16 +3018,19 @@ HTML = """
       }
 
       function applyWebSearchPreset(name, appendHint) {
-        const key = String(name || '').trim().toLowerCase();
-        const preset = webSearchPresets[key];
+        const key = normalizeWebPresetName(name);
+        const mergedPresets = getMergedWebSearchPresets();
+        const preset = mergedPresets[key];
         if (!preset || typeof preset !== 'object') {
           renderJsonOut({status: 'fail', error: 'invalid web preset', preset: key});
+          setQuickCandidateStatus(`invalid web preset: ${key || '(empty)'}`, 'fail');
           return false;
         }
         document.getElementById('web_enabled').checked = Boolean(preset.enabled);
         document.getElementById('web_topk').value = String(Number(preset.topk || 5));
         setWebDomainsInputFromList(Array.isArray(preset.domains) ? preset.domains : []);
         document.getElementById('web_time_range').value = String(preset.time_range || '');
+        document.getElementById('web_custom_preset_name').value = key;
         updateWebSearchStatus();
         const prefs = collectWebSearchPrefs();
         renderJsonOut({status: 'pass', action: 'apply_web_preset', preset: key, web_prefs: prefs});
@@ -2964,8 +3042,19 @@ HTML = """
         return true;
       }
 
+      function applyCustomWebPreset() {
+        const name = String(document.getElementById('web_custom_preset_name').value || '').trim();
+        if (!name) {
+          renderJsonOut({status: 'fail', error: 'missing custom preset name'});
+          setQuickCandidateStatus('custom preset name is empty', 'fail');
+          return false;
+        }
+        return applyWebSearchPreset(name, false);
+      }
+
       function updateWebSearchStatus() {
         const prefs = collectWebSearchPrefs();
+        const customParsed = collectCustomWebPresets();
         const statusEle = document.getElementById('web_search_status');
         if (!statusEle) return;
         const domainsTxt = prefs.domains.length > 0 ? `${prefs.domains.length}` : 'all';
@@ -2973,12 +3062,24 @@ HTML = """
         const presetName = detectWebPresetName(prefs);
         const presetTxt = presetName ? `, preset=${presetName}` : '';
         statusEle.textContent = `web: ${prefs.enabled ? 'enabled' : 'disabled'}, topk=${prefs.topk}, domains=${domainsTxt}, time=${timeTxt}${presetTxt}`;
+        const customStatusEle = document.getElementById('web_custom_presets_status');
+        if (customStatusEle) {
+          const count = Object.keys(customParsed.presets || {}).length;
+          if (customParsed.error) {
+            customStatusEle.textContent = `custom presets: parse error`;
+            customStatusEle.className = 'muted state-warn';
+          } else {
+            customStatusEle.textContent = `custom presets: ${count}`;
+            customStatusEle.className = 'muted';
+          }
+        }
       }
 
       function collectOptions() {
         const planner = document.getElementById('planner').value;
         const catalog = document.getElementById('catalog').value;
         const webPrefs = collectWebSearchPrefs();
+        const customParsed = collectCustomWebPresets();
         const memoryEnabled = document.getElementById('memory_enabled').checked;
         const projectReadOnly = document.getElementById('project_read_only').checked;
         return {
@@ -2988,6 +3089,7 @@ HTML = """
           web_topk: Number(webPrefs.topk),
           web_domains: webPrefs.domains,
           web_time_range: webPrefs.time_range,
+          web_custom_presets: customParsed.presets || {},
           memory_enabled: Boolean(memoryEnabled),
           project_read_only: Boolean(projectReadOnly),
           batch_replay_defaults: readBatchReplayOptions(),
@@ -6452,6 +6554,35 @@ def _normalize_web_domains(raw: Any) -> List[str]:
     return out
 
 
+def _normalize_web_custom_presets(raw: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for raw_name, payload in raw.items():
+        name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(raw_name or "").strip().lower()).strip("._-")
+        if not name:
+            continue
+        if name in out:
+            continue
+        cfg = payload if isinstance(payload, dict) else {}
+        enabled = bool(cfg.get("enabled", True))
+        topk = _as_int(cfg.get("topk"), 5)
+        topk = max(1, min(topk, 20))
+        domains = _normalize_web_domains(cfg.get("domains"))
+        time_range = str(cfg.get("time_range") or "").strip()
+        if len(time_range) > 80:
+            time_range = time_range[:80]
+        out[name] = {
+            "enabled": enabled,
+            "topk": topk,
+            "domains": domains,
+            "time_range": time_range,
+        }
+        if len(out) >= 12:
+            break
+    return out
+
+
 def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     options = raw if isinstance(raw, dict) else {}
     planner = str(options.get("planner_provider") or "rule_based_v1").strip() or "rule_based_v1"
@@ -6463,6 +6594,7 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     web_time_range = str(options.get("web_time_range") or "").strip()
     if len(web_time_range) > 80:
         web_time_range = web_time_range[:80]
+    web_custom_presets = _normalize_web_custom_presets(options.get("web_custom_presets"))
     memory_enabled = bool(options.get("memory_enabled", False))
     project_read_only = bool(options.get("project_read_only", False))
     batch_replay_defaults = _normalize_batch_replay_options(options.get("batch_replay_defaults"))
@@ -6473,6 +6605,7 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
         "web_topk": web_topk,
         "web_domains": web_domains,
         "web_time_range": web_time_range,
+        "web_custom_presets": web_custom_presets,
         "memory_enabled": memory_enabled,
         "project_read_only": project_read_only,
         "batch_replay_defaults": batch_replay_defaults,

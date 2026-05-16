@@ -1481,6 +1481,34 @@ HTML = """
         renderEvents([{stage: 'hint_run_retry_resume', status: st}]);
       }
 
+      function pendingHintLatestFailedStep() {
+        const health = (state.project && state.project.runtime_health && typeof state.project.runtime_health === 'object')
+          ? state.project.runtime_health
+          : {};
+        return String(health.latest_failed_step || '').trim();
+      }
+
+      async function pendingHintRetryFailedStep(failedStepHint) {
+        const tid = pendingTaskIdGuess();
+        const failed = String(failedStepHint || pendingHintLatestFailedStep() || '').trim();
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'no task_id available for retry-failed-step'});
+          return;
+        }
+        if (!failed) {
+          renderJsonOut({status: 'fail', error: 'no failed step available for retry'});
+          return;
+        }
+        const r = await apiPost(`/api/task/${encodeURIComponent(tid)}/retry-failed-step`, {
+          catalog_path: document.getElementById('catalog').value,
+          failed_tool_name: failed,
+        });
+        renderJsonOut(r.data);
+        const st = String((r.data && r.data.status) || 'unknown');
+        renderEvents([{stage: 'hint_run_retry_failed_step', status: st, operation: failed}]);
+        await loadRunRuntime();
+      }
+
       async function pendingHintEditCandidate() {
         const input = document.getElementById('pending_field_candidate_data');
         if (!input) {
@@ -1497,6 +1525,9 @@ HTML = """
         state.pendingHintRun = payload;
         const statusRaw = String(payload.status || '').toLowerCase();
         const msgRaw = String(payload.message || '').trim();
+        const failureKind = String(payload.failure_kind || payload.resume_failure_kind || '').trim().toLowerCase();
+        const failureDetail = String(payload.failure_detail || payload.resume_failure_detail || '').trim();
+        const failedStep = String(payload.failed_step || payload.resume_failed_step || '').trim();
         const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
         const missing = pendingMissingFieldsSet(pending);
         const statusEle = document.getElementById('pending_hint_run_status');
@@ -1518,6 +1549,9 @@ HTML = """
             text = 'Use + Run executed, but candidate_data is still missing. Please update and retry.';
           }
         }
+        if (failureDetail && (level === 'fail' || level === 'need') && !text.includes(failureDetail)) {
+          text = `${text} (${failureDetail})`;
+        }
         statusEle.className = `hint-run-status ${level}`;
         statusEle.textContent = text;
         statusEle.style.display = 'block';
@@ -1525,11 +1559,23 @@ HTML = """
         const actions = [];
         actions.push({label: 'Open Task Summary', onClick: pendingHintOpenTaskSummary});
         actions.push({label: 'Refresh Runtime', onClick: pendingHintRefreshRuntime});
-        if (missing.has('candidate_data')) {
+        if (missing.has('candidate_data') || failureKind === 'need_user_input') {
           actions.push({label: 'Edit candidate_data', onClick: pendingHintEditCandidate});
         }
-        if (level === 'fail' || level === 'need') {
-          actions.push({label: 'Retry Resume', onClick: pendingHintRetryResume});
+        if (level === 'fail' || level === 'need' || failureKind === 'timeout') {
+          if (failureKind === 'adapter_failure') {
+            const failed = failedStep || pendingHintLatestFailedStep();
+            if (failed) {
+              actions.push({label: 'Retry Failed Step', onClick: () => pendingHintRetryFailedStep(failed)});
+            }
+            actions.push({label: 'Retry Resume', onClick: pendingHintRetryResume});
+          } else if (failureKind === 'timeout') {
+            actions.push({label: 'Retry Resume', onClick: pendingHintRetryResume});
+          } else if (failureKind === 'need_user_input') {
+            actions.push({label: 'Retry Resume', onClick: pendingHintRetryResume});
+          } else {
+            actions.push({label: 'Retry Resume', onClick: pendingHintRetryResume});
+          }
         }
         renderPendingHintNextActions(actions);
       }
@@ -1583,16 +1629,25 @@ HTML = """
             clearPendingHintRunFeedback();
             const runOut = await sendPendingForm(true);
             const status = String((runOut && runOut.status) || '').toLowerCase();
-            const errText = String((runOut && runOut.error) || '').trim();
+            const failureKind = String((runOut && (runOut.resume_failure_kind || runOut.failure_kind)) || '').trim();
+            const failureDetail = String((runOut && (runOut.resume_failure_detail || runOut.failure_detail || runOut.error)) || '').trim();
+            const failedStep = String((runOut && (runOut.resume_failed_step || runOut.failed_step)) || '').trim();
             let note = '';
             if (status === 'pass' || status === 'success') {
               note = 'Use + Run completed successfully.';
             } else if (status === 'need_user_input') {
               note = 'Use + Run finished; more fields are still required.';
             } else if (status === 'fail') {
-              note = errText ? `Use + Run failed: ${errText}` : 'Use + Run failed.';
+              note = failureDetail ? `Use + Run failed: ${failureDetail}` : 'Use + Run failed.';
             }
-            setPendingHintRunFeedback({status: status || 'unknown', message: note, candidate_data: candidate});
+            setPendingHintRunFeedback({
+              status: status || 'unknown',
+              message: note,
+              candidate_data: candidate,
+              failure_kind: failureKind,
+              failure_detail: failureDetail,
+              failed_step: failedStep,
+            });
             const pendingAfter = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
             const missingAfter = pendingMissingFieldsSet(pendingAfter);
             if (missingAfter.has('candidate_data')) {
@@ -6933,6 +6988,79 @@ def _assistant_cli_fail_text(stage: str, payload: Dict[str, Any]) -> str:
     return msg
 
 
+def _resume_failure_info(resume_payload: Dict[str, Any], resume_result: Any) -> Dict[str, str]:
+    rr = resume_result if isinstance(resume_result, dict) else {}
+    rr_status = str(rr.get("status") or "").strip().lower()
+    missing_fields = [str(x).strip() for x in (rr.get("missing_fields") if isinstance(rr.get("missing_fields"), list) else []) if str(x).strip()]
+    failed_step = ""
+    for key in ("failed_tool_name", "failed_step", "latest_failed_step", "tool"):
+        value = str(rr.get(key) or "").strip()
+        if value:
+            failed_step = value
+            break
+
+    rc = resume_payload.get("returncode")
+    stderr = str(resume_payload.get("stderr") or "").strip()
+    token_parts: List[str] = []
+    if rr_status:
+        token_parts.append(rr_status)
+    for key in ("error", "message", "detail", "reason", "code"):
+        value = str(rr.get(key) or "").strip()
+        if value:
+            token_parts.append(value)
+    if failed_step:
+        token_parts.append(failed_step)
+    if missing_fields:
+        token_parts.extend(missing_fields)
+    if stderr:
+        token_parts.append(stderr)
+    blob = " ".join(token_parts).lower()
+
+    if rr_status == "need_user_input" or len(missing_fields) > 0:
+        kind = "need_user_input"
+    elif "timeout" in blob or "timed out" in blob or "deadline" in blob or rc in {124, 137}:
+        kind = "timeout"
+    elif any(
+        token in blob
+        for token in (
+            "adapter",
+            "external scorer",
+            "adapter_nonzero_exit",
+            "adapter_timeout",
+            "missing_output_csv",
+            "invalid_json_stdin",
+            "toolerror",
+            "tool error",
+        )
+    ):
+        kind = "adapter_failure"
+    else:
+        kind = "unknown"
+
+    detail_parts: List[str] = []
+    if missing_fields:
+        detail_parts.append(f"missing_fields={', '.join(missing_fields[:8])}")
+    if failed_step:
+        detail_parts.append(f"failed_step={failed_step}")
+    for key in ("error", "message", "detail", "reason", "code"):
+        value = str(rr.get(key) or "").strip()
+        if value:
+            detail_parts.append(f"{key}={value[:220]}")
+    if stderr:
+        detail_parts.append(f"stderr={stderr[:220]}")
+    elif rc is not None:
+        detail_parts.append(f"returncode={rc}")
+    detail = "; ".join(part for part in detail_parts if part)[:800]
+    if not detail:
+        detail = f"returncode={rc}"
+
+    return {
+        "kind": kind,
+        "detail": detail,
+        "failed_step": failed_step,
+    }
+
+
 def _pending_input_payload(
     *,
     stage: str,
@@ -7065,6 +7193,8 @@ def _chat_resume_from_pending(
         overrides=patch,
     )
     elapsed_ms = int((datetime.now() - started_at).total_seconds() * 1000)
+    resume_result = resume.get("result")
+    resume_failure = _resume_failure_info(resume, resume_result)
 
     if resume.get("status") != "pass":
         _append_message(project, role="assistant", kind="assistant", content=_assistant_cli_fail_text("agent-resume", resume))
@@ -7074,11 +7204,14 @@ def _chat_resume_from_pending(
             "status": "fail",
             "project": _project_summary(project),
             "messages": _recent_messages(project),
-            "events": [{"stage": "resume", "status": "fail"}],
-            "resume_result": resume.get("result"),
+            "events": [{"stage": "resume", "status": "fail", "reason": resume_failure.get("kind")}],
+            "resume_result": resume_result,
+            "resume_failure_kind": resume_failure.get("kind"),
+            "resume_failure_detail": resume_failure.get("detail"),
+            "resume_failed_step": resume_failure.get("failed_step"),
         }
 
-    rr = resume.get("result") if isinstance(resume.get("result"), dict) else {}
+    rr = resume_result if isinstance(resume_result, dict) else {}
     rr_status = str(rr.get("status") or "").strip()
     if rr_status == "need_user_input":
         pending_memory = _pending_memory_from_intake_result(
@@ -7117,6 +7250,9 @@ def _chat_resume_from_pending(
             "events": [{"stage": "resume", "status": "need_user_input"}],
             "pending_input": pending_next,
             "resume_result": rr,
+            "resume_failure_kind": "need_user_input",
+            "resume_failure_detail": resume_failure.get("detail"),
+            "resume_failed_step": resume_failure.get("failed_step"),
         }
 
     if rr_status != "success":
@@ -7127,8 +7263,11 @@ def _chat_resume_from_pending(
             "status": "fail",
             "project": _project_summary(project),
             "messages": _recent_messages(project),
-            "events": [{"stage": "resume", "status": "fail", "reason": "unexpected_status"}],
+            "events": [{"stage": "resume", "status": "fail", "reason": resume_failure.get("kind") or "unexpected_status"}],
             "resume_result": rr,
+            "resume_failure_kind": resume_failure.get("kind"),
+            "resume_failure_detail": resume_failure.get("detail"),
+            "resume_failed_step": resume_failure.get("failed_step"),
         }
 
     project["pending_input"] = {}

@@ -8704,6 +8704,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("pending_hint_next_actions", html)
         self.assertIn("setPendingHintRunFeedback(", html)
         self.assertIn("pendingHintRetryResume(", html)
+        self.assertIn("pendingHintRetryFailedStep(", html)
         self.assertIn("Open Task Summary", html)
         self.assertIn("Use + Run", html)
         self.assertIn("project_read_only", html)
@@ -9700,9 +9701,132 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(pending.get("stage"), "resume")
                 missing = pending.get("missing_fields") if isinstance(pending.get("missing_fields"), list) else []
                 self.assertIn("candidate_data", missing)
+                self.assertEqual(str(payload.get("resume_failure_kind") or ""), "need_user_input")
+                self.assertIn("candidate_data", str(payload.get("resume_failure_detail") or ""))
                 self.assertEqual(str(pending.get("suggested_candidate_data") or ""), "master_database")
                 hints = pending.get("memory_hints") if isinstance(pending.get("memory_hints"), list) else []
                 self.assertGreaterEqual(len(hints), 1)
+
+    def test_ui_chat_pending_submit_resume_fail_classifies_timeout(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_pending_timeout", "title": "pending"})
+                project = ui_app_mod._load_project_state("ui_chat_pending_timeout")
+                self.assertIsInstance(project, dict)
+                project["current_task_id"] = "ui_chat_pending_timeout_task"
+                draft_path = root / "runs" / "agent" / "ui_chat_pending_timeout_task" / "task.draft.json"
+                draft_path.parent.mkdir(parents=True, exist_ok=True)
+                draft_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": "ui_chat_pending_timeout_task",
+                            "status": "need_user_input",
+                            "missing_fields": ["candidate_data"],
+                            "questions": ["候选数据来源是什么？"],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                project["pending_input"] = {
+                    "stage": "resume",
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                    "task_draft_path": str(draft_path),
+                }
+                ui_app_mod._save_project_state(project)
+
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-resume"],
+                    returncode=1,
+                    stdout="",
+                    stderr="adapter timeout while waiting remote runtime: timed out after 300s",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp):
+                    resp = client.post(
+                        "/api/chat/pending-submit",
+                        json={
+                            "project_id": "ui_chat_pending_timeout",
+                            "patch": {"candidate_data": "/tmp/candidates.csv"},
+                            "options": {"planner_provider": "rule_based_v1", "catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "fail")
+                self.assertEqual(str(payload.get("resume_failure_kind") or ""), "timeout")
+                self.assertIn("timed out", str(payload.get("resume_failure_detail") or ""))
+                events = payload.get("events") if isinstance(payload.get("events"), list) else []
+                self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("reason") == "timeout" for e in events))
+
+    def test_ui_chat_pending_submit_resume_fail_classifies_adapter_failure(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_pending_adapter_fail", "title": "pending"})
+                project = ui_app_mod._load_project_state("ui_chat_pending_adapter_fail")
+                self.assertIsInstance(project, dict)
+                project["current_task_id"] = "ui_chat_pending_adapter_task"
+                draft_path = root / "runs" / "agent" / "ui_chat_pending_adapter_task" / "task.draft.json"
+                draft_path.parent.mkdir(parents=True, exist_ok=True)
+                draft_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": "ui_chat_pending_adapter_task",
+                            "status": "need_user_input",
+                            "missing_fields": ["candidate_data"],
+                            "questions": ["候选数据来源是什么？"],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                project["pending_input"] = {
+                    "stage": "resume",
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                    "task_draft_path": str(draft_path),
+                }
+                ui_app_mod._save_project_state(project)
+
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-resume"],
+                    returncode=1,
+                    stdout=json.dumps(
+                        {
+                            "status": "failed",
+                            "error": "adapter_nonzero_exit",
+                            "failed_tool_name": "score_candidates",
+                            "message": "unimol score adapter exited non-zero",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp):
+                    resp = client.post(
+                        "/api/chat/pending-submit",
+                        json={
+                            "project_id": "ui_chat_pending_adapter_fail",
+                            "patch": {"candidate_data": "/tmp/candidates.csv"},
+                            "options": {"planner_provider": "rule_based_v1", "catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "fail")
+                self.assertEqual(str(payload.get("resume_failure_kind") or ""), "adapter_failure")
+                self.assertEqual(str(payload.get("resume_failed_step") or ""), "score_candidates")
+                self.assertIn("adapter_nonzero_exit", str(payload.get("resume_failure_detail") or ""))
+                events = payload.get("events") if isinstance(payload.get("events"), list) else []
+                self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("reason") == "adapter_failure" for e in events))
 
     def test_ui_chat_send_approve_need_user_input_includes_memory_hints(self) -> None:
         ui_app_mod = self._load_ui_module()

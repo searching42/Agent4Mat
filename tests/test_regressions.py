@@ -8692,6 +8692,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("memory_enabled", html)
         self.assertIn("memory_notes", html)
         self.assertIn("updateMemoryStatus()", html)
+        self.assertIn("pending_hints_box", html)
+        self.assertIn("applyPendingSuggestedCandidateData(true)", html)
+        self.assertIn("previewPendingHintTask(", html)
+        self.assertIn("Use + Run", html)
         self.assertIn("project_read_only", html)
         self.assertIn("updateProjectLockStatus()", html)
         self.assertIn("snapshot_note", html)
@@ -9488,9 +9492,13 @@ class UiPrototypeTests(unittest.TestCase):
                             "matches": [
                                 {
                                     "task_id": "prev_task_1",
+                                    "run_label": "prev_task_1-20260516-010101",
+                                    "execution_status": "success",
                                     "candidate_data": "master_database",
                                     "score": 0.88,
                                     "property": "plqy",
+                                    "request_text_head": "设计470nm附近且高PLQY分子",
+                                    "memory_context_path": str(root / "runs" / "agent" / "prev_task_1" / "artifacts" / "memory_context.json"),
                                 }
                             ],
                         },
@@ -9533,6 +9541,8 @@ class UiPrototypeTests(unittest.TestCase):
                 first = hints[0] if isinstance(hints[0], dict) else {}
                 self.assertEqual(str(first.get("task_id") or ""), "prev_task_1")
                 self.assertEqual(str(first.get("candidate_data") or ""), "master_database")
+                self.assertEqual(str(first.get("run_label") or ""), "prev_task_1-20260516-010101")
+                self.assertEqual(str(first.get("execution_status") or ""), "success")
 
     def test_ui_chat_pending_submit_resume_success(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -566,6 +566,25 @@ HTML = """
         color: #334155;
         font-size: 0.8rem;
       }
+      .pending-hints .hint-item {
+        margin-bottom: 8px;
+      }
+      .pending-hints .hint-item:last-child {
+        margin-bottom: 0;
+      }
+      .pending-hints .hint-item-head {
+        line-height: 1.35;
+      }
+      .pending-hints .hint-item-actions {
+        margin-top: 4px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .pending-hints .hint-item-actions button {
+        font-size: 0.75rem;
+        padding: 4px 7px;
+      }
       .prompt-history {
         margin-top: 8px;
         display: flex;
@@ -878,6 +897,7 @@ HTML = """
               <ul class=\"hint-list\" id=\"pending_hint_matches\"></ul>
               <div class=\"btn-row\" id=\"pending_hint_actions\" style=\"display:none;\">
                 <button onclick=\"applyPendingSuggestedCandidateData()\">Use Suggested candidate_data</button>
+                <button onclick=\"applyPendingSuggestedCandidateData(true)\">Use Suggested + Run</button>
               </div>
             </div>
             <div class=\"pending-fields\" id=\"pending_fields\"></div>
@@ -1320,6 +1340,50 @@ HTML = """
         return '';
       }
 
+      function pendingMissingFieldsSet(pending) {
+        const raw = Array.isArray(pending && pending.missing_fields) ? pending.missing_fields : [];
+        const out = new Set();
+        for (const x of raw) {
+          const f = String(x || '').trim();
+          if (f) out.add(f);
+        }
+        return out;
+      }
+
+      async function previewPendingHintTask(taskId) {
+        const tid = String(taskId || '').trim();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'invalid hint task_id'});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
+        renderJsonOut(r.data);
+        renderEvents([{stage: 'hint_preview', status: String((r.data && r.data.status) || 'unknown'), task_id: tid}]);
+      }
+
+      async function applyPendingHintCandidateData(value, runAfter) {
+        const candidate = String(value || '').trim();
+        const doRun = Boolean(runAfter);
+        if (!candidate) {
+          renderJsonOut({status: 'fail', error: 'hint candidate_data is empty'});
+          return;
+        }
+        const input = document.getElementById('pending_field_candidate_data');
+        if (input) {
+          input.value = candidate;
+          renderJsonOut({status: 'pass', message: 'candidate_data filled from memory hint', candidate_data: candidate});
+          if (doRun) {
+            await sendPendingForm(true);
+          }
+          return;
+        }
+        setMessageInput(JSON.stringify({candidate_data: candidate}, null, 2));
+        renderJsonOut({status: 'pass', message: 'candidate_data patch prepared in chat input', candidate_data: candidate});
+        if (doRun) {
+          renderEvents([{stage: 'hint_apply', status: 'ready', reason: 'pending_candidate_field_missing'}]);
+        }
+      }
+
       function renderPendingHints(pending) {
         const hintBox = document.getElementById('pending_hints_box');
         const hintTitle = document.getElementById('pending_hint_title');
@@ -1341,36 +1405,63 @@ HTML = """
         } else {
           hintTitle.textContent = 'Memory suggestion: found related historical runs';
         }
+        const missingSet = pendingMissingFieldsSet(pending);
+        const canPatchCandidate = missingSet.has('candidate_data');
         for (const row of matches.slice(0, 3)) {
           if (!row || typeof row !== 'object') continue;
-          const taskId = String(row.task_id || '-');
+          const taskId = String(row.task_id || '').trim() || '-';
           const cand = String(row.candidate_data || '').trim();
+          const runLabel = String(row.run_label || '').trim();
+          const execStatus = String(row.execution_status || '').trim();
           const scoreRaw = Number(row.score);
           const score = Number.isFinite(scoreRaw) ? scoreRaw.toFixed(3) : '-';
           const li = document.createElement('li');
-          li.textContent = cand ? `${taskId} | ${cand} | score=${score}` : `${taskId} | score=${score}`;
+          li.className = 'hint-item';
+          const head = document.createElement('div');
+          head.className = 'hint-item-head';
+          const runPart = runLabel ? ` | run=${runLabel}` : '';
+          const statusPart = execStatus ? ` | status=${execStatus}` : '';
+          head.textContent = cand
+            ? `${taskId}${runPart}${statusPart} | ${cand} | score=${score}`
+            : `${taskId}${runPart}${statusPart} | score=${score}`;
+          li.appendChild(head);
+          const actions = document.createElement('div');
+          actions.className = 'hint-item-actions';
+          if (cand) {
+            const useBtn = document.createElement('button');
+            useBtn.textContent = 'Use';
+            useBtn.addEventListener('click', () => { void applyPendingHintCandidateData(cand, false); });
+            actions.appendChild(useBtn);
+            if (canPatchCandidate) {
+              const useRunBtn = document.createElement('button');
+              useRunBtn.textContent = 'Use + Run';
+              useRunBtn.addEventListener('click', () => { void applyPendingHintCandidateData(cand, true); });
+              actions.appendChild(useRunBtn);
+            }
+          }
+          if (taskId !== '-') {
+            const previewBtn = document.createElement('button');
+            previewBtn.textContent = 'Preview Task';
+            previewBtn.addEventListener('click', () => { void previewPendingHintTask(taskId); });
+            actions.appendChild(previewBtn);
+          }
+          if (actions.children.length > 0) {
+            li.appendChild(actions);
+          }
           hintMatches.appendChild(li);
         }
-        const missing = Array.isArray(pending.missing_fields) ? pending.missing_fields.map((x) => String(x || '').trim()) : [];
-        if (suggested && missing.includes('candidate_data')) {
+        if (suggested && canPatchCandidate) {
           hintActions.style.display = 'flex';
         }
       }
 
-      function applyPendingSuggestedCandidateData() {
+      async function applyPendingSuggestedCandidateData(runAfter) {
         const suggested = getPendingSuggestedCandidateData();
         if (!suggested) {
           renderJsonOut({status: 'fail', error: 'no suggested candidate_data available'});
           return;
         }
-        const input = document.getElementById('pending_field_candidate_data');
-        if (input) {
-          input.value = suggested;
-          renderJsonOut({status: 'pass', message: 'candidate_data filled from memory suggestion', candidate_data: suggested});
-          return;
-        }
-        setMessageInput(JSON.stringify({candidate_data: suggested}, null, 2));
-        renderJsonOut({status: 'pass', message: 'candidate_data patch prepared in chat input', candidate_data: suggested});
+        await applyPendingHintCandidateData(suggested, Boolean(runAfter));
       }
 
       function renderPendingInput(pending) {
@@ -6487,6 +6578,12 @@ def _normalize_pending_memory_hints(matches: Any, *, limit: int = 5) -> List[Dic
             row["task_id"] = task_id
         if candidate_data:
             row["candidate_data"] = candidate_data
+        run_label = str(item.get("run_label") or "").strip()
+        if run_label:
+            row["run_label"] = run_label
+        execution_status = str(item.get("execution_status") or "").strip()
+        if execution_status:
+            row["execution_status"] = execution_status
         score_raw = item.get("score")
         try:
             score_value = float(score_raw)
@@ -6500,6 +6597,12 @@ def _normalize_pending_memory_hints(matches: Any, *, limit: int = 5) -> List[Dic
         last_run_at = str(item.get("last_run_at") or "").strip()
         if last_run_at:
             row["last_run_at"] = last_run_at
+        memory_context_path = _normalize_repo_path(item.get("memory_context_path"))
+        if memory_context_path is not None:
+            row["memory_context_path"] = str(memory_context_path)
+        request_head = str(item.get("request_text_head") or "").strip()
+        if request_head:
+            row["request_text_head"] = request_head[:200]
         if not row:
             continue
         out.append(row)

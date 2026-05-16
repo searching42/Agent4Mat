@@ -1863,12 +1863,42 @@ HTML = """
           const status = String(e.status || 'unknown');
           const op = String(e.operation || '');
           const reason = String(e.reason || '');
+          const failureKind = String(e.failure_kind || e.resume_failure_kind || '').trim();
+          const failedStep = String(e.failed_step || e.resume_failed_step || '').trim();
+          const detail = String(e.failure_detail || e.resume_failure_detail || '').trim();
           let line = `${stage}: ${status}`;
           if (op) line += ` | op=${op}`;
           if (reason) line += ` | reason=${reason}`;
+          if (failureKind) line += ` | failure=${failureKind}`;
+          if (failedStep) line += ` | failed_step=${failedStep}`;
+          if (detail) line += ` | detail=${detail.slice(0, 220)}`;
           lines.push(line);
         }
         document.getElementById('event_out').textContent = lines.length > 0 ? lines.join('\n') : '(no events)';
+      }
+
+      function renderSummaryEventLines(summaryPayload) {
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const lines = [];
+        lines.push(`summary_status: ${String(s.status || '-')}`);
+        const exec = (s.execution_summary && typeof s.execution_summary === 'object') ? s.execution_summary : {};
+        lines.push(
+          `execution: status=${String(exec.status || '-')} records=${Number(exec.record_count || 0)} failed=${Number(exec.failed_count || 0)}`
+        );
+        const stateObj = (s.task_state && typeof s.task_state === 'object') ? s.task_state : {};
+        lines.push(
+          `task_state: stage=${String(stateObj.current_stage || stateObj.currentState || '-')} status=${String(stateObj.status || '-')}`
+        );
+        const fail = (s.failure_diagnostics && typeof s.failure_diagnostics === 'object') ? s.failure_diagnostics : {};
+        const failureKind = String(fail.latest_failure_kind || '').trim();
+        const failedStep = String(fail.latest_failed_step || '').trim();
+        const failureDetail = String(fail.latest_failure_detail || fail.latest_failed_error || '').trim();
+        if (failureKind || failedStep || failureDetail) {
+          let failLine = `failure: kind=${failureKind || '-'} step=${failedStep || '-'}`;
+          if (failureDetail) failLine += ` detail=${failureDetail.slice(0, 220)}`;
+          lines.push(failLine);
+        }
+        document.getElementById('event_out').textContent = lines.join('\n');
       }
 
       function renderRuntimeProgress(summary) {
@@ -3146,6 +3176,7 @@ HTML = """
         const runtimeSec = Number.isFinite(runtimeSecRaw) && runtimeSecRaw > 0 ? (runtimeSecRaw / 1000.0) : 0;
         const latestFailedStep = String((row.runtime_health && row.runtime_health.latest_failed_step) || '').trim();
         const latestFailedError = String((row.runtime_health && row.runtime_health.latest_failed_error) || '').trim();
+        const latestFailureKind = String((row.runtime_health && row.runtime_health.latest_failure_kind) || '').trim();
         const healthObj = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
         const healthStatus = String(healthObj.status || 'none').toLowerCase();
         const health = formatRuntimeHealth(healthObj || {});
@@ -3184,6 +3215,10 @@ HTML = """
         failedErr.className = 'project-session-error';
         failedErr.textContent = latestFailedError ? `failed_error=${latestFailedError}` : 'failed_error=-';
         card.appendChild(failedErr);
+        const failedKind = document.createElement('div');
+        failedKind.className = 'project-session-error';
+        failedKind.textContent = latestFailureKind ? `failed_kind=${latestFailureKind}` : 'failed_kind=-';
+        card.appendChild(failedKind);
         const runtimeLine = document.createElement('div');
         runtimeLine.className = 'project-session-runtime';
         const ratioText = totalSteps > 0 ? `${Math.round(successRatio * 100)}%` : '-';
@@ -3650,6 +3685,7 @@ HTML = """
         await openProjectWorkspace(pid, {push: true});
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
         renderJsonOut(r.data);
+        renderSummaryEventLines(r.data);
       }
 
       async function validateProjectTask(projectId, taskId) {
@@ -3996,7 +4032,31 @@ HTML = """
           memory_notes: collectMemoryNotes(),
         });
         renderJsonOut(r.data);
-        renderEvents(r.data && r.data.events ? r.data.events : []);
+        const baseEvents = Array.isArray(r.data && r.data.events) ? r.data.events.slice() : [];
+        const failureKind = String((r.data && r.data.resume_failure_kind) || '').trim();
+        const failureDetail = String((r.data && r.data.resume_failure_detail) || '').trim();
+        const failedStep = String((r.data && r.data.resume_failed_step) || '').trim();
+        if (failureKind || failureDetail || failedStep) {
+          let attached = false;
+          for (const evt of baseEvents) {
+            if (!evt || typeof evt !== 'object') continue;
+            if (String(evt.stage || '') !== 'resume') continue;
+            if (!evt.failure_kind && failureKind) evt.failure_kind = failureKind;
+            if (!evt.failure_detail && failureDetail) evt.failure_detail = failureDetail;
+            if (!evt.failed_step && failedStep) evt.failed_step = failedStep;
+            attached = true;
+          }
+          if (!attached) {
+            baseEvents.push({
+              stage: 'resume',
+              status: String((r.data && r.data.status) || 'unknown'),
+              failure_kind: failureKind,
+              failure_detail: failureDetail,
+              failed_step: failedStep,
+            });
+          }
+        }
+        renderEvents(baseEvents);
         const pending = (r.data && r.data.pending_input)
           ? r.data.pending_input
           : ((r.data && r.data.project && r.data.project.pending_input) ? r.data.project.pending_input : null);
@@ -5622,6 +5682,7 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
             "success_ratio": 0.0,
             "latest_failed_step": "",
             "latest_failed_error": "",
+            "latest_failure_kind": "",
             "recent_duration_ms": 0,
         }
     run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
@@ -5637,6 +5698,7 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
             "success_ratio": 0.0,
             "latest_failed_step": "",
             "latest_failed_error": "",
+            "latest_failure_kind": "",
             "recent_duration_ms": 0,
         }
     records = execution.get("records") if isinstance(execution.get("records"), list) else []
@@ -5655,6 +5717,12 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
             err_txt = str(rec.get("error") or "").strip()
             if err_txt:
                 latest_failed_error = err_txt[:240]
+    latest_failure_kind = _classify_failure_kind(
+        status_text="failed" if failed_steps > 0 else str(execution.get("status") or ""),
+        token_blob=" ".join([latest_failed_step, latest_failed_error]),
+        returncode=None,
+        missing_fields=None,
+    ) if failed_steps > 0 else ""
     total_steps = max(0, success_steps + failed_steps)
     success_ratio = (float(success_steps) / float(total_steps)) if total_steps > 0 else 0.0
     recent_duration_ms = 0
@@ -5697,6 +5765,7 @@ def _project_runtime_health(project: Dict[str, Any]) -> Dict[str, Any]:
         "success_ratio": success_ratio,
         "latest_failed_step": latest_failed_step,
         "latest_failed_error": latest_failed_error,
+        "latest_failure_kind": latest_failure_kind,
         "recent_duration_ms": recent_duration_ms,
     }
 
@@ -6988,6 +7057,97 @@ def _assistant_cli_fail_text(stage: str, payload: Dict[str, Any]) -> str:
     return msg
 
 
+def _classify_failure_kind(
+    *,
+    status_text: str = "",
+    token_blob: str = "",
+    returncode: Any = None,
+    missing_fields: Optional[List[str]] = None,
+) -> str:
+    status = str(status_text or "").strip().lower()
+    missing = [str(x).strip() for x in (missing_fields or []) if str(x).strip()]
+    blob = str(token_blob or "").lower()
+    if status == "need_user_input" or len(missing) > 0:
+        return "need_user_input"
+    if "timeout" in blob or "timed out" in blob or "deadline" in blob or returncode in {124, 137}:
+        return "timeout"
+    if any(
+        token in blob
+        for token in (
+            "adapter",
+            "external scorer",
+            "adapter_nonzero_exit",
+            "adapter_timeout",
+            "missing_output_csv",
+            "invalid_json_stdin",
+            "toolerror",
+            "tool error",
+        )
+    ):
+        return "adapter_failure"
+    return "unknown"
+
+
+def _execution_failure_diagnostics(execution: Any) -> Dict[str, Any]:
+    if not isinstance(execution, dict):
+        return {
+            "failed_count": 0,
+            "latest_failed_step": "",
+            "latest_failed_error": "",
+            "latest_failure_kind": "",
+            "latest_failure_detail": "",
+        }
+    records = execution.get("records") if isinstance(execution.get("records"), list) else []
+    failed_count = 0
+    latest_failed_step = ""
+    latest_failed_error = ""
+    latest_failure_detail = ""
+    latest_failure_kind = ""
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        status = str(rec.get("status") or "").strip()
+        if status == "success":
+            continue
+        failed_count += 1
+        latest_failed_step = str(rec.get("name") or latest_failed_step).strip()
+        err_txt = str(rec.get("error") or "").strip()
+        result = rec.get("result") if isinstance(rec.get("result"), dict) else {}
+        detail_parts: List[str] = []
+        if err_txt:
+            detail_parts.append(err_txt[:280])
+        for key in ("error", "message", "detail", "reason", "code"):
+            value = str(result.get(key) or "").strip() if isinstance(result, dict) else ""
+            if value:
+                detail_parts.append(f"{key}={value[:220]}")
+        rc = result.get("returncode") if isinstance(result, dict) else None
+        if rc is not None:
+            detail_parts.append(f"returncode={rc}")
+        latest_failed_error = err_txt[:240] if err_txt else latest_failed_error
+        latest_failure_detail = "; ".join(part for part in detail_parts if part)[:800]
+        tokens = " ".join(
+            [
+                status,
+                latest_failed_step,
+                latest_failed_error,
+                latest_failure_detail,
+            ]
+        )
+        latest_failure_kind = _classify_failure_kind(
+            status_text=status,
+            token_blob=tokens,
+            returncode=rc,
+            missing_fields=None,
+        )
+    return {
+        "failed_count": failed_count,
+        "latest_failed_step": latest_failed_step,
+        "latest_failed_error": latest_failed_error,
+        "latest_failure_kind": latest_failure_kind if failed_count > 0 else "",
+        "latest_failure_detail": latest_failure_detail if failed_count > 0 else "",
+    }
+
+
 def _resume_failure_info(resume_payload: Dict[str, Any], resume_result: Any) -> Dict[str, str]:
     rr = resume_result if isinstance(resume_result, dict) else {}
     rr_status = str(rr.get("status") or "").strip().lower()
@@ -7016,26 +7176,12 @@ def _resume_failure_info(resume_payload: Dict[str, Any], resume_result: Any) -> 
         token_parts.append(stderr)
     blob = " ".join(token_parts).lower()
 
-    if rr_status == "need_user_input" or len(missing_fields) > 0:
-        kind = "need_user_input"
-    elif "timeout" in blob or "timed out" in blob or "deadline" in blob or rc in {124, 137}:
-        kind = "timeout"
-    elif any(
-        token in blob
-        for token in (
-            "adapter",
-            "external scorer",
-            "adapter_nonzero_exit",
-            "adapter_timeout",
-            "missing_output_csv",
-            "invalid_json_stdin",
-            "toolerror",
-            "tool error",
-        )
-    ):
-        kind = "adapter_failure"
-    else:
-        kind = "unknown"
+    kind = _classify_failure_kind(
+        status_text=rr_status,
+        token_blob=blob,
+        returncode=rc,
+        missing_fields=missing_fields,
+    )
 
     detail_parts: List[str] = []
     if missing_fields:
@@ -7204,7 +7350,16 @@ def _chat_resume_from_pending(
             "status": "fail",
             "project": _project_summary(project),
             "messages": _recent_messages(project),
-            "events": [{"stage": "resume", "status": "fail", "reason": resume_failure.get("kind")}],
+            "events": [
+                {
+                    "stage": "resume",
+                    "status": "fail",
+                    "reason": resume_failure.get("kind"),
+                    "failure_kind": resume_failure.get("kind"),
+                    "failure_detail": resume_failure.get("detail"),
+                    "failed_step": resume_failure.get("failed_step"),
+                }
+            ],
             "resume_result": resume_result,
             "resume_failure_kind": resume_failure.get("kind"),
             "resume_failure_detail": resume_failure.get("detail"),
@@ -7247,7 +7402,15 @@ def _chat_resume_from_pending(
             "status": "need_user_input",
             "project": _project_summary(project),
             "messages": _recent_messages(project),
-            "events": [{"stage": "resume", "status": "need_user_input"}],
+            "events": [
+                {
+                    "stage": "resume",
+                    "status": "need_user_input",
+                    "failure_kind": "need_user_input",
+                    "failure_detail": resume_failure.get("detail"),
+                    "failed_step": resume_failure.get("failed_step"),
+                }
+            ],
             "pending_input": pending_next,
             "resume_result": rr,
             "resume_failure_kind": "need_user_input",
@@ -7263,7 +7426,16 @@ def _chat_resume_from_pending(
             "status": "fail",
             "project": _project_summary(project),
             "messages": _recent_messages(project),
-            "events": [{"stage": "resume", "status": "fail", "reason": resume_failure.get("kind") or "unexpected_status"}],
+            "events": [
+                {
+                    "stage": "resume",
+                    "status": "fail",
+                    "reason": resume_failure.get("kind") or "unexpected_status",
+                    "failure_kind": resume_failure.get("kind"),
+                    "failure_detail": resume_failure.get("detail"),
+                    "failed_step": resume_failure.get("failed_step"),
+                }
+            ],
             "resume_result": rr,
             "resume_failure_kind": resume_failure.get("kind"),
             "resume_failure_detail": resume_failure.get("detail"),
@@ -8661,6 +8833,7 @@ def api_task_summary(task_id: str):
     }
     files = {k: {"path": str(v), "exists": v.exists()} for k, v in artifacts.items()}
     execution = _load_json_if_exists(artifacts["execution_path"])
+    failure_diag = _execution_failure_diagnostics(execution)
     task_state = _load_json_if_exists(artifacts["task_state_path"])
     decision = _load_json_if_exists(artifacts["decision_summary_path"])
     evaluation_report = _load_json_if_exists(artifacts["evaluation_report_path"])
@@ -8678,7 +8851,11 @@ def api_task_summary(task_id: str):
             "execution_summary": {
                 "record_count": len(execution.get("records", [])) if isinstance(execution, dict) else 0,
                 "status": execution.get("status") if isinstance(execution, dict) else None,
+                "failed_count": int(failure_diag.get("failed_count") or 0),
+                "latest_failed_step": str(failure_diag.get("latest_failed_step") or ""),
+                "latest_failure_kind": str(failure_diag.get("latest_failure_kind") or ""),
             },
+            "failure_diagnostics": failure_diag,
             "task_state": task_state if isinstance(task_state, dict) else {},
             "decision_summary": decision if isinstance(decision, dict) else {},
             "evaluation_report_preview": (

@@ -8705,6 +8705,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("setPendingHintRunFeedback(", html)
         self.assertIn("pendingHintRetryResume(", html)
         self.assertIn("pendingHintRetryFailedStep(", html)
+        self.assertIn("renderSummaryEventLines(", html)
         self.assertIn("Open Task Summary", html)
         self.assertIn("Use + Run", html)
         self.assertIn("project_read_only", html)
@@ -9703,6 +9704,8 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertIn("candidate_data", missing)
                 self.assertEqual(str(payload.get("resume_failure_kind") or ""), "need_user_input")
                 self.assertIn("candidate_data", str(payload.get("resume_failure_detail") or ""))
+                events = payload.get("events") if isinstance(payload.get("events"), list) else []
+                self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("failure_kind") == "need_user_input" for e in events))
                 self.assertEqual(str(pending.get("suggested_candidate_data") or ""), "master_database")
                 hints = pending.get("memory_hints") if isinstance(pending.get("memory_hints"), list) else []
                 self.assertGreaterEqual(len(hints), 1)
@@ -9761,7 +9764,16 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(str(payload.get("resume_failure_kind") or ""), "timeout")
                 self.assertIn("timed out", str(payload.get("resume_failure_detail") or ""))
                 events = payload.get("events") if isinstance(payload.get("events"), list) else []
-                self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("reason") == "timeout" for e in events))
+                self.assertTrue(
+                    any(
+                        isinstance(e, dict)
+                        and e.get("stage") == "resume"
+                        and e.get("reason") == "timeout"
+                        and e.get("failure_kind") == "timeout"
+                        and "timed out" in str(e.get("failure_detail") or "")
+                        for e in events
+                    )
+                )
 
     def test_ui_chat_pending_submit_resume_fail_classifies_adapter_failure(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -9826,7 +9838,16 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(str(payload.get("resume_failed_step") or ""), "score_candidates")
                 self.assertIn("adapter_nonzero_exit", str(payload.get("resume_failure_detail") or ""))
                 events = payload.get("events") if isinstance(payload.get("events"), list) else []
-                self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("reason") == "adapter_failure" for e in events))
+                self.assertTrue(
+                    any(
+                        isinstance(e, dict)
+                        and e.get("stage") == "resume"
+                        and e.get("reason") == "adapter_failure"
+                        and e.get("failure_kind") == "adapter_failure"
+                        and e.get("failed_step") == "score_candidates"
+                        for e in events
+                    )
+                )
 
     def test_ui_chat_send_approve_need_user_input_includes_memory_hints(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -10844,6 +10865,48 @@ class UiPrototypeTests(unittest.TestCase):
             trace_preview = payload.get("experiment_trace_preview") if isinstance(payload.get("experiment_trace_preview"), dict) else {}
             self.assertEqual(trace_preview.get("execution_mode"), "full_pipeline")
             self.assertEqual(trace_preview.get("run_label"), "ui_summary_case-20260514-000001")
+
+    def test_ui_task_summary_includes_failure_diagnostics(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_summary_failure_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "execution.json").write_text(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "records": [
+                            {"name": "clean_dataset", "status": "success"},
+                            {
+                                "name": "score_candidates",
+                                "status": "failed",
+                                "error": "adapter timeout waiting remote runtime",
+                                "result": {"error": "adapter_timeout", "returncode": 124},
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/summary")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            execution_summary = payload.get("execution_summary") if isinstance(payload.get("execution_summary"), dict) else {}
+            self.assertEqual(int(execution_summary.get("failed_count") or 0), 1)
+            self.assertEqual(str(execution_summary.get("latest_failed_step") or ""), "score_candidates")
+            self.assertEqual(str(execution_summary.get("latest_failure_kind") or ""), "timeout")
+            diagnostics = payload.get("failure_diagnostics") if isinstance(payload.get("failure_diagnostics"), dict) else {}
+            self.assertEqual(int(diagnostics.get("failed_count") or 0), 1)
+            self.assertEqual(str(diagnostics.get("latest_failed_step") or ""), "score_candidates")
+            self.assertEqual(str(diagnostics.get("latest_failure_kind") or ""), "timeout")
+            self.assertIn("adapter timeout", str(diagnostics.get("latest_failure_detail") or ""))
 
     def test_ui_task_summary_rejects_invalid_task_id(self) -> None:
         ui_app_mod = self._load_ui_module()

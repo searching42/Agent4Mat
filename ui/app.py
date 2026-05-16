@@ -549,6 +549,23 @@ HTML = """
         color: #3b4455;
         font-size: 0.84rem;
       }
+      .pending-hints {
+        margin-top: 8px;
+        border: 1px solid #d7e3f7;
+        border-radius: 8px;
+        padding: 8px;
+        background: #f4f8ff;
+      }
+      .pending-hints .hint-title {
+        font-size: 0.8rem;
+        color: #284166;
+        margin-bottom: 4px;
+      }
+      .pending-hints .hint-list {
+        margin: 2px 0 0 16px;
+        color: #334155;
+        font-size: 0.8rem;
+      }
       .prompt-history {
         margin-top: 8px;
         display: flex;
@@ -856,6 +873,13 @@ HTML = """
             <h3>Need Input</h3>
             <div class=\"muted\" id=\"pending_stage_text\">stage: -</div>
             <ul class=\"pending-q\" id=\"pending_questions\"></ul>
+            <div class=\"pending-hints\" id=\"pending_hints_box\" style=\"display:none;\">
+              <div class=\"hint-title\" id=\"pending_hint_title\"></div>
+              <ul class=\"hint-list\" id=\"pending_hint_matches\"></ul>
+              <div class=\"btn-row\" id=\"pending_hint_actions\" style=\"display:none;\">
+                <button onclick=\"applyPendingSuggestedCandidateData()\">Use Suggested candidate_data</button>
+              </div>
+            </div>
             <div class=\"pending-fields\" id=\"pending_fields\"></div>
             <div class=\"btn-row\">
               <button class=\"primary\" onclick=\"sendPendingForm(false)\">Send Form Patch</button>
@@ -1274,15 +1298,79 @@ HTML = """
         document.getElementById('pending_input_box').style.display = 'none';
         document.getElementById('pending_stage_text').textContent = 'stage: -';
         document.getElementById('pending_questions').innerHTML = '';
+        document.getElementById('pending_hints_box').style.display = 'none';
+        document.getElementById('pending_hint_title').textContent = '';
+        document.getElementById('pending_hint_matches').innerHTML = '';
+        document.getElementById('pending_hint_actions').style.display = 'none';
         document.getElementById('pending_fields').innerHTML = '';
+      }
+
+      function getPendingSuggestedCandidateData() {
+        const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+        return String(pending.suggested_candidate_data || '').trim();
       }
 
       function pendingFieldDefault(field) {
         if (field === 'candidate_data') {
+          const suggested = getPendingSuggestedCandidateData();
+          if (suggested) return suggested;
           const p = (document.getElementById('attachment_path').value || '').trim();
           if (p) return p;
         }
         return '';
+      }
+
+      function renderPendingHints(pending) {
+        const hintBox = document.getElementById('pending_hints_box');
+        const hintTitle = document.getElementById('pending_hint_title');
+        const hintMatches = document.getElementById('pending_hint_matches');
+        const hintActions = document.getElementById('pending_hint_actions');
+        hintBox.style.display = 'none';
+        hintTitle.textContent = '';
+        hintMatches.innerHTML = '';
+        hintActions.style.display = 'none';
+
+        const suggested = String(pending.suggested_candidate_data || '').trim();
+        const matches = Array.isArray(pending.memory_hints) ? pending.memory_hints : [];
+        if (!suggested && matches.length < 1) {
+          return;
+        }
+        hintBox.style.display = 'block';
+        if (suggested) {
+          hintTitle.textContent = `Memory suggestion: candidate_data = ${suggested}`;
+        } else {
+          hintTitle.textContent = 'Memory suggestion: found related historical runs';
+        }
+        for (const row of matches.slice(0, 3)) {
+          if (!row || typeof row !== 'object') continue;
+          const taskId = String(row.task_id || '-');
+          const cand = String(row.candidate_data || '').trim();
+          const scoreRaw = Number(row.score);
+          const score = Number.isFinite(scoreRaw) ? scoreRaw.toFixed(3) : '-';
+          const li = document.createElement('li');
+          li.textContent = cand ? `${taskId} | ${cand} | score=${score}` : `${taskId} | score=${score}`;
+          hintMatches.appendChild(li);
+        }
+        const missing = Array.isArray(pending.missing_fields) ? pending.missing_fields.map((x) => String(x || '').trim()) : [];
+        if (suggested && missing.includes('candidate_data')) {
+          hintActions.style.display = 'flex';
+        }
+      }
+
+      function applyPendingSuggestedCandidateData() {
+        const suggested = getPendingSuggestedCandidateData();
+        if (!suggested) {
+          renderJsonOut({status: 'fail', error: 'no suggested candidate_data available'});
+          return;
+        }
+        const input = document.getElementById('pending_field_candidate_data');
+        if (input) {
+          input.value = suggested;
+          renderJsonOut({status: 'pass', message: 'candidate_data filled from memory suggestion', candidate_data: suggested});
+          return;
+        }
+        setMessageInput(JSON.stringify({candidate_data: suggested}, null, 2));
+        renderJsonOut({status: 'pass', message: 'candidate_data patch prepared in chat input', candidate_data: suggested});
       }
 
       function renderPendingInput(pending) {
@@ -1305,6 +1393,7 @@ HTML = """
           li.textContent = String(q || '');
           qList.appendChild(li);
         }
+        renderPendingHints(pending);
 
         const fieldsWrap = document.getElementById('pending_fields');
         fieldsWrap.innerHTML = '';
@@ -6384,6 +6473,70 @@ def _load_json_path(path: Path) -> Optional[Dict[str, Any]]:
     return payload
 
 
+def _normalize_pending_memory_hints(matches: Any, *, limit: int = 5) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if not isinstance(matches, list):
+        return out
+    for item in matches:
+        if not isinstance(item, dict):
+            continue
+        row: Dict[str, Any] = {}
+        task_id = str(item.get("task_id") or "").strip()
+        candidate_data = str(item.get("candidate_data") or "").strip()
+        if task_id:
+            row["task_id"] = task_id
+        if candidate_data:
+            row["candidate_data"] = candidate_data
+        score_raw = item.get("score")
+        try:
+            score_value = float(score_raw)
+        except Exception:
+            score_value = None
+        if score_value is not None:
+            row["score"] = round(score_value, 6)
+        prop = str(item.get("property") or "").strip()
+        if prop:
+            row["property"] = prop
+        last_run_at = str(item.get("last_run_at") or "").strip()
+        if last_run_at:
+            row["last_run_at"] = last_run_at
+        if not row:
+            continue
+        out.append(row)
+        if len(out) >= max(1, min(limit, 10)):
+            break
+    return out
+
+
+def _pending_memory_from_intake_result(*, intake_result: Dict[str, Any], draft_path: Optional[Path]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "memory_hints_path": "",
+        "memory_hints": [],
+        "suggested_candidate_data": "",
+    }
+    hints_path = _normalize_repo_path(intake_result.get("memory_hints_path"))
+    hints_payload = _load_json_if_exists(hints_path) if hints_path is not None else None
+    if hints_path is not None:
+        out["memory_hints_path"] = str(hints_path)
+    if isinstance(hints_payload, dict):
+        out["memory_hints"] = _normalize_pending_memory_hints(hints_payload.get("matches"), limit=5)
+        out["suggested_candidate_data"] = str(hints_payload.get("suggested_candidate_data") or "").strip()
+        status = str(hints_payload.get("status") or "").strip()
+        if status:
+            out["memory_hints_status"] = status
+
+    if draft_path is not None and draft_path.exists():
+        draft = _load_json_path(draft_path)
+    else:
+        draft = None
+    provenance = draft.get("provenance") if isinstance(draft, dict) and isinstance(draft.get("provenance"), dict) else {}
+    if not out["suggested_candidate_data"]:
+        out["suggested_candidate_data"] = str(provenance.get("suggested_candidate_data") or "").strip()
+    if not out["memory_hints"]:
+        out["memory_hints"] = _normalize_pending_memory_hints(provenance.get("memory_hints"), limit=5)
+    return out
+
+
 def _assistant_need_input_text(missing_fields: Any, questions: Any) -> str:
     missing = [str(x) for x in (missing_fields if isinstance(missing_fields, list) else []) if str(x).strip()]
     qs = [str(x) for x in (questions if isinstance(questions, list) else []) if str(x).strip()]
@@ -6405,15 +6558,38 @@ def _assistant_cli_fail_text(stage: str, payload: Dict[str, Any]) -> str:
     return msg
 
 
-def _pending_input_payload(*, stage: str, missing_fields: Any, questions: Any, task_draft_path: Any = "") -> Dict[str, Any]:
+def _pending_input_payload(
+    *,
+    stage: str,
+    missing_fields: Any,
+    questions: Any,
+    task_draft_path: Any = "",
+    memory_hints_path: Any = "",
+    memory_hints: Any = None,
+    suggested_candidate_data: Any = "",
+    memory_hints_status: Any = "",
+) -> Dict[str, Any]:
     missing = [str(x) for x in (missing_fields if isinstance(missing_fields, list) else []) if str(x).strip()]
     qs = [str(x) for x in (questions if isinstance(questions, list) else []) if str(x).strip()]
-    return {
+    out: Dict[str, Any] = {
         "stage": str(stage or ""),
         "missing_fields": missing,
         "questions": qs,
         "task_draft_path": str(task_draft_path or ""),
     }
+    mh_path = _normalize_repo_path(memory_hints_path)
+    if mh_path is not None:
+        out["memory_hints_path"] = str(mh_path)
+    hints_list = _normalize_pending_memory_hints(memory_hints, limit=5)
+    if hints_list:
+        out["memory_hints"] = hints_list
+    suggested = str(suggested_candidate_data or "").strip()
+    if suggested:
+        out["suggested_candidate_data"] = suggested
+    hint_status = str(memory_hints_status or "").strip()
+    if hint_status:
+        out["memory_hints_status"] = hint_status
+    return out
 
 
 def _chat_resume_from_pending(
@@ -6753,11 +6929,16 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
             return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "intake", "status": "fail"}]}
 
         if str(intake_result.get("status") or "") == "need_user_input":
+            pending_memory = _pending_memory_from_intake_result(intake_result=intake_result, draft_path=draft_path)
             pending = _pending_input_payload(
                 stage="intake",
                 missing_fields=intake_result.get("missing_fields"),
                 questions=intake_result.get("questions"),
                 task_draft_path=intake_result.get("task_draft_path"),
+                memory_hints_path=pending_memory.get("memory_hints_path"),
+                memory_hints=pending_memory.get("memory_hints"),
+                suggested_candidate_data=pending_memory.get("suggested_candidate_data"),
+                memory_hints_status=pending_memory.get("memory_hints_status"),
             )
             project["pending_input"] = pending
             _append_message(

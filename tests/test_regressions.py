@@ -9453,6 +9453,87 @@ class UiPrototypeTests(unittest.TestCase):
                 assistant_text = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
                 self.assertIn("candidate_data", assistant_text)
 
+    def test_ui_chat_send_need_user_input_includes_memory_hints(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_need_input_mem", "title": "need input memory"})
+                task_id = "ui_chat_need_input_mem_20260516_000001"
+                run_dir = root / "runs" / "agent" / task_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                draft_path = run_dir / "task.draft.json"
+                draft_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": task_id,
+                            "status": "need_user_input",
+                            "missing_fields": ["candidate_data"],
+                            "questions": ["候选数据来源是什么？"],
+                            "provenance": {"suggested_candidate_data": "master_database"},
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                memory_hints_path = run_dir / "memory_hints.json"
+                memory_hints_path.write_text(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "query": "设计470nm附近且高PLQY分子",
+                            "suggested_candidate_data": "master_database",
+                            "matches": [
+                                {
+                                    "task_id": "prev_task_1",
+                                    "candidate_data": "master_database",
+                                    "score": 0.88,
+                                    "property": "plqy",
+                                }
+                            ],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                intake_result = {
+                    "task_id": task_id,
+                    "status": "need_user_input",
+                    "task_draft_path": str(draft_path),
+                    "memory_hints_path": str(memory_hints_path),
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？本地CSV路径还是数据库关键词？"],
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=2,
+                    stdout=json.dumps(intake_result, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp):
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_need_input_mem",
+                            "message": "设计470nm附近且高PLQY分子",
+                            "options": {"planner_provider": "rule_based_v1", "catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                pending = payload.get("pending_input") if isinstance(payload.get("pending_input"), dict) else {}
+                self.assertEqual(str(pending.get("suggested_candidate_data") or ""), "master_database")
+                self.assertEqual(str(pending.get("memory_hints_path") or ""), str(memory_hints_path.resolve()))
+                hints = pending.get("memory_hints") if isinstance(pending.get("memory_hints"), list) else []
+                self.assertGreaterEqual(len(hints), 1)
+                first = hints[0] if isinstance(hints[0], dict) else {}
+                self.assertEqual(str(first.get("task_id") or ""), "prev_task_1")
+                self.assertEqual(str(first.get("candidate_data") or ""), "master_database")
+
     def test_ui_chat_pending_submit_resume_success(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:

@@ -560,6 +560,14 @@ HTML = """
         font-size: 0.74rem;
         color: #5b6578;
       }
+      .web-preset-row {
+        margin-top: 4px;
+      }
+      .web-preset-row button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
       body.chat-focus-mode .layout {
         grid-template-columns: minmax(620px, 1fr);
       }
@@ -1074,6 +1082,12 @@ HTML = """
             <button class=\"primary\" onclick=\"sendChat(false)\">Send</button>
             <button onclick=\"sendWebSearchHint()\">Web Search</button>
           </div>
+          <div class=\"btn-row web-preset-row\">
+            <button type=\"button\" id=\"web_preset_papers_btn\" onclick=\"applyWebSearchPreset('papers')\">Web Preset: Papers</button>
+            <button type=\"button\" id=\"web_preset_patents_btn\" onclick=\"applyWebSearchPreset('patents')\">Web Preset: Patents</button>
+            <button type=\"button\" id=\"web_preset_safety_btn\" onclick=\"applyWebSearchPreset('safety')\">Web Preset: Safety</button>
+            <button type=\"button\" id=\"web_preset_broad_btn\" onclick=\"applyWebSearchPreset('broad')\">Web Preset: Broad</button>
+          </div>
           <div class=\"chat-quick-strip\">
             <input id=\"quick_candidate_data_path\" placeholder=\"Quick candidate_data path (e.g. /abs/path/candidates.csv)\" />
             <button onclick=\"quickUseCandidatePath(false)\">Use Path</button>
@@ -1359,6 +1373,33 @@ HTML = """
           ]
         },
         make_report: {}
+      };
+
+      const webSearchPresets = {
+        papers: {
+          enabled: true,
+          topk: 8,
+          domains: ["nature.com", "acs.org", "rsc.org", "wiley.com", "sciencedirect.com"],
+          time_range: "365d",
+        },
+        patents: {
+          enabled: true,
+          topk: 8,
+          domains: ["patents.google.com", "uspto.gov", "wipo.int", "worldwide.espacenet.com"],
+          time_range: "5y",
+        },
+        safety: {
+          enabled: true,
+          topk: 10,
+          domains: ["pubchem.ncbi.nlm.nih.gov", "echa.europa.eu", "epa.gov", "nist.gov"],
+          time_range: "5y",
+        },
+        broad: {
+          enabled: true,
+          topk: 5,
+          domains: [],
+          time_range: "",
+        },
       };
 
       function nowIso() {
@@ -2876,13 +2917,62 @@ HTML = """
           .join('\n');
       }
 
+      function sortedDomainKey(domains) {
+        const rows = Array.isArray(domains) ? domains : [];
+        return rows
+          .map((x) => String(x || '').trim().toLowerCase())
+          .filter((x) => Boolean(x))
+          .sort()
+          .join(',');
+      }
+
+      function detectWebPresetName(prefs) {
+        const p = prefs && typeof prefs === 'object' ? prefs : collectWebSearchPrefs();
+        const pDomains = sortedDomainKey(p.domains);
+        for (const [name, preset] of Object.entries(webSearchPresets)) {
+          if (!preset || typeof preset !== 'object') continue;
+          const enabledMatch = Boolean(p.enabled) === Boolean(preset.enabled);
+          const topkMatch = Number(p.topk || 0) === Number(preset.topk || 0);
+          const timeMatch = String(p.time_range || '') === String(preset.time_range || '');
+          const domainMatch = pDomains === sortedDomainKey(preset.domains);
+          if (enabledMatch && topkMatch && timeMatch && domainMatch) {
+            return name;
+          }
+        }
+        return '';
+      }
+
+      function applyWebSearchPreset(name, appendHint) {
+        const key = String(name || '').trim().toLowerCase();
+        const preset = webSearchPresets[key];
+        if (!preset || typeof preset !== 'object') {
+          renderJsonOut({status: 'fail', error: 'invalid web preset', preset: key});
+          return false;
+        }
+        document.getElementById('web_enabled').checked = Boolean(preset.enabled);
+        document.getElementById('web_topk').value = String(Number(preset.topk || 5));
+        setWebDomainsInputFromList(Array.isArray(preset.domains) ? preset.domains : []);
+        document.getElementById('web_time_range').value = String(preset.time_range || '');
+        updateWebSearchStatus();
+        const prefs = collectWebSearchPrefs();
+        renderJsonOut({status: 'pass', action: 'apply_web_preset', preset: key, web_prefs: prefs});
+        renderEvents([{stage: 'web_preset', status: 'pass', operation: key}]);
+        setQuickCandidateStatus(`web preset applied: ${key}`, 'pass');
+        if (appendHint) {
+          sendWebSearchHint();
+        }
+        return true;
+      }
+
       function updateWebSearchStatus() {
         const prefs = collectWebSearchPrefs();
         const statusEle = document.getElementById('web_search_status');
         if (!statusEle) return;
         const domainsTxt = prefs.domains.length > 0 ? `${prefs.domains.length}` : 'all';
         const timeTxt = prefs.time_range ? prefs.time_range : 'any';
-        statusEle.textContent = `web: ${prefs.enabled ? 'enabled' : 'disabled'}, topk=${prefs.topk}, domains=${domainsTxt}, time=${timeTxt}`;
+        const presetName = detectWebPresetName(prefs);
+        const presetTxt = presetName ? `, preset=${presetName}` : '';
+        statusEle.textContent = `web: ${prefs.enabled ? 'enabled' : 'disabled'}, topk=${prefs.topk}, domains=${domainsTxt}, time=${timeTxt}${presetTxt}`;
       }
 
       function collectOptions() {
@@ -4761,6 +4851,10 @@ HTML = """
           web_search_enabled: Boolean(prefs.enabled),
           web_topk: Number(prefs.topk),
         };
+        const presetName = detectWebPresetName(prefs);
+        if (presetName) {
+          params.preset = presetName;
+        }
         if (Array.isArray(prefs.domains) && prefs.domains.length > 0) {
           params.domains = prefs.domains;
         }
@@ -4779,6 +4873,7 @@ HTML = """
           setMessageInput(msg);
         }
         updateWebSearchStatus();
+        setQuickCandidateStatus(`web hint inserted${presetName ? ` (${presetName})` : ''}`, 'pass');
       }
 
       function setQuickCandidateStatus(text, level) {

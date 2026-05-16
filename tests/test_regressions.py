@@ -8531,6 +8531,62 @@ class UiPrototypeTests(unittest.TestCase):
                     any(isinstance(m, dict) and str(m.get("kind") or "") == "memory_context" for m in messages)
                 )
 
+    def test_ui_chat_send_injects_web_preferences_into_intake_request(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_chat_web_prefs",
+                        "title": "web prefs",
+                        "options": {"memory_enabled": False},
+                    },
+                )
+                intake_result = {
+                    "task_id": "ui_chat_web_prefs_20260515_000001",
+                    "status": "need_user_input",
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_web_prefs_20260515_000001" / "task.draft.json"),
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=2,
+                    stdout=json.dumps(intake_result, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_web_prefs",
+                            "message": "设计470nm附近且高PLQY分子",
+                            "options": {
+                                "planner_provider": "rule_based_v1",
+                                "web_search_enabled": True,
+                                "web_topk": 9,
+                                "web_domains": ["https://nature.com/articles/abc", "rsc.org"],
+                                "web_time_range": "30d",
+                            },
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                cmd = mocked.call_args.args[0]
+                request_text = str(cmd[cmd.index("--request") + 1])
+                self.assertIn("Web evidence preferences:", request_text)
+                self.assertIn("- web_topk: 9", request_text)
+                self.assertIn("- domains: nature.com, rsc.org", request_text)
+                self.assertIn("- time_range: 30d", request_text)
+                proj = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                opts = proj.get("options") if isinstance(proj.get("options"), dict) else {}
+                self.assertEqual(opts.get("web_domains"), ["nature.com", "rsc.org"])
+                self.assertEqual(opts.get("web_time_range"), "30d")
+
     def test_ui_chat_send_does_not_inject_memory_when_disabled(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -8691,6 +8747,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("sendWebSearchHint()", html)
         self.assertIn("downloadTaskBundle()", html)
         self.assertIn("Download Task Bundle", html)
+        self.assertIn("web_domains", html)
+        self.assertIn("web_time_range", html)
+        self.assertIn("web_search_status", html)
+        self.assertIn("updateWebSearchStatus()", html)
         self.assertIn("memory_enabled", html)
         self.assertIn("memory_notes", html)
         self.assertIn("updateMemoryStatus()", html)
@@ -8766,6 +8826,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("applyOutputViewMode(", html)
         self.assertIn("body.output-simple-mode .right-advanced", html)
         self.assertIn("body.output-simple-mode .simple-only", html)
+        self.assertIn("collectWebSearchPrefs(", html)
+        self.assertIn("normalizeWebDomains(", html)
         self.assertIn("const hist = await loadHistory();", html)
         self.assertIn("if (!ok) {", html)
         self.assertIn("await saveProject();", html)

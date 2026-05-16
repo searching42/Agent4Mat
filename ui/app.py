@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, render_template_string, request
 from oled_agent.agent.task_v2 import compute_missing_questions, legacy_request_to_task_v2
@@ -955,9 +956,14 @@ HTML = """
         <label>Catalog path</label>
         <input id=\"catalog\" value=\"scripts/adapters/real_adapters_catalog.json\" />
 
-        <label><input id=\"web_enabled\" type=\"checkbox\" checked /> Enable web evidence</label>
+        <label><input id=\"web_enabled\" type=\"checkbox\" checked onchange=\"updateWebSearchStatus()\" /> Enable web evidence</label>
         <label>Web topk</label>
-        <input id=\"web_topk\" value=\"5\" />
+        <input id=\"web_topk\" value=\"5\" oninput=\"updateWebSearchStatus()\" />
+        <label>Web domains (optional)</label>
+        <textarea id=\"web_domains\" rows=\"2\" placeholder=\"nature.com, acs.org, rsc.org\" oninput=\"updateWebSearchStatus()\"></textarea>
+        <label>Web time range (optional)</label>
+        <input id=\"web_time_range\" placeholder=\"e.g. 30d or 2025-01-01..2026-05-01\" oninput=\"updateWebSearchStatus()\" />
+        <div class=\"muted\" id=\"web_search_status\">web: enabled, topk=5, domains=all, time=any</div>
         <label><input id=\"memory_enabled\" type=\"checkbox\" onchange=\"updateMemoryStatus()\" /> Enable project memory injection</label>
         <label>Project memory notes</label>
         <textarea id=\"memory_notes\" rows=\"5\" placeholder=\"记录该项目长期约束/偏好，例如目标波长范围、禁用骨架、数据来源优先级。\" oninput=\"updateMemoryStatus()\"></textarea>
@@ -2481,6 +2487,12 @@ HTML = """
         if (Object.prototype.hasOwnProperty.call(opts, 'web_topk')) {
           document.getElementById('web_topk').value = String(opts.web_topk);
         }
+        if (Object.prototype.hasOwnProperty.call(opts, 'web_domains')) {
+          setWebDomainsInputFromList(opts.web_domains);
+        }
+        if (Object.prototype.hasOwnProperty.call(opts, 'web_time_range')) {
+          document.getElementById('web_time_range').value = String(opts.web_time_range || '');
+        }
         if (Object.prototype.hasOwnProperty.call(opts, 'memory_enabled')) {
           document.getElementById('memory_enabled').checked = Boolean(opts.memory_enabled);
         }
@@ -2491,6 +2503,7 @@ HTML = """
         if (opts.batch_replay_defaults && typeof opts.batch_replay_defaults === 'object') {
           applyBatchReplayOptions(opts.batch_replay_defaults);
         }
+        updateWebSearchStatus();
         updateMemoryStatus();
         updateProjectLockStatus();
       }
@@ -2820,18 +2833,71 @@ HTML = """
         renderJsonOut({status: 'fail', error: 'clipboard_unavailable', url: url});
       }
 
+      function normalizeWebDomains(raw) {
+        const txt = String(raw || '');
+        const parts = txt.split(/[\\n,\\s;]+/g);
+        const out = [];
+        const seen = new Set();
+        for (const part of parts) {
+          let token = String(part || '').trim().toLowerCase();
+          if (!token) continue;
+          token = token.replace(/^https?:\\/\\//, '').replace(/\\/.*$/, '');
+          token = token.replace(/^www\\./, '').replace(/^\\*\\./, '').replace(/^\\.+|\\.+$/g, '');
+          if (!token) continue;
+          if (!/^[a-z0-9.-]{1,253}$/.test(token)) continue;
+          if (token.startsWith('-') || token.endsWith('-') || token.includes('..')) continue;
+          if (seen.has(token)) continue;
+          seen.add(token);
+          out.push(token);
+          if (out.length >= 12) break;
+        }
+        return out;
+      }
+
+      function collectWebSearchPrefs() {
+        const enabled = Boolean(document.getElementById('web_enabled').checked);
+        const webTopkRaw = Number(document.getElementById('web_topk').value || 5);
+        const topk = Number.isFinite(webTopkRaw) ? Math.max(1, Math.min(20, Math.floor(webTopkRaw))) : 5;
+        const domains = normalizeWebDomains(document.getElementById('web_domains').value || '');
+        const timeRange = String(document.getElementById('web_time_range').value || '').trim();
+        return {
+          enabled: enabled,
+          topk: topk,
+          domains: domains,
+          time_range: timeRange.slice(0, 80),
+        };
+      }
+
+      function setWebDomainsInputFromList(domains) {
+        const rows = Array.isArray(domains) ? domains : [];
+        document.getElementById('web_domains').value = rows
+          .map((x) => String(x || '').trim())
+          .filter((x) => Boolean(x))
+          .join('\n');
+      }
+
+      function updateWebSearchStatus() {
+        const prefs = collectWebSearchPrefs();
+        const statusEle = document.getElementById('web_search_status');
+        if (!statusEle) return;
+        const domainsTxt = prefs.domains.length > 0 ? `${prefs.domains.length}` : 'all';
+        const timeTxt = prefs.time_range ? prefs.time_range : 'any';
+        statusEle.textContent = `web: ${prefs.enabled ? 'enabled' : 'disabled'}, topk=${prefs.topk}, domains=${domainsTxt}, time=${timeTxt}`;
+      }
+
       function collectOptions() {
         const planner = document.getElementById('planner').value;
         const catalog = document.getElementById('catalog').value;
-        const webEnabled = document.getElementById('web_enabled').checked;
-        const webTopk = Number(document.getElementById('web_topk').value || 5);
+        const webPrefs = collectWebSearchPrefs();
         const memoryEnabled = document.getElementById('memory_enabled').checked;
         const projectReadOnly = document.getElementById('project_read_only').checked;
         return {
           planner_provider: planner,
           catalog_path: catalog,
-          web_search_enabled: Boolean(webEnabled),
-          web_topk: Number.isFinite(webTopk) ? webTopk : 5,
+          web_search_enabled: Boolean(webPrefs.enabled),
+          web_topk: Number(webPrefs.topk),
+          web_domains: webPrefs.domains,
+          web_time_range: webPrefs.time_range,
           memory_enabled: Boolean(memoryEnabled),
           project_read_only: Boolean(projectReadOnly),
           batch_replay_defaults: readBatchReplayOptions(),
@@ -4690,13 +4756,29 @@ HTML = """
       }
 
       function sendWebSearchHint() {
-        const topk = String(document.getElementById('web_topk').value || '5').trim();
+        const prefs = collectWebSearchPrefs();
+        const params = {
+          web_search_enabled: Boolean(prefs.enabled),
+          web_topk: Number(prefs.topk),
+        };
+        if (Array.isArray(prefs.domains) && prefs.domains.length > 0) {
+          params.domains = prefs.domains;
+        }
+        if (prefs.time_range) {
+          params.time_range = prefs.time_range;
+        }
         const msg = [
           "请先做web search证据收集，再进入后续设计流程。",
-          `建议参数: {"web_search_enabled": true, "web_topk": ${topk || "5"}}`,
-          "请输出来源链接和时间范围。"
+          `建议参数: ${JSON.stringify(params, null, 2)}`,
+          "请输出来源链接、time_range应用说明和过滤后的来源统计。"
         ].join("\n");
-        setMessageInput(msg);
+        const existing = String(document.getElementById('message_input').value || '').trim();
+        if (existing) {
+          setMessageInput(`${existing}\n\n${msg}`);
+        } else {
+          setMessageInput(msg);
+        }
+        updateWebSearchStatus();
       }
 
       function setQuickCandidateStatus(text, level) {
@@ -4994,6 +5076,7 @@ HTML = """
 
       async function boot() {
         applyStepArgsTemplate(true);
+        updateWebSearchStatus();
         updateMemoryStatus();
         updateProjectLockStatus();
         const uiPrefs = loadUiPrefs();
@@ -6237,6 +6320,43 @@ def _normalize_memory_notes(raw: Any) -> str:
     return text
 
 
+def _normalize_web_domains(raw: Any) -> List[str]:
+    tokens: List[str]
+    if isinstance(raw, list):
+        tokens = [str(item or "") for item in raw]
+    elif isinstance(raw, str):
+        tokens = re.split(r"[\s,;]+", str(raw or ""))
+    else:
+        tokens = []
+    out: List[str] = []
+    seen = set()
+    for raw_token in tokens:
+        token = str(raw_token or "").strip().lower()
+        if not token:
+            continue
+        if "://" in token:
+            try:
+                token = str(urlparse(token).hostname or "").strip().lower()
+            except Exception:
+                token = ""
+        token = token.replace("www.", "", 1) if token.startswith("www.") else token
+        token = token[2:] if token.startswith("*.") else token
+        token = token.strip(".")
+        if not token:
+            continue
+        if not re.fullmatch(r"[a-z0-9.-]{1,253}", token):
+            continue
+        if token.startswith("-") or token.endswith("-") or ".." in token:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+        if len(out) >= 12:
+            break
+    return out
+
+
 def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     options = raw if isinstance(raw, dict) else {}
     planner = str(options.get("planner_provider") or "rule_based_v1").strip() or "rule_based_v1"
@@ -6244,6 +6364,10 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     web_enabled = bool(options.get("web_search_enabled", True))
     web_topk = _as_int(options.get("web_topk"), 5)
     web_topk = max(1, min(web_topk, 20))
+    web_domains = _normalize_web_domains(options.get("web_domains"))
+    web_time_range = str(options.get("web_time_range") or "").strip()
+    if len(web_time_range) > 80:
+        web_time_range = web_time_range[:80]
     memory_enabled = bool(options.get("memory_enabled", False))
     project_read_only = bool(options.get("project_read_only", False))
     batch_replay_defaults = _normalize_batch_replay_options(options.get("batch_replay_defaults"))
@@ -6252,6 +6376,8 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
         "catalog_path": catalog,
         "web_search_enabled": web_enabled,
         "web_topk": web_topk,
+        "web_domains": web_domains,
+        "web_time_range": web_time_range,
         "memory_enabled": memory_enabled,
         "project_read_only": project_read_only,
         "batch_replay_defaults": batch_replay_defaults,
@@ -6491,6 +6617,19 @@ def _compose_intake_request_text(*, message: str, project: Dict[str, Any], optio
     base = str(message or "").strip()
     if not base:
         return "", False
+    web_enabled = bool(options.get("web_search_enabled", True))
+    web_topk = _as_int(options.get("web_topk"), 5)
+    web_topk = max(1, min(web_topk, 20))
+    web_domains = _normalize_web_domains(options.get("web_domains"))
+    web_time_range = str(options.get("web_time_range") or "").strip()
+    if web_enabled and (web_topk != 5 or web_domains or web_time_range):
+        lines = [base, "", "Web evidence preferences:"]
+        lines.append(f"- web_topk: {web_topk}")
+        if web_domains:
+            lines.append(f"- domains: {', '.join(web_domains)}")
+        if web_time_range:
+            lines.append(f"- time_range: {web_time_range}")
+        base = "\n".join(lines)
     if not bool(options.get("memory_enabled", False)):
         return base, False
     notes = _normalize_memory_notes(project.get("memory_notes"))
@@ -9330,12 +9469,24 @@ def api_intake():
     request_text = str(body.get("request_text") or "").strip()
     web_topk = int(body.get("web_topk") or 5)
     web_enabled = bool(body.get("web_search_enabled", True))
+    web_domains = _normalize_web_domains(body.get("web_domains"))
+    web_time_range = str(body.get("web_time_range") or "").strip()
+    if len(web_time_range) > 80:
+        web_time_range = web_time_range[:80]
     if not task_id:
         return jsonify({"status": "fail", "error": "missing task_id"}), 400
     if not _is_safe_task_id(task_id):
         return jsonify({"status": "fail", "error": "invalid task_id"}), 400
     if not request_text:
         return jsonify({"status": "fail", "error": "missing request_text"}), 400
+    if web_enabled and (web_domains or web_time_range):
+        lines = [request_text, "", "Web evidence preferences:"]
+        lines.append(f"- web_topk: {max(1, int(web_topk))}")
+        if web_domains:
+            lines.append(f"- domains: {', '.join(web_domains)}")
+        if web_time_range:
+            lines.append(f"- time_range: {web_time_range}")
+        request_text = "\n".join(lines)
     return jsonify(_run_agent_intake(task_id=task_id, request_text=request_text, web_topk=web_topk, enable_web_search=web_enabled))
 
 

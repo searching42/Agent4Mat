@@ -31,6 +31,7 @@ ALLOWED_UNTRACKED_EXACT = {
     "scripts/validate_filtering_report.py",
     "scripts/validate_task_state.py",
     "scripts/validate_run_artifacts.py",
+    "scripts/validate_memory_context.py",
 }
 
 ALLOWED_UNTRACKED_PREFIXES = ALLOWED_UNTRACKED_PREFIXES | {

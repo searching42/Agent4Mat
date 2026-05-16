@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from oled_agent.agent.evaluator import build_evaluation_report
 from oled_agent.agent.experiment_trace import build_experiment_trace
 from oled_agent.agent.guardrails import build_guardrails_report
+from oled_agent.agent.memory_context import build_memory_context, update_memory_index
 from oled_agent.agent.executor import execute_plan, execute_plan_with_resume, save_execution_result
 from oled_agent.agent.planner import (
     DEFAULT_PLANNER_PROVIDER,
@@ -354,6 +355,7 @@ def _mirror_logging_and_result_layout(
     evaluation_report_path: Path,
     guardrails_report_path: Path,
     experiment_trace_path: Optional[Path],
+    memory_context_path: Optional[Path],
 ) -> Dict[str, Any]:
     logging_dir = (workspace_root / DEFAULT_LOGGING_OUT / run_label).resolve()
     result_dir = (workspace_root / DEFAULT_RESULT_OUT / run_label).resolve()
@@ -381,6 +383,8 @@ def _mirror_logging_and_result_layout(
     _copy_if_exists(guardrails_report_path, logging_guardrails_report_path)
     logging_experiment_trace_path = logging_dir / "experiment_trace.json"
     _copy_if_exists(experiment_trace_path, logging_experiment_trace_path)
+    logging_memory_context_path = logging_dir / "memory_context.json"
+    _copy_if_exists(memory_context_path, logging_memory_context_path)
 
     plan_md_path = logging_dir / "plan.md"
     plan_md_path.write_text(_build_plan_markdown(plan), encoding="utf-8")
@@ -431,6 +435,8 @@ def _mirror_logging_and_result_layout(
     _copy_if_exists(guardrails_report_path, result_guardrails_report_path)
     result_experiment_trace_path = result_dir / "experiment_trace.json"
     _copy_if_exists(experiment_trace_path, result_experiment_trace_path)
+    result_memory_context_path = result_dir / "memory_context.json"
+    _copy_if_exists(memory_context_path, result_memory_context_path)
 
     result_metadata = {
         "schema_version": "1.0.0",
@@ -448,6 +454,7 @@ def _mirror_logging_and_result_layout(
             "evaluation_report_json": str(result_evaluation_report_path) if result_evaluation_report_path.exists() else "",
             "guardrails_report_json": str(result_guardrails_report_path) if result_guardrails_report_path.exists() else "",
             "experiment_trace_json": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
+            "memory_context_json": str(result_memory_context_path) if result_memory_context_path.exists() else "",
         },
     }
     result_metadata_path = result_dir / "metadata.json"
@@ -466,11 +473,13 @@ def _mirror_logging_and_result_layout(
         "logging_evaluation_report_path": str(logging_evaluation_report_path) if logging_evaluation_report_path.exists() else "",
         "logging_guardrails_report_path": str(logging_guardrails_report_path) if logging_guardrails_report_path.exists() else "",
         "logging_experiment_trace_path": str(logging_experiment_trace_path) if logging_experiment_trace_path.exists() else "",
+        "logging_memory_context_path": str(logging_memory_context_path) if logging_memory_context_path.exists() else "",
         "result_metadata_path": str(result_metadata_path),
         "result_target_structures_csv_path": str(target_structures_csv) if copied_target_structures else "",
         "result_evaluation_report_path": str(result_evaluation_report_path) if result_evaluation_report_path.exists() else "",
         "result_guardrails_report_path": str(result_guardrails_report_path) if result_guardrails_report_path.exists() else "",
         "result_experiment_trace_path": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
+        "result_memory_context_path": str(result_memory_context_path) if result_memory_context_path.exists() else "",
     }
 
 
@@ -545,6 +554,27 @@ def _persist_agent_artifacts(
         _write_json(request_path, request_payload)
 
     run_label = _build_run_label(task_id)
+    previous_memory_context = _load_json_if_exists(artifact_dir / "memory_context.json")
+    memory_context_payload = build_memory_context(
+        task_id=task_id,
+        execution_mode="full_pipeline",
+        run_label=run_label,
+        workspace_root=workspace_root.resolve(),
+        execution_payload=result_dict,
+        tool_state=tool_state,
+        request_payload=request_payload if isinstance(request_payload, dict) else None,
+        plan_payload=plan_dict,
+        task_payload=request_payload if isinstance(request_payload, dict) else _build_task_payload_from_plan(plan_dict),
+        web_evidence_path=web_evidence_path if web_evidence_path.exists() else None,
+        previous_memory_context=previous_memory_context,
+    )
+    memory_context_path = artifact_dir / "memory_context.json"
+    _write_json(memory_context_path, memory_context_payload)
+    memory_index_path = update_memory_index(
+        workspace_root=workspace_root.resolve(),
+        memory_context=memory_context_payload,
+    )
+
     experiment_trace_path = artifact_dir / "experiment_trace.json"
     artifact_paths: Dict[str, Path] = {
         "plan": plan_path,
@@ -554,6 +584,8 @@ def _persist_agent_artifacts(
         "task_state": task_state_path,
         "evaluation_report": evaluation_report_path,
         "guardrails_report": guardrails_report_path,
+        "memory_context": memory_context_path,
+        "memory_index": memory_index_path,
     }
     if request_path is not None:
         artifact_paths["request"] = request_path
@@ -588,6 +620,7 @@ def _persist_agent_artifacts(
         evaluation_report_path=evaluation_report_path,
         guardrails_report_path=guardrails_report_path,
         experiment_trace_path=experiment_trace_path,
+        memory_context_path=memory_context_path,
     )
 
     out = {
@@ -600,6 +633,8 @@ def _persist_agent_artifacts(
         "task_state_path": str(task_state_path),
         "evaluation_report_path": str(evaluation_report_path),
         "guardrails_report_path": str(guardrails_report_path),
+        "memory_context_path": str(memory_context_path),
+        "memory_index_path": str(memory_index_path),
         "experiment_trace_path": str(experiment_trace_path),
         **mirror,
     }

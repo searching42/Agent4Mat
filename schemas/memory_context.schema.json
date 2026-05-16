@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/oled-agent/schemas/memory_context.schema.json",
+  "title": "Agent4Mat Memory Context",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "task_id",
+    "run_label",
+    "execution_mode",
+    "execution_status",
+    "request_snapshot",
+    "evidence_snapshot",
+    "runtime_snapshot",
+    "key_facts",
+    "carry_over"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "task_id": { "type": "string" },
+    "run_label": { "type": "string" },
+    "execution_mode": { "type": "string" },
+    "execution_status": { "type": "string", "enum": ["success", "failed"] },
+    "request_snapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "request_text",
+        "project_memory_note",
+        "mode",
+        "targets",
+        "constraints",
+        "model_choice",
+        "candidate_data",
+        "train_data"
+      ],
+      "properties": {
+        "request_text": { "type": "string" },
+        "project_memory_note": { "type": "string" },
+        "mode": { "type": "string" },
+        "targets": { "type": "array", "items": { "type": "object" } },
+        "constraints": { "type": "object" },
+        "model_choice": { "type": "object" },
+        "candidate_data": { "type": "string" },
+        "train_data": { "type": "string" }
+      }
+    },
+    "evidence_snapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "web_evidence_present",
+        "web_result_count",
+        "web_host_counts",
+        "time_range",
+        "query_effective"
+      ],
+      "properties": {
+        "web_evidence_present": { "type": "boolean" },
+        "web_result_count": { "type": "integer", "minimum": 0 },
+        "web_host_counts": { "type": "object" },
+        "time_range": { "type": "string" },
+        "query_effective": { "type": "string" }
+      }
+    },
+    "runtime_snapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "record_count",
+        "tool_sequence",
+        "failed_tools",
+        "adapters",
+        "selected_datasets",
+        "artifacts"
+      ],
+      "properties": {
+        "record_count": { "type": "integer", "minimum": 0 },
+        "tool_sequence": { "type": "array", "items": { "type": "string" } },
+        "failed_tools": { "type": "array", "items": { "type": "string" } },
+        "adapters": { "type": "array", "items": { "type": "string" } },
+        "selected_datasets": { "type": "array", "items": { "type": "string" } },
+        "artifacts": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["candidate_csv", "scored_csv", "final_output"],
+          "properties": {
+            "candidate_csv": { "type": "string" },
+            "scored_csv": { "type": "string" },
+            "final_output": { "type": "string" }
+          }
+        }
+      }
+    },
+    "key_facts": { "type": "array", "items": { "type": "string" } },
+    "carry_over": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["exists", "generated_at", "execution_status", "key_facts_head"],
+      "properties": {
+        "exists": { "type": "boolean" },
+        "generated_at": { "type": "string" },
+        "execution_status": { "type": "string" },
+        "key_facts_head": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

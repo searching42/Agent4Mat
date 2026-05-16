@@ -28,6 +28,7 @@ def _paths_from_result_json(result_json_path: Path, cwd: Path) -> Dict[str, Path
         "filtering_report": "logging_filtering_report_path",
         "evaluation_report": "logging_evaluation_report_path",
         "guardrails_report": "logging_guardrails_report_path",
+        "memory_context": "logging_memory_context_path",
     }
     out: Dict[str, Path] = {}
     for logical, key in required.items():
@@ -49,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--filtering-report", default="", help="Path to filtering_report.json")
     p.add_argument("--evaluation-report", default="", help="Path to evaluation_report.json")
     p.add_argument("--guardrails-report", default="", help="Path to guardrails_report.json")
+    p.add_argument("--memory-context", default="", help="Path to memory_context.json")
     return p.parse_args()
 
 
@@ -68,6 +70,7 @@ def main() -> int:
         validate_evaluation_report_payload,
         validate_filtering_report_payload,
         validate_guardrails_report_payload,
+        validate_memory_context_payload,
         validate_model_report_payload,
         validate_task_state_payload,
     )
@@ -88,6 +91,7 @@ def main() -> int:
                 "filtering_report": str(args.filtering_report).strip(),
                 "evaluation_report": str(args.evaluation_report).strip(),
                 "guardrails_report": str(args.guardrails_report).strip(),
+                "memory_context": str(args.memory_context).strip(),
             }
             missing = [k for k, v in raw_paths.items() if not v]
             if missing:
@@ -110,6 +114,7 @@ def main() -> int:
         filtering_report_payload = _load_json(paths["filtering_report"])
         evaluation_report_payload = _load_json(paths["evaluation_report"])
         guardrails_report_payload = _load_json(paths["guardrails_report"])
+        memory_context_payload = _load_json(paths["memory_context"])
 
         validate_decision_summary_payload(payload=decision_payload, workspace_root=workspace_root)
         print(f"[PASS] decision summary schema valid: {paths['decision_summary']}")
@@ -125,6 +130,8 @@ def main() -> int:
         print(f"[PASS] evaluation report schema valid: {paths['evaluation_report']}")
         validate_guardrails_report_payload(payload=guardrails_report_payload, workspace_root=workspace_root)
         print(f"[PASS] guardrails report schema valid: {paths['guardrails_report']}")
+        validate_memory_context_payload(payload=memory_context_payload, workspace_root=workspace_root)
+        print(f"[PASS] memory context schema valid: {paths['memory_context']}")
         return 0
     except RequestValidationError as exc:
         print(f"[FAIL] artifact schema invalid: {exc}")

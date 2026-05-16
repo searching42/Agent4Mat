@@ -116,6 +116,16 @@ print(obj["logging_guardrails_report_path"])
 PY
 )"
 
+MEMORY_CONTEXT_PATH="$(python3 - "${RESULT_JSON}" <<'PY'
+import json
+import pathlib
+import sys
+
+obj = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(obj["logging_memory_context_path"])
+PY
+)"
+
 echo "[3/8] validate structured artifacts schema"
 python3 scripts/validate_run_artifacts.py \
   --workspace-root . \
@@ -125,7 +135,8 @@ python3 scripts/validate_run_artifacts.py \
   --model-report "${MODEL_REPORT_PATH}" \
   --filtering-report "${FILTERING_REPORT_PATH}" \
   --evaluation-report "${EVALUATION_REPORT_PATH}" \
-  --guardrails-report "${GUARDRAILS_REPORT_PATH}"
+  --guardrails-report "${GUARDRAILS_REPORT_PATH}" \
+  --memory-context "${MEMORY_CONTEXT_PATH}"
 
 echo "[4/8] summarize adapters"
 python3 - "${RESULT_JSON}" <<'PY'

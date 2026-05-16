@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from oled_agent.agent.evaluator import build_evaluation_report
 from oled_agent.agent.experiment_trace import build_experiment_trace
 from oled_agent.agent.guardrails import build_guardrails_report
+from oled_agent.agent.memory_context import build_memory_context, update_memory_index
 from oled_agent.agent.request_contract import validate_step_request_payload, validate_task_v2_payload
 from oled_agent.agent.task_v2 import task_v2_to_request_payload
 from oled_agent.agent.tools import ToolContext, execute_tool
@@ -46,6 +47,16 @@ def _build_run_label(task_id: str) -> str:
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _load_json_if_exists(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _op_to_tool_name(operation: str) -> str:
@@ -143,6 +154,7 @@ def _write_logging_and_result(
     evaluation_report_path: Optional[Path],
     guardrails_report_path: Optional[Path],
     experiment_trace_path: Optional[Path],
+    memory_context_path: Optional[Path],
 ) -> Dict[str, str]:
     logging_dir = (workspace_root / DEFAULT_LOGGING_OUT / run_label).resolve()
     result_dir = (workspace_root / DEFAULT_RESULT_OUT / run_label).resolve()
@@ -165,6 +177,8 @@ def _write_logging_and_result(
     _copy_if_exists(guardrails_report_path, logging_guardrails_report_path)
     logging_experiment_trace_path = logging_dir / "experiment_trace.json"
     _copy_if_exists(experiment_trace_path, logging_experiment_trace_path)
+    logging_memory_context_path = logging_dir / "memory_context.json"
+    _copy_if_exists(memory_context_path, logging_memory_context_path)
 
     exec_status = _ensure_status(execution.get("status"))
     data_report = {
@@ -233,6 +247,8 @@ def _write_logging_and_result(
     _copy_if_exists(guardrails_report_path, result_guardrails_report_path)
     result_experiment_trace_path = result_dir / "experiment_trace.json"
     _copy_if_exists(experiment_trace_path, result_experiment_trace_path)
+    result_memory_context_path = result_dir / "memory_context.json"
+    _copy_if_exists(memory_context_path, result_memory_context_path)
 
     metadata = {
         "schema_version": "1.0.0",
@@ -250,6 +266,7 @@ def _write_logging_and_result(
             "evaluation_report_json": str(result_evaluation_report_path) if result_evaluation_report_path.exists() else "",
             "guardrails_report_json": str(result_guardrails_report_path) if result_guardrails_report_path.exists() else "",
             "experiment_trace_json": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
+            "memory_context_json": str(result_memory_context_path) if result_memory_context_path.exists() else "",
         },
     }
     metadata_path = result_dir / "metadata.json"
@@ -266,11 +283,13 @@ def _write_logging_and_result(
         "logging_evaluation_report_path": str(logging_evaluation_report_path) if logging_evaluation_report_path.exists() else "",
         "logging_guardrails_report_path": str(logging_guardrails_report_path) if logging_guardrails_report_path.exists() else "",
         "logging_experiment_trace_path": str(logging_experiment_trace_path) if logging_experiment_trace_path.exists() else "",
+        "logging_memory_context_path": str(logging_memory_context_path) if logging_memory_context_path.exists() else "",
         "result_metadata_path": str(metadata_path),
         "result_target_structures_csv_path": str(target_structures_csv) if copied else "",
         "result_evaluation_report_path": str(result_evaluation_report_path) if result_evaluation_report_path.exists() else "",
         "result_guardrails_report_path": str(result_guardrails_report_path) if result_guardrails_report_path.exists() else "",
         "result_experiment_trace_path": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
+        "result_memory_context_path": str(result_memory_context_path) if result_memory_context_path.exists() else "",
     }
 
 
@@ -441,6 +460,26 @@ def run_step(
     )
     guardrails_report_path = artifact_dir / "guardrails_report.json"
     _write_json(guardrails_report_path, guardrails_report)
+    previous_memory_context = _load_json_if_exists(artifact_dir / "memory_context.json")
+    memory_context_payload = build_memory_context(
+        task_id=task_id,
+        execution_mode="single_step",
+        run_label=run_label,
+        workspace_root=workspace_root.resolve(),
+        execution_payload=execution,
+        tool_state=tool_state,
+        request_payload=task_v2_to_request_payload(task_payload),
+        plan_payload=None,
+        task_payload=task_payload,
+        web_evidence_path=web_evidence_path if web_evidence_path.exists() else None,
+        previous_memory_context=previous_memory_context,
+    )
+    memory_context_path = artifact_dir / "memory_context.json"
+    _write_json(memory_context_path, memory_context_payload)
+    memory_index_path = update_memory_index(
+        workspace_root=workspace_root.resolve(),
+        memory_context=memory_context_payload,
+    )
     experiment_trace_path = artifact_dir / "experiment_trace.json"
     artifact_paths: Dict[str, Path] = {
         "execution": execution_path,
@@ -450,6 +489,8 @@ def run_step(
         "task_state": task_state_path,
         "evaluation_report": evaluation_report_path,
         "guardrails_report": guardrails_report_path,
+        "memory_context": memory_context_path,
+        "memory_index": memory_index_path,
     }
     if web_evidence_path.exists():
         artifact_paths["web_evidence"] = web_evidence_path
@@ -475,6 +516,7 @@ def run_step(
         evaluation_report_path=evaluation_report_path,
         guardrails_report_path=guardrails_report_path,
         experiment_trace_path=experiment_trace_path,
+        memory_context_path=memory_context_path,
     )
 
     return {
@@ -488,6 +530,8 @@ def run_step(
         "task_state_path": str(task_state_path),
         "evaluation_report_path": str(evaluation_report_path),
         "guardrails_report_path": str(guardrails_report_path),
+        "memory_context_path": str(memory_context_path),
+        "memory_index_path": str(memory_index_path),
         "task_path": str(task_path),
         "experiment_trace_path": str(experiment_trace_path),
         "run_label": run_label,

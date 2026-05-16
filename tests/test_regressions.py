@@ -23,6 +23,7 @@ from oled_agent.agent.request_contract import (
     validate_evaluation_report_payload,
     validate_filtering_report_payload,
     validate_guardrails_report_payload,
+    validate_memory_context_payload,
     validate_model_report_payload,
     validate_plan_payload,
     validate_request_payload,
@@ -1036,11 +1037,20 @@ class RegressionTests(unittest.TestCase):
             self.assertTrue((logging_dir / "filtering_report.json").exists())
             self.assertTrue((logging_dir / "evaluation_report.json").exists())
             self.assertTrue((logging_dir / "guardrails_report.json").exists())
+            self.assertTrue((logging_dir / "memory_context.json").exists())
             self.assertTrue((result_dir / "metadata.json").exists())
             self.assertIn("evaluation_report_path", out)
             self.assertTrue(Path(out["evaluation_report_path"]).exists())
             self.assertIn("guardrails_report_path", out)
             self.assertTrue(Path(out["guardrails_report_path"]).exists())
+            self.assertIn("memory_context_path", out)
+            self.assertTrue(Path(out["memory_context_path"]).exists())
+            self.assertIn("memory_index_path", out)
+            self.assertTrue(Path(out["memory_index_path"]).exists())
+            self.assertIn("logging_memory_context_path", out)
+            self.assertTrue(Path(out["logging_memory_context_path"]).exists())
+            self.assertIn("result_memory_context_path", out)
+            self.assertTrue(Path(out["result_memory_context_path"]).exists())
             self.assertIn("experiment_trace_path", out)
             trace_path = Path(out["experiment_trace_path"])
             self.assertTrue(trace_path.exists())
@@ -1893,6 +1903,96 @@ class RegressionTests(unittest.TestCase):
             with self.assertRaises(RequestValidationError):
                 validate_guardrails_report_payload(payload, workspace_root=td_path)
 
+    def test_memory_context_schema_validates_happy_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-16T00:00:00Z",
+                "task_id": "task_mem_1",
+                "run_label": "task_mem_1-20260516-000000",
+                "execution_mode": "full_pipeline",
+                "execution_status": "success",
+                "request_snapshot": {
+                    "request_text": "设计470nm附近且高PLQY分子",
+                    "project_memory_note": "keep blue-emitter constraints",
+                    "mode": "fast_screen",
+                    "targets": [{"property": "plqy", "objective": "maximize"}],
+                    "constraints": {"mw_min": 100, "mw_max": 700},
+                    "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                    "candidate_data": "master_database",
+                    "train_data": "",
+                },
+                "evidence_snapshot": {
+                    "web_evidence_present": True,
+                    "web_result_count": 3,
+                    "web_host_counts": {"nature.com": 2},
+                    "time_range": "30d",
+                    "query_effective": "oled plqy after:2026-04-01",
+                },
+                "runtime_snapshot": {
+                    "record_count": 8,
+                    "tool_sequence": ["search_dataset", "score_candidates"],
+                    "failed_tools": [],
+                    "adapters": ["unimol_score_adapter_v1"],
+                    "selected_datasets": ["master_database"],
+                    "artifacts": {
+                        "candidate_csv": "runs/a/candidate.csv",
+                        "scored_csv": "runs/a/scored.csv",
+                        "final_output": "runs/a/report.md",
+                    },
+                },
+                "key_facts": ["target:plqy:maximize:60.000"],
+                "carry_over": {
+                    "exists": False,
+                    "generated_at": "",
+                    "execution_status": "",
+                    "key_facts_head": [],
+                },
+            }
+            self.assertEqual(validate_memory_context_payload(payload, workspace_root=td_path), payload)
+
+    def test_memory_context_schema_rejects_invalid_execution_status(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-16T00:00:00Z",
+                "task_id": "task_mem_bad",
+                "run_label": "task_mem_bad-20260516-000000",
+                "execution_mode": "single_step",
+                "execution_status": "running",
+                "request_snapshot": {
+                    "request_text": "",
+                    "project_memory_note": "",
+                    "mode": "",
+                    "targets": [],
+                    "constraints": {},
+                    "model_choice": {},
+                    "candidate_data": "",
+                    "train_data": "",
+                },
+                "evidence_snapshot": {
+                    "web_evidence_present": False,
+                    "web_result_count": 0,
+                    "web_host_counts": {},
+                    "time_range": "",
+                    "query_effective": "",
+                },
+                "runtime_snapshot": {
+                    "record_count": 0,
+                    "tool_sequence": [],
+                    "failed_tools": [],
+                    "adapters": [],
+                    "selected_datasets": [],
+                    "artifacts": {"candidate_csv": "", "scored_csv": "", "final_output": ""},
+                },
+                "key_facts": [],
+                "carry_over": {"exists": False, "generated_at": "", "execution_status": "", "key_facts_head": []},
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_memory_context_payload(payload, workspace_root=td_path)
+
     def test_agent_plan_json_happy_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -2061,11 +2161,13 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("logging_filtering_report_path", payload)
             self.assertIn("logging_evaluation_report_path", payload)
             self.assertIn("logging_guardrails_report_path", payload)
+            self.assertIn("logging_memory_context_path", payload)
             self.assertTrue(Path(payload["logging_data_report_path"]).exists())
             self.assertTrue(Path(payload["logging_model_report_path"]).exists())
             self.assertTrue(Path(payload["logging_filtering_report_path"]).exists())
             self.assertTrue(Path(payload["logging_evaluation_report_path"]).exists())
             self.assertTrue(Path(payload["logging_guardrails_report_path"]).exists())
+            self.assertTrue(Path(payload["logging_memory_context_path"]).exists())
 
     def test_agent_run_json_molscribe_smoke_uses_generation_input_source_image(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2753,16 +2855,20 @@ class RegressionTests(unittest.TestCase):
                 "task_state_path",
                 "evaluation_report_path",
                 "guardrails_report_path",
+                "memory_context_path",
+                "memory_index_path",
                 "experiment_trace_path",
                 "logging_data_report_path",
                 "logging_model_report_path",
                 "logging_filtering_report_path",
                 "logging_evaluation_report_path",
                 "logging_guardrails_report_path",
+                "logging_memory_context_path",
                 "logging_experiment_trace_path",
                 "result_metadata_path",
                 "result_evaluation_report_path",
                 "result_guardrails_report_path",
+                "result_memory_context_path",
                 "result_experiment_trace_path",
             ):
                 self.assertTrue(Path(payload[key]).exists(), msg=f"missing artifact: {key}")
@@ -5935,6 +6041,124 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(cp.returncode, 1)
             self.assertIn("[FAIL] guardrails report schema invalid", cp.stdout)
 
+    def test_validate_memory_context_script_accepts_valid_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            rep_path = td_path / "runs" / "agent" / "task_mem_script_ok" / "artifacts" / "memory_context.json"
+            rep_path.parent.mkdir(parents=True, exist_ok=True)
+            rep_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-16T00:00:00Z",
+                        "task_id": "task_mem_script_ok",
+                        "run_label": "task_mem_script_ok-20260516-000000",
+                        "execution_mode": "full_pipeline",
+                        "execution_status": "success",
+                        "request_snapshot": {
+                            "request_text": "设计470nm附近且高PLQY分子",
+                            "project_memory_note": "",
+                            "mode": "fast_screen",
+                            "targets": [{"property": "plqy", "objective": "maximize"}],
+                            "constraints": {},
+                            "model_choice": {"predictor_id": "p1", "generator_id": "g1"},
+                            "candidate_data": "master_database",
+                            "train_data": "",
+                        },
+                        "evidence_snapshot": {
+                            "web_evidence_present": False,
+                            "web_result_count": 0,
+                            "web_host_counts": {},
+                            "time_range": "",
+                            "query_effective": "",
+                        },
+                        "runtime_snapshot": {
+                            "record_count": 2,
+                            "tool_sequence": ["search_dataset", "score_candidates"],
+                            "failed_tools": [],
+                            "adapters": ["unimol_score_adapter_v1"],
+                            "selected_datasets": ["master_database"],
+                            "artifacts": {"candidate_csv": "cand.csv", "scored_csv": "scored.csv", "final_output": "report.md"},
+                        },
+                        "key_facts": ["target:plqy:maximize:60.000"],
+                        "carry_over": {"exists": False, "generated_at": "", "execution_status": "", "key_facts_head": []},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_memory_context.py", str(rep_path)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            self.assertIn("[PASS] memory context schema valid", cp.stdout)
+
+    def test_validate_memory_context_script_rejects_invalid_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            rep_path = td_path / "runs" / "agent" / "task_mem_script_bad" / "artifacts" / "memory_context.json"
+            rep_path.parent.mkdir(parents=True, exist_ok=True)
+            rep_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-16T00:00:00Z",
+                        "task_id": "task_mem_script_bad",
+                        "run_label": "task_mem_script_bad-20260516-000000",
+                        "execution_mode": "single_step",
+                        "execution_status": "running",
+                        "request_snapshot": {
+                            "request_text": "",
+                            "project_memory_note": "",
+                            "mode": "",
+                            "targets": [],
+                            "constraints": {},
+                            "model_choice": {},
+                            "candidate_data": "",
+                            "train_data": "",
+                        },
+                        "evidence_snapshot": {
+                            "web_evidence_present": False,
+                            "web_result_count": 0,
+                            "web_host_counts": {},
+                            "time_range": "",
+                            "query_effective": "",
+                        },
+                        "runtime_snapshot": {
+                            "record_count": 0,
+                            "tool_sequence": [],
+                            "failed_tools": [],
+                            "adapters": [],
+                            "selected_datasets": [],
+                            "artifacts": {"candidate_csv": "", "scored_csv": "", "final_output": ""},
+                        },
+                        "key_facts": [],
+                        "carry_over": {"exists": False, "generated_at": "", "execution_status": "", "key_facts_head": []},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_memory_context.py", str(rep_path)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 1)
+            self.assertIn("[FAIL] memory context schema invalid", cp.stdout)
+
     def test_validate_run_artifacts_script_accepts_result_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -5970,6 +6194,7 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("[PASS] filtering report schema valid", cp.stdout)
             self.assertIn("[PASS] evaluation report schema valid", cp.stdout)
             self.assertIn("[PASS] guardrails report schema valid", cp.stdout)
+            self.assertIn("[PASS] memory context schema valid", cp.stdout)
 
     def test_validate_run_artifacts_script_rejects_missing_result_keys(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -6786,6 +7011,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "validate_step_request_examples.py",
             repo_root / "scripts" / "validate_evaluation_report.py",
             repo_root / "scripts" / "validate_guardrails_report.py",
+            repo_root / "scripts" / "validate_memory_context.py",
             repo_root / "scripts" / "check_experiment_trace.py",
             repo_root / "scripts" / "check_ui_freeze_acceptance.py",
             repo_root / "scripts" / "summarize_experiments.py",

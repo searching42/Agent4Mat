@@ -25,6 +25,7 @@ class RequestContractPaths:
     filtering_report_schema: Path
     evaluation_report_schema: Path
     guardrails_report_schema: Path
+    memory_context_schema: Path
 
 
 def default_contract_paths(workspace_root: Path) -> RequestContractPaths:
@@ -44,6 +45,7 @@ def default_contract_paths(workspace_root: Path) -> RequestContractPaths:
         filtering_report_schema=base / "filtering_report.schema.json",
         evaluation_report_schema=base / "evaluation_report.schema.json",
         guardrails_report_schema=base / "guardrails_report.schema.json",
+        memory_context_schema=base / "memory_context.schema.json",
     )
 
 
@@ -87,6 +89,8 @@ def _validate_via_jsonschema(
             _validate_evaluation_report_minimal(instance, schema)
         elif contract_kind == "guardrails_report":
             _validate_guardrails_report_minimal(instance, schema)
+        elif contract_kind == "memory_context":
+            _validate_memory_context_minimal(instance, schema)
         else:
             raise RequestValidationError(f"Unsupported contract kind: {contract_kind}")
         return
@@ -552,6 +556,86 @@ def _validate_guardrails_report_minimal(instance: Dict[str, Any], schema: Dict[s
             raise RequestValidationError(f"$.checks[{idx}].message: must be non-empty string")
 
 
+def _validate_memory_context_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    _validate_required_and_additional(instance, schema, path="$")
+    for key in ("schema_version", "generated_at", "task_id", "run_label", "execution_mode", "execution_status"):
+        if not isinstance(instance.get(key), str) or not str(instance.get(key)).strip():
+            raise RequestValidationError(f"$.{key}: must be non-empty string")
+    if instance.get("execution_status") not in ("success", "failed"):
+        raise RequestValidationError("$.execution_status: must be one of: ['success', 'failed']")
+
+    request_snapshot = instance.get("request_snapshot")
+    if not isinstance(request_snapshot, dict):
+        raise RequestValidationError("$.request_snapshot: must be object")
+    if not isinstance(request_snapshot.get("request_text"), str):
+        raise RequestValidationError("$.request_snapshot.request_text: must be string")
+    if not isinstance(request_snapshot.get("project_memory_note"), str):
+        raise RequestValidationError("$.request_snapshot.project_memory_note: must be string")
+    if not isinstance(request_snapshot.get("targets"), list):
+        raise RequestValidationError("$.request_snapshot.targets: must be array")
+    if not isinstance(request_snapshot.get("constraints"), dict):
+        raise RequestValidationError("$.request_snapshot.constraints: must be object")
+    if not isinstance(request_snapshot.get("model_choice"), dict):
+        raise RequestValidationError("$.request_snapshot.model_choice: must be object")
+    for key in ("candidate_data", "train_data", "mode"):
+        if not isinstance(request_snapshot.get(key), str):
+            raise RequestValidationError(f"$.request_snapshot.{key}: must be string")
+
+    evidence = instance.get("evidence_snapshot")
+    if not isinstance(evidence, dict):
+        raise RequestValidationError("$.evidence_snapshot: must be object")
+    if not isinstance(evidence.get("web_evidence_present"), bool):
+        raise RequestValidationError("$.evidence_snapshot.web_evidence_present: must be boolean")
+    if not isinstance(evidence.get("web_result_count"), int) or int(evidence.get("web_result_count")) < 0:
+        raise RequestValidationError("$.evidence_snapshot.web_result_count: must be integer >= 0")
+    if not isinstance(evidence.get("web_host_counts"), dict):
+        raise RequestValidationError("$.evidence_snapshot.web_host_counts: must be object")
+    for key in ("time_range", "query_effective"):
+        if not isinstance(evidence.get(key), str):
+            raise RequestValidationError(f"$.evidence_snapshot.{key}: must be string")
+
+    runtime = instance.get("runtime_snapshot")
+    if not isinstance(runtime, dict):
+        raise RequestValidationError("$.runtime_snapshot: must be object")
+    if not isinstance(runtime.get("record_count"), int) or int(runtime.get("record_count")) < 0:
+        raise RequestValidationError("$.runtime_snapshot.record_count: must be integer >= 0")
+    for key in ("tool_sequence", "failed_tools", "adapters", "selected_datasets"):
+        val = runtime.get(key)
+        if not isinstance(val, list):
+            raise RequestValidationError(f"$.runtime_snapshot.{key}: must be array")
+        for idx, item in enumerate(val, start=1):
+            if not isinstance(item, str):
+                raise RequestValidationError(f"$.runtime_snapshot.{key}[{idx}]: must be string")
+    artifacts = runtime.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise RequestValidationError("$.runtime_snapshot.artifacts: must be object")
+    for key in ("candidate_csv", "scored_csv", "final_output"):
+        if not isinstance(artifacts.get(key), str):
+            raise RequestValidationError(f"$.runtime_snapshot.artifacts.{key}: must be string")
+
+    key_facts = instance.get("key_facts")
+    if not isinstance(key_facts, list):
+        raise RequestValidationError("$.key_facts: must be array")
+    for idx, item in enumerate(key_facts, start=1):
+        if not isinstance(item, str):
+            raise RequestValidationError(f"$.key_facts[{idx}]: must be string")
+
+    carry = instance.get("carry_over")
+    if not isinstance(carry, dict):
+        raise RequestValidationError("$.carry_over: must be object")
+    if not isinstance(carry.get("exists"), bool):
+        raise RequestValidationError("$.carry_over.exists: must be boolean")
+    if not isinstance(carry.get("generated_at"), str):
+        raise RequestValidationError("$.carry_over.generated_at: must be string")
+    if not isinstance(carry.get("execution_status"), str):
+        raise RequestValidationError("$.carry_over.execution_status: must be string")
+    if not isinstance(carry.get("key_facts_head"), list):
+        raise RequestValidationError("$.carry_over.key_facts_head: must be array")
+    for idx, item in enumerate(carry.get("key_facts_head"), start=1):
+        if not isinstance(item, str):
+            raise RequestValidationError(f"$.carry_over.key_facts_head[{idx}]: must be string")
+
+
 def load_and_validate_request_json(payload_path: Path, workspace_root: Path) -> Dict[str, Any]:
     payload = _load_json(payload_path)
     validate_request_payload(payload=payload, workspace_root=workspace_root)
@@ -618,6 +702,13 @@ def validate_guardrails_report_payload(payload: Dict[str, Any], workspace_root: 
     contract = default_contract_paths(workspace_root)
     schema = _load_json(contract.guardrails_report_schema)
     _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="guardrails_report")
+    return payload
+
+
+def validate_memory_context_payload(payload: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    contract = default_contract_paths(workspace_root)
+    schema = _load_json(contract.memory_context_schema)
+    _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="memory_context")
     return payload
 
 

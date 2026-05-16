@@ -21,6 +21,7 @@ from oled_agent.agent.request_contract import (
     validate_decision_summary_payload,
     validate_evaluation_report_payload,
     validate_guardrails_report_payload,
+    validate_memory_context_payload,
     validate_task_state_payload,
 )
 
@@ -53,6 +54,7 @@ ARTIFACT_NAME_TO_FILE = {
     "task_state": "task_state.json",
     "evaluation_report": "artifacts/evaluation_report.json",
     "guardrails_report": "artifacts/guardrails_report.json",
+    "memory_context": "artifacts/memory_context.json",
     "web_evidence": "artifacts/web_evidence.json",
     "experiment_trace": "artifacts/experiment_trace.json",
 }
@@ -967,6 +969,7 @@ HTML = """
               <option value=\"tool_state\">tool_state</option>
               <option value=\"evaluation_report\">evaluation_report</option>
               <option value=\"guardrails_report\">guardrails_report</option>
+              <option value=\"memory_context\">memory_context</option>
               <option value=\"web_evidence\">web_evidence</option>
               <option value=\"experiment_trace\">experiment_trace</option>
             </select>
@@ -4523,6 +4526,26 @@ def _preview_payload(payload: Any, *, artifact_name: str) -> Any:
             "strict_blocking_checks": payload.get("strict_blocking_checks", []),
             "checks_head": (payload.get("checks") or [])[:10] if isinstance(payload.get("checks"), list) else [],
         }
+    if artifact_name == "memory_context" and isinstance(payload, dict):
+        request_snapshot = payload.get("request_snapshot") if isinstance(payload.get("request_snapshot"), dict) else {}
+        runtime_snapshot = payload.get("runtime_snapshot") if isinstance(payload.get("runtime_snapshot"), dict) else {}
+        return {
+            "schema_version": payload.get("schema_version", ""),
+            "task_id": payload.get("task_id", ""),
+            "run_label": payload.get("run_label", ""),
+            "execution_mode": payload.get("execution_mode", ""),
+            "execution_status": payload.get("execution_status", ""),
+            "request_text": str(request_snapshot.get("request_text") or "")[:220],
+            "project_memory_note": str(request_snapshot.get("project_memory_note") or "")[:220],
+            "targets_count": len(request_snapshot.get("targets", [])) if isinstance(request_snapshot.get("targets"), list) else 0,
+            "record_count": int(runtime_snapshot.get("record_count") or 0),
+            "tool_sequence_head": (runtime_snapshot.get("tool_sequence") or [])[:8]
+            if isinstance(runtime_snapshot.get("tool_sequence"), list)
+            else [],
+            "failed_tools": runtime_snapshot.get("failed_tools", []) if isinstance(runtime_snapshot.get("failed_tools"), list) else [],
+            "key_facts_head": (payload.get("key_facts") or [])[:12] if isinstance(payload.get("key_facts"), list) else [],
+            "carry_over": payload.get("carry_over", {}),
+        }
     if artifact_name == "experiment_trace" and isinstance(payload, dict):
         return {
             "schema_version": payload.get("schema_version", ""),
@@ -7875,6 +7898,7 @@ def api_task_summary(task_id: str):
         "task_state_path": by_name["task_state"],
         "evaluation_report_path": by_name["evaluation_report"],
         "guardrails_report_path": by_name["guardrails_report"],
+        "memory_context_path": by_name["memory_context"],
         "web_evidence_path": by_name["web_evidence"],
         "experiment_trace_path": by_name["experiment_trace"],
     }
@@ -7884,6 +7908,7 @@ def api_task_summary(task_id: str):
     decision = _load_json_if_exists(artifacts["decision_summary_path"])
     evaluation_report = _load_json_if_exists(artifacts["evaluation_report_path"])
     guardrails_report = _load_json_if_exists(artifacts["guardrails_report_path"])
+    memory_context = _load_json_if_exists(artifacts["memory_context_path"])
     web_evidence = _load_json_if_exists(artifacts["web_evidence_path"])
     experiment_trace = _load_json_if_exists(artifacts["experiment_trace_path"])
     return jsonify(
@@ -7907,6 +7932,11 @@ def api_task_summary(task_id: str):
             "guardrails_report_preview": (
                 _preview_payload(guardrails_report, artifact_name="guardrails_report")
                 if isinstance(guardrails_report, dict)
+                else {}
+            ),
+            "memory_context_preview": (
+                _preview_payload(memory_context, artifact_name="memory_context")
+                if isinstance(memory_context, dict)
                 else {}
             ),
             "web_evidence_preview": (
@@ -8171,7 +8201,16 @@ def api_task_validate(task_id: str):
 
     checks: List[Dict[str, str]] = []
     loaded: Dict[str, Any] = {}
-    required = ["plan", "execution", "tool_state", "decision_summary", "task_state", "evaluation_report", "guardrails_report"]
+    required = [
+        "plan",
+        "execution",
+        "tool_state",
+        "decision_summary",
+        "task_state",
+        "evaluation_report",
+        "guardrails_report",
+        "memory_context",
+    ]
     by_name = _task_artifact_paths(tid)
 
     for name in required:
@@ -8222,6 +8261,14 @@ def api_task_validate(task_id: str):
             checks.append({"name": "guardrails_report_schema", "status": "pass", "message": "schema valid"})
         except Exception as exc:
             checks.append({"name": "guardrails_report_schema", "status": "fail", "message": str(exc)})
+
+    memory_context = loaded.get("memory_context")
+    if isinstance(memory_context, dict):
+        try:
+            validate_memory_context_payload(memory_context, REPO_ROOT)
+            checks.append({"name": "memory_context_schema", "status": "pass", "message": "schema valid"})
+        except Exception as exc:
+            checks.append({"name": "memory_context_schema", "status": "fail", "message": str(exc)})
 
     pass_n = sum(1 for c in checks if c.get("status") == "pass")
     fail_n = sum(1 for c in checks if c.get("status") == "fail")

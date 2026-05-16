@@ -609,6 +609,37 @@ HTML = """
       .pending-hints .hint-item-extra .hint-extra-body .extra-line:last-child {
         margin-bottom: 0;
       }
+      .pending-hints .hint-run-status {
+        margin-top: 8px;
+        border: 1px solid #d9e5f7;
+        border-radius: 8px;
+        padding: 7px 8px;
+        font-size: 0.79rem;
+        line-height: 1.35;
+      }
+      .pending-hints .hint-run-status.pass {
+        border-color: #b8e5ce;
+        background: #ecfbf3;
+        color: #12603d;
+      }
+      .pending-hints .hint-run-status.warn {
+        border-color: #f3ddb0;
+        background: #fff8e8;
+        color: #855400;
+      }
+      .pending-hints .hint-run-status.fail {
+        border-color: #f0c1c1;
+        background: #fff1f1;
+        color: #8c2525;
+      }
+      .pending-hints .hint-run-status.need {
+        border-color: #c7d8f6;
+        background: #f1f6ff;
+        color: #25487f;
+      }
+      .pending-hints .hint-next-actions {
+        margin-top: 6px;
+      }
       .prompt-history {
         margin-top: 8px;
         display: flex;
@@ -926,6 +957,8 @@ HTML = """
               <div class=\"muted\" id=\"pending_hint_run_opts\" style=\"display:none;\">
                 <label style=\"font-weight:500;\"><input id=\"pending_hint_confirm_run\" type=\"checkbox\" checked /> confirm before Use + Run</label>
               </div>
+              <div class=\"hint-run-status\" id=\"pending_hint_run_status\" style=\"display:none;\"></div>
+              <div class=\"btn-row hint-next-actions\" id=\"pending_hint_next_actions\" style=\"display:none;\"></div>
             </div>
             <div class=\"pending-fields\" id=\"pending_fields\"></div>
             <div class=\"btn-row\">
@@ -1072,6 +1105,7 @@ HTML = """
       const state = {
         project: null,
         pendingInput: null,
+        pendingHintRun: null,
         promptHistory: [],
         projects: [],
         batchHistory: [],
@@ -1342,6 +1376,7 @@ HTML = """
 
       function clearPendingInput() {
         state.pendingInput = null;
+        state.pendingHintRun = null;
         document.getElementById('pending_input_box').style.display = 'none';
         document.getElementById('pending_stage_text').textContent = 'stage: -';
         document.getElementById('pending_questions').innerHTML = '';
@@ -1352,6 +1387,11 @@ HTML = """
         document.getElementById('pending_hint_run_opts').style.display = 'none';
         const confirmRun = document.getElementById('pending_hint_confirm_run');
         if (confirmRun) confirmRun.checked = true;
+        document.getElementById('pending_hint_run_status').style.display = 'none';
+        document.getElementById('pending_hint_run_status').textContent = '';
+        document.getElementById('pending_hint_run_status').className = 'hint-run-status';
+        document.getElementById('pending_hint_next_actions').style.display = 'none';
+        document.getElementById('pending_hint_next_actions').innerHTML = '';
         document.getElementById('pending_fields').innerHTML = '';
       }
 
@@ -1378,6 +1418,120 @@ HTML = """
           if (f) out.add(f);
         }
         return out;
+      }
+
+      function pendingTaskIdGuess() {
+        const fromProject = String((state.project && state.project.current_task_id) || '').trim();
+        if (fromProject) return fromProject;
+        const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+        const draftPath = String(pending.task_draft_path || '').trim();
+        if (!draftPath) return '';
+        const parts = draftPath.replace(/\\/g, '/').split('/').filter(Boolean);
+        if (parts.length < 2) return '';
+        return String(parts[parts.length - 2] || '').trim();
+      }
+
+      function clearPendingHintRunFeedback() {
+        state.pendingHintRun = null;
+        const statusEle = document.getElementById('pending_hint_run_status');
+        const actionsEle = document.getElementById('pending_hint_next_actions');
+        statusEle.style.display = 'none';
+        statusEle.className = 'hint-run-status';
+        statusEle.textContent = '';
+        actionsEle.style.display = 'none';
+        actionsEle.innerHTML = '';
+      }
+
+      function renderPendingHintNextActions(items) {
+        const actionsEle = document.getElementById('pending_hint_next_actions');
+        actionsEle.innerHTML = '';
+        const rows = Array.isArray(items) ? items : [];
+        for (const row of rows) {
+          if (!row || typeof row !== 'object') continue;
+          const label = String(row.label || '').trim();
+          const handler = row.onClick;
+          if (!label || typeof handler !== 'function') continue;
+          const btn = document.createElement('button');
+          btn.textContent = label;
+          btn.addEventListener('click', () => { void handler(); });
+          actionsEle.appendChild(btn);
+        }
+        actionsEle.style.display = actionsEle.children.length > 0 ? 'flex' : 'none';
+      }
+
+      async function pendingHintOpenTaskSummary() {
+        const tid = pendingTaskIdGuess();
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'no task_id available for pending hint summary'});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
+        renderJsonOut(r.data);
+        renderEvents([{stage: 'hint_run_summary', status: String((r.data && r.data.status) || 'unknown'), task_id: tid}]);
+      }
+
+      async function pendingHintRefreshRuntime() {
+        await loadRunRuntime();
+        renderEvents([{stage: 'hint_run_runtime', status: 'refreshed'}]);
+      }
+
+      async function pendingHintRetryResume() {
+        const out = await sendPendingResume();
+        const st = String((out && out.status) || 'unknown');
+        renderEvents([{stage: 'hint_run_retry_resume', status: st}]);
+      }
+
+      async function pendingHintEditCandidate() {
+        const input = document.getElementById('pending_field_candidate_data');
+        if (!input) {
+          renderJsonOut({status: 'fail', error: 'pending candidate_data field not available'});
+          return;
+        }
+        input.focus();
+        input.select();
+        renderEvents([{stage: 'hint_run_edit', status: 'focused', field: 'candidate_data'}]);
+      }
+
+      function setPendingHintRunFeedback(info) {
+        const payload = info && typeof info === 'object' ? info : {};
+        state.pendingHintRun = payload;
+        const statusRaw = String(payload.status || '').toLowerCase();
+        const msgRaw = String(payload.message || '').trim();
+        const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+        const missing = pendingMissingFieldsSet(pending);
+        const statusEle = document.getElementById('pending_hint_run_status');
+        let level = 'warn';
+        let text = msgRaw || 'Use + Run finished.';
+        if (statusRaw === 'pass' || statusRaw === 'success') {
+          level = 'pass';
+          text = msgRaw || 'Use + Run completed successfully.';
+        } else if (statusRaw === 'need_user_input') {
+          level = 'need';
+          text = msgRaw || 'Use + Run completed but still needs user input.';
+        } else if (statusRaw === 'fail' || statusRaw === 'error') {
+          level = 'fail';
+          text = msgRaw || 'Use + Run failed.';
+        }
+        if (missing.has('candidate_data')) {
+          level = 'warn';
+          if (!msgRaw) {
+            text = 'Use + Run executed, but candidate_data is still missing. Please update and retry.';
+          }
+        }
+        statusEle.className = `hint-run-status ${level}`;
+        statusEle.textContent = text;
+        statusEle.style.display = 'block';
+
+        const actions = [];
+        actions.push({label: 'Open Task Summary', onClick: pendingHintOpenTaskSummary});
+        actions.push({label: 'Refresh Runtime', onClick: pendingHintRefreshRuntime});
+        if (missing.has('candidate_data')) {
+          actions.push({label: 'Edit candidate_data', onClick: pendingHintEditCandidate});
+        }
+        if (level === 'fail' || level === 'need') {
+          actions.push({label: 'Retry Resume', onClick: pendingHintRetryResume});
+        }
+        renderPendingHintNextActions(actions);
       }
 
       async function previewPendingHintTask(taskId) {
@@ -1415,6 +1569,7 @@ HTML = """
           if (needConfirm) {
             const ok = window.confirm(`Use candidate_data and continue now?\n${candidate}`);
             if (!ok) {
+              clearPendingHintRunFeedback();
               renderEvents([{stage: 'hint_apply', status: 'cancelled', reason: 'confirm_rejected'}]);
               return;
             }
@@ -1425,18 +1580,23 @@ HTML = """
           input.value = candidate;
           renderJsonOut({status: 'pass', message: 'candidate_data filled from memory hint', candidate_data: candidate});
           if (doRun) {
+            clearPendingHintRunFeedback();
             const runOut = await sendPendingForm(true);
-            const status = String((runOut && runOut.status) || '');
+            const status = String((runOut && runOut.status) || '').toLowerCase();
+            const errText = String((runOut && runOut.error) || '').trim();
+            let note = '';
+            if (status === 'pass' || status === 'success') {
+              note = 'Use + Run completed successfully.';
+            } else if (status === 'need_user_input') {
+              note = 'Use + Run finished; more fields are still required.';
+            } else if (status === 'fail') {
+              note = errText ? `Use + Run failed: ${errText}` : 'Use + Run failed.';
+            }
+            setPendingHintRunFeedback({status: status || 'unknown', message: note, candidate_data: candidate});
             const pendingAfter = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
             const missingAfter = pendingMissingFieldsSet(pendingAfter);
-            if ((status === 'fail' || status === 'need_user_input') && missingAfter.has('candidate_data')) {
+            if (missingAfter.has('candidate_data')) {
               setMessageInput(JSON.stringify({candidate_data: candidate}, null, 2));
-              renderEvents([{stage: 'hint_apply', status: 'needs_manual_followup', reason: 'candidate_data_still_missing'}]);
-              renderJsonOut({
-                status: 'warn',
-                message: 'Use + Run executed but candidate_data is still missing. Prepared patch in chat input.',
-                candidate_data: candidate,
-              });
             }
           }
           return;
@@ -1444,6 +1604,11 @@ HTML = """
         setMessageInput(JSON.stringify({candidate_data: candidate}, null, 2));
         renderJsonOut({status: 'pass', message: 'candidate_data patch prepared in chat input', candidate_data: candidate});
         if (doRun) {
+          setPendingHintRunFeedback({
+            status: 'warn',
+            message: 'Use + Run cannot execute from hint action because pending candidate_data field is not currently available. Patch prepared in chat input.',
+            candidate_data: candidate,
+          });
           renderEvents([{stage: 'hint_apply', status: 'ready', reason: 'pending_candidate_field_missing'}]);
         }
       }
@@ -1454,11 +1619,13 @@ HTML = """
         const hintMatches = document.getElementById('pending_hint_matches');
         const hintActions = document.getElementById('pending_hint_actions');
         const hintRunOpts = document.getElementById('pending_hint_run_opts');
+        const feedbackSnapshot = state.pendingHintRun && typeof state.pendingHintRun === 'object' ? {...state.pendingHintRun} : null;
         hintBox.style.display = 'none';
         hintTitle.textContent = '';
         hintMatches.innerHTML = '';
         hintActions.style.display = 'none';
         hintRunOpts.style.display = 'none';
+        clearPendingHintRunFeedback();
 
         const suggested = String(pending.suggested_candidate_data || '').trim();
         const matches = Array.isArray(pending.memory_hints) ? pending.memory_hints : [];
@@ -1548,6 +1715,9 @@ HTML = """
         if (suggested && canPatchCandidate) {
           hintActions.style.display = 'flex';
           hintRunOpts.style.display = 'block';
+        }
+        if (feedbackSnapshot) {
+          setPendingHintRunFeedback(feedbackSnapshot);
         }
       }
 

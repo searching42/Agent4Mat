@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from oled_agent.agent.memory_context import retrieve_memory_hints
 from oled_agent.agent.request_contract import validate_task_v2_payload
 from oled_agent.agent.task_v2 import (
     build_web_query,
@@ -26,6 +28,24 @@ def _now_iso() -> str:
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _is_true_env(name: str, default: str = "0") -> bool:
+    text = str(os.environ.get(name, default) or "").strip().lower()
+    return text in ("1", "true", "yes", "on")
+
+
+def _inject_memory_prompt_context(*, request_text: str, memory_prompt_context: str) -> str:
+    base = str(request_text or "").strip()
+    memory_text = str(memory_prompt_context or "").strip()
+    if not memory_text:
+        return base
+    marker = "Historical run memory:"
+    if marker in base:
+        return base
+    if not base:
+        return f"{marker}\n{memory_text}"
+    return f"{base}\n\n{marker}\n{memory_text}"
 
 
 def _write_pause_task_state(
@@ -78,9 +98,40 @@ def run_intake(
     draft_prov = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
     draft_prov["web_evidence"] = evidence
     draft_prov["web_evidence_json"] = str(out_dir / "web_evidence.json")
+    if _is_true_env("OLED_AGENT_ENABLE_BACKEND_MEMORY", "1"):
+        memory_hints = retrieve_memory_hints(
+            workspace_root=workspace_root,
+            request_text=request_text,
+            current_task_id=task_id,
+            topk=5,
+        )
+    else:
+        memory_hints = {
+            "status": "disabled",
+            "index_path": str((workspace_root / "runs" / "agent" / "_memory" / "memory_index.json").resolve()),
+            "query": str(request_text or ""),
+            "matches": [],
+            "suggested_candidate_data": "",
+            "prompt_context": "",
+        }
+    memory_hints_path = out_dir / "memory_hints.json"
+    dump_json(memory_hints_path, memory_hints if isinstance(memory_hints, dict) else {})
+    draft_prov["memory_hints"] = (
+        memory_hints.get("matches", []) if isinstance(memory_hints, dict) and isinstance(memory_hints.get("matches"), list) else []
+    )
+    draft_prov["memory_hints_json"] = str(memory_hints_path)
+    draft_prov["memory_prompt_context"] = str(memory_hints.get("prompt_context") or "") if isinstance(memory_hints, dict) else ""
+    suggested_candidate_data = str(memory_hints.get("suggested_candidate_data") or "").strip() if isinstance(memory_hints, dict) else ""
+    if suggested_candidate_data:
+        draft_prov["suggested_candidate_data"] = suggested_candidate_data
+        if not str(draft.get("candidate_data") or "").strip() and _is_true_env("OLED_AGENT_INTAKE_AUTOFILL_CANDIDATE_DATA_FROM_MEMORY", "0"):
+            draft["candidate_data"] = suggested_candidate_data
+            draft_prov["candidate_data_autofill"] = True
     draft["provenance"] = draft_prov
 
     missing, questions = compute_missing_questions(draft)
+    if "candidate_data" in missing and suggested_candidate_data:
+        questions = list(questions) + [f"历史任务常用候选数据: {suggested_candidate_data}。如可复用请直接确认。"]
     draft["missing_fields"] = missing
     draft["questions"] = questions
     draft["status"] = "need_user_input" if missing else "draft"
@@ -109,6 +160,7 @@ def run_intake(
         "status": draft.get("status"),
         "task_draft_path": str(out_dir / "task.draft.json"),
         "web_evidence_path": str(out_dir / "web_evidence.json"),
+        "memory_hints_path": str(memory_hints_path),
         "task_state_path": str(task_state_path),
         "current_state": current_state,
         "missing_fields": missing,
@@ -157,6 +209,14 @@ def approve_task(
     from oled_agent.agent.task_v2 import task_v2_to_request_payload
 
     request_payload = task_v2_to_request_payload(task_payload)
+    if _is_true_env("OLED_AGENT_APPROVE_INJECT_MEMORY_PROMPT", "1"):
+        provenance = task_payload.get("provenance") if isinstance(task_payload.get("provenance"), dict) else {}
+        memory_prompt_context = str(provenance.get("memory_prompt_context") or "").strip()
+        if memory_prompt_context:
+            request_payload["request_text"] = _inject_memory_prompt_context(
+                request_text=str(request_payload.get("request_text") or ""),
+                memory_prompt_context=memory_prompt_context,
+            )
     plan = plan_fn(
         workspace_root=workspace_root,
         request_payload=request_payload,

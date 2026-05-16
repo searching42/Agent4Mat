@@ -175,6 +175,55 @@ def _derive_key_facts(
     return facts
 
 
+def _tokenize(text: str) -> List[str]:
+    raw = str(text or "").lower()
+    out: List[str] = []
+    current = []
+    for ch in raw:
+        if ch.isalnum():
+            current.append(ch)
+            continue
+        if current:
+            token = "".join(current).strip()
+            if len(token) >= 2:
+                out.append(token)
+            current = []
+    if current:
+        token = "".join(current).strip()
+        if len(token) >= 2:
+            out.append(token)
+    # Keep order but drop duplicates.
+    seen = set()
+    uniq: List[str] = []
+    for token in out:
+        if token in seen:
+            continue
+        seen.add(token)
+        uniq.append(token)
+    return uniq
+
+
+def _memory_entry_score(*, request_tokens: List[str], entry: Dict[str, Any]) -> int:
+    if not request_tokens:
+        return 0
+    hay = " ".join(
+        [
+            str(entry.get("request_text_head") or ""),
+            " ".join(str(x or "") for x in (entry.get("key_facts") or [])),
+            str(entry.get("property") or ""),
+        ]
+    ).lower()
+    if not hay:
+        return 0
+    score = 0
+    for token in request_tokens:
+        if token and token in hay:
+            score += 2
+    if str(entry.get("execution_status") or "") == "success":
+        score += 1
+    return score
+
+
 def build_memory_context(
     *,
     task_id: str,
@@ -285,7 +334,106 @@ def build_memory_context(
     }
 
 
-def update_memory_index(*, workspace_root: Path, memory_context: Dict[str, Any]) -> Path:
+def retrieve_memory_hints(
+    *,
+    workspace_root: Path,
+    request_text: str,
+    current_task_id: str = "",
+    topk: int = 5,
+) -> Dict[str, Any]:
+    index_path = (workspace_root / "runs" / "agent" / "_memory" / "memory_index.json").resolve()
+    topk = max(1, int(topk))
+    if not index_path.exists():
+        return {
+            "status": "missing",
+            "index_path": str(index_path),
+            "query": str(request_text or ""),
+            "matches": [],
+            "suggested_candidate_data": "",
+            "prompt_context": "",
+        }
+
+    payload = _safe_load_json(index_path)
+    rows = payload.get("entries") if isinstance(payload, dict) and isinstance(payload.get("entries"), list) else []
+    request_tokens = _tokenize(str(request_text or ""))
+    ranked: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("task_id") or "") == str(current_task_id or ""):
+            continue
+        score = _memory_entry_score(request_tokens=request_tokens, entry=row)
+        if score <= 0:
+            continue
+        item = dict(row)
+        item["_score"] = score
+        ranked.append(item)
+
+    ranked.sort(
+        key=lambda r: (
+            int(r.get("_score") or 0),
+            str(r.get("generated_at") or ""),
+        ),
+        reverse=True,
+    )
+    selected = ranked[:topk]
+
+    candidate_counts: Counter[str] = Counter()
+    for row in selected:
+        cand = str(row.get("candidate_data") or "").strip()
+        if not cand:
+            continue
+        if str(row.get("execution_status") or "") != "success":
+            continue
+        candidate_counts[cand] += 1
+    suggested_candidate_data = candidate_counts.most_common(1)[0][0] if candidate_counts else ""
+
+    lines: List[str] = []
+    for row in selected:
+        task_id = str(row.get("task_id") or "")
+        run_label = str(row.get("run_label") or "")
+        key_facts = row.get("key_facts") if isinstance(row.get("key_facts"), list) else []
+        key_text = "; ".join(str(x) for x in key_facts[:3] if str(x).strip())
+        candidate_data = str(row.get("candidate_data") or "").strip()
+        line = f"- task={task_id} run={run_label}"
+        if key_text:
+            line += f" facts={key_text}"
+        if candidate_data:
+            line += f" candidate_data={candidate_data}"
+        lines.append(line)
+
+    return {
+        "status": "pass",
+        "index_path": str(index_path),
+        "query": str(request_text or ""),
+        "matches": [
+            {
+                "task_id": str(row.get("task_id") or ""),
+                "run_label": str(row.get("run_label") or ""),
+                "generated_at": str(row.get("generated_at") or ""),
+                "execution_mode": str(row.get("execution_mode") or ""),
+                "execution_status": str(row.get("execution_status") or ""),
+                "request_text_head": str(row.get("request_text_head") or ""),
+                "property": str(row.get("property") or ""),
+                "candidate_data": str(row.get("candidate_data") or ""),
+                "train_data": str(row.get("train_data") or ""),
+                "key_facts": row.get("key_facts") if isinstance(row.get("key_facts"), list) else [],
+                "score": int(row.get("_score") or 0),
+                "memory_context_path": str(row.get("memory_context_path") or ""),
+            }
+            for row in selected
+        ],
+        "suggested_candidate_data": suggested_candidate_data,
+        "prompt_context": "\n".join(lines),
+    }
+
+
+def update_memory_index(
+    *,
+    workspace_root: Path,
+    memory_context: Dict[str, Any],
+    memory_context_path: Optional[Path] = None,
+) -> Path:
     root = (workspace_root / "runs" / "agent" / "_memory").resolve()
     root.mkdir(parents=True, exist_ok=True)
     index_path = root / "memory_index.json"
@@ -301,14 +449,22 @@ def update_memory_index(*, workspace_root: Path, memory_context: Dict[str, Any])
     task_id = str(memory_context.get("task_id") or "")
     run_label = str(memory_context.get("run_label") or "")
     entries = [x for x in payload["entries"] if not (str(x.get("task_id") or "") == task_id and str(x.get("run_label") or "") == run_label)]
+    request_snapshot = memory_context.get("request_snapshot") if isinstance(memory_context.get("request_snapshot"), dict) else {}
+    targets = request_snapshot.get("targets") if isinstance(request_snapshot.get("targets"), list) else []
+    first_target = targets[0] if targets and isinstance(targets[0], dict) else {}
+    property_name = str(first_target.get("property") or "")
     row = {
         "task_id": task_id,
         "run_label": run_label,
         "generated_at": str(memory_context.get("generated_at") or ""),
         "execution_mode": str(memory_context.get("execution_mode") or ""),
         "execution_status": str(memory_context.get("execution_status") or ""),
-        "request_text_head": str((memory_context.get("request_snapshot") or {}).get("request_text") or "")[:180],
+        "request_text_head": str(request_snapshot.get("request_text") or "")[:180],
+        "property": property_name,
+        "candidate_data": str(request_snapshot.get("candidate_data") or ""),
+        "train_data": str(request_snapshot.get("train_data") or ""),
         "key_facts": (memory_context.get("key_facts") or [])[:8] if isinstance(memory_context.get("key_facts"), list) else [],
+        "memory_context_path": str(memory_context_path.resolve()) if isinstance(memory_context_path, Path) else "",
     }
     entries.insert(0, row)
     payload["entries"] = entries[:500]

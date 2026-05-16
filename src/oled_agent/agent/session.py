@@ -573,6 +573,7 @@ def _persist_agent_artifacts(
     memory_index_path = update_memory_index(
         workspace_root=workspace_root.resolve(),
         memory_context=memory_context_payload,
+        memory_context_path=memory_context_path,
     )
 
     experiment_trace_path = artifact_dir / "experiment_trace.json"

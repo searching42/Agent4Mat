@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from oled_agent.agent.intake import approve_task, run_intake
 from oled_agent.agent.session import execute_request
 from oled_agent.agent.request_contract import (
     RequestValidationError,
@@ -2442,6 +2443,112 @@ class RegressionTests(unittest.TestCase):
             task_state = json.loads(Path(payload["task_state_path"]).read_text(encoding="utf-8"))
             self.assertEqual(task_state.get("current_state"), "NEED_INFO")
             self.assertEqual(task_state.get("status"), "failed")
+
+    def test_agent_intake_reads_memory_hints_and_emits_suggestion(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            index_path = td_path / "runs" / "agent" / "_memory" / "memory_index.json"
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "updated_at": "2026-05-16T00:00:00Z",
+                        "entries": [
+                            {
+                                "task_id": "prev_task_1",
+                                "run_label": "prev_task_1-20260515-010101",
+                                "generated_at": "2026-05-15T01:01:01Z",
+                                "execution_mode": "full_pipeline",
+                                "execution_status": "success",
+                                "request_text_head": "设计470nm附近且高PLQY分子",
+                                "property": "plqy",
+                                "candidate_data": "master_database",
+                                "train_data": "",
+                                "key_facts": ["target:plqy:maximize:60.000", "model:predictor:unimol_lambda_plqy_v1"],
+                                "memory_context_path": str(td_path / "runs" / "agent" / "prev_task_1" / "artifacts" / "memory_context.json"),
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = run_intake(
+                workspace_root=td_path,
+                task_id="task_intake_memory_hints",
+                request_text="设计470nm附近且高PLQY分子",
+                enable_web_search=False,
+                web_topk=3,
+            )
+            self.assertEqual(str(out.get("status") or ""), "need_user_input")
+            self.assertTrue(Path(str(out.get("memory_hints_path") or "")).exists())
+            draft_path = Path(str(out.get("task_draft_path") or ""))
+            self.assertTrue(draft_path.exists())
+            draft = json.loads(draft_path.read_text(encoding="utf-8"))
+            prov = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
+            self.assertEqual(str(prov.get("suggested_candidate_data") or ""), "master_database")
+            hints = prov.get("memory_hints") if isinstance(prov.get("memory_hints"), list) else []
+            self.assertGreater(len(hints), 0)
+            questions = draft.get("questions") if isinstance(draft.get("questions"), list) else []
+            self.assertTrue(any("历史任务常用候选数据" in str(q) for q in questions))
+
+    def test_agent_approve_injects_memory_prompt_context_into_request(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            task_payload = {
+                "version": "2.0",
+                "task_id": "task_approve_memory_prompt",
+                "request_text": "设计470nm附近且高PLQY分子",
+                "execution_mode": "full_pipeline",
+                "operation": "full_pipeline",
+                "property": "plqy",
+                "range": "458.0-482.0nm",
+                "n_structures": 20,
+                "constraints": {"mw_min": 150.0, "mw_max": 700.0},
+                "train_data": None,
+                "candidate_data": "master_database",
+                "prediction_model": "unimol_lambda_plqy_v1",
+                "model_preferences": {
+                    "predictor_id": "unimol_lambda_plqy_v1",
+                    "generator_id": "reinvent4_lambda_em_v2",
+                },
+                "generation_input": {},
+                "provenance": {
+                    "memory_prompt_context": "- task=prev_task_1 run=prev_task facts=target:plqy:maximize:60.000 candidate_data=master_database",
+                },
+                "status": "draft",
+                "missing_fields": [],
+                "questions": [],
+                "compatibility_warnings": [],
+            }
+            captured: Dict[str, Any] = {}
+
+            def _fake_plan_fn(
+                *,
+                workspace_root: Path,
+                request_payload: Dict[str, Any],
+                planner_provider: str,
+                catalog_path: Optional[Path],
+            ) -> Dict[str, Any]:
+                captured["request_payload"] = dict(request_payload)
+                return {"summary": "ok", "tool_calls": []}
+
+            out = approve_task(
+                workspace_root=td_path,
+                task_payload=task_payload,
+                planner_provider="rule_based_v1",
+                catalog_path=None,
+                plan_fn=_fake_plan_fn,
+            )
+            self.assertEqual(str(out.get("status") or ""), "approved")
+            req = captured.get("request_payload") if isinstance(captured.get("request_payload"), dict) else {}
+            req_text = str(req.get("request_text") or "")
+            self.assertIn("Historical run memory:", req_text)
+            self.assertIn("candidate_data=master_database", req_text)
 
     def test_agent_resume_from_draft_without_overrides_returns_need_user_input(self) -> None:
         with tempfile.TemporaryDirectory() as td:

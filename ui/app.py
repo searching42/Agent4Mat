@@ -585,6 +585,30 @@ HTML = """
         font-size: 0.75rem;
         padding: 4px 7px;
       }
+      .pending-hints .hint-item-extra {
+        margin-top: 4px;
+      }
+      .pending-hints .hint-item-extra summary {
+        cursor: pointer;
+        color: #355a96;
+        font-size: 0.78rem;
+      }
+      .pending-hints .hint-item-extra .hint-extra-body {
+        margin-top: 4px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid #d9e5f7;
+        background: #fbfdff;
+      }
+      .pending-hints .hint-item-extra .hint-extra-body .extra-line {
+        margin-bottom: 4px;
+        color: #334155;
+        font-size: 0.78rem;
+        line-height: 1.35;
+      }
+      .pending-hints .hint-item-extra .hint-extra-body .extra-line:last-child {
+        margin-bottom: 0;
+      }
       .prompt-history {
         margin-top: 8px;
         display: flex;
@@ -898,6 +922,9 @@ HTML = """
               <div class=\"btn-row\" id=\"pending_hint_actions\" style=\"display:none;\">
                 <button onclick=\"applyPendingSuggestedCandidateData()\">Use Suggested candidate_data</button>
                 <button onclick=\"applyPendingSuggestedCandidateData(true)\">Use Suggested + Run</button>
+              </div>
+              <div class=\"muted\" id=\"pending_hint_run_opts\" style=\"display:none;\">
+                <label style=\"font-weight:500;\"><input id=\"pending_hint_confirm_run\" type=\"checkbox\" checked /> confirm before Use + Run</label>
               </div>
             </div>
             <div class=\"pending-fields\" id=\"pending_fields\"></div>
@@ -1322,6 +1349,9 @@ HTML = """
         document.getElementById('pending_hint_title').textContent = '';
         document.getElementById('pending_hint_matches').innerHTML = '';
         document.getElementById('pending_hint_actions').style.display = 'none';
+        document.getElementById('pending_hint_run_opts').style.display = 'none';
+        const confirmRun = document.getElementById('pending_hint_confirm_run');
+        if (confirmRun) confirmRun.checked = true;
         document.getElementById('pending_fields').innerHTML = '';
       }
 
@@ -1379,12 +1409,35 @@ HTML = """
           renderJsonOut({status: 'fail', error: 'hint candidate_data is empty'});
           return;
         }
+        if (doRun) {
+          const confirmEle = document.getElementById('pending_hint_confirm_run');
+          const needConfirm = !confirmEle || Boolean(confirmEle.checked);
+          if (needConfirm) {
+            const ok = window.confirm(`Use candidate_data and continue now?\n${candidate}`);
+            if (!ok) {
+              renderEvents([{stage: 'hint_apply', status: 'cancelled', reason: 'confirm_rejected'}]);
+              return;
+            }
+          }
+        }
         const input = document.getElementById('pending_field_candidate_data');
         if (input) {
           input.value = candidate;
           renderJsonOut({status: 'pass', message: 'candidate_data filled from memory hint', candidate_data: candidate});
           if (doRun) {
-            await sendPendingForm(true);
+            const runOut = await sendPendingForm(true);
+            const status = String((runOut && runOut.status) || '');
+            const pendingAfter = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+            const missingAfter = pendingMissingFieldsSet(pendingAfter);
+            if ((status === 'fail' || status === 'need_user_input') && missingAfter.has('candidate_data')) {
+              setMessageInput(JSON.stringify({candidate_data: candidate}, null, 2));
+              renderEvents([{stage: 'hint_apply', status: 'needs_manual_followup', reason: 'candidate_data_still_missing'}]);
+              renderJsonOut({
+                status: 'warn',
+                message: 'Use + Run executed but candidate_data is still missing. Prepared patch in chat input.',
+                candidate_data: candidate,
+              });
+            }
           }
           return;
         }
@@ -1400,10 +1453,12 @@ HTML = """
         const hintTitle = document.getElementById('pending_hint_title');
         const hintMatches = document.getElementById('pending_hint_matches');
         const hintActions = document.getElementById('pending_hint_actions');
+        const hintRunOpts = document.getElementById('pending_hint_run_opts');
         hintBox.style.display = 'none';
         hintTitle.textContent = '';
         hintMatches.innerHTML = '';
         hintActions.style.display = 'none';
+        hintRunOpts.style.display = 'none';
 
         const suggested = String(pending.suggested_candidate_data || '').trim();
         const matches = Array.isArray(pending.memory_hints) ? pending.memory_hints : [];
@@ -1463,10 +1518,36 @@ HTML = """
           if (actions.children.length > 0) {
             li.appendChild(actions);
           }
+          const requestHead = String(row.request_text_head || '').trim();
+          const keyFacts = Array.isArray(row.key_facts) ? row.key_facts.filter((x) => String(x || '').trim()).slice(0, 6) : [];
+          if (requestHead || keyFacts.length > 0) {
+            const details = document.createElement('details');
+            details.className = 'hint-item-extra';
+            const summary = document.createElement('summary');
+            summary.textContent = 'Context';
+            details.appendChild(summary);
+            const body = document.createElement('div');
+            body.className = 'hint-extra-body';
+            if (requestHead) {
+              const req = document.createElement('div');
+              req.className = 'extra-line';
+              req.textContent = `request: ${requestHead}`;
+              body.appendChild(req);
+            }
+            if (keyFacts.length > 0) {
+              const facts = document.createElement('div');
+              facts.className = 'extra-line';
+              facts.textContent = `key_facts: ${keyFacts.join(' | ')}`;
+              body.appendChild(facts);
+            }
+            details.appendChild(body);
+            li.appendChild(details);
+          }
           hintMatches.appendChild(li);
         }
         if (suggested && canPatchCandidate) {
           hintActions.style.display = 'flex';
+          hintRunOpts.style.display = 'block';
         }
       }
 
@@ -3625,7 +3706,7 @@ HTML = """
         const message = (document.getElementById('message_input').value || '').trim();
         if (!message && !newTask) {
           renderJsonOut({status: 'fail', error: 'empty message'});
-          return;
+          return {status: 'fail', error: 'empty message'};
         }
         const r = await apiPost('/api/chat/send', {
           project_id: pid,
@@ -3655,31 +3736,32 @@ HTML = """
         }
         setMessageInput('', {persist: false});
         await loadRunRuntime();
+        return r.data;
       }
 
       async function sendPendingForm(sendNow) {
         const patch = collectPendingPatch();
         if (!patch || Object.keys(patch).length < 1) {
           renderJsonOut({status: 'fail', error: 'pending form has no values'});
-          return;
+          return {status: 'fail', error: 'pending form has no values'};
         }
         const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
         const stage = String(pending.stage || '');
         if (sendNow && (stage === 'intake' || stage === 'approve' || stage === 'resume')) {
-          await sendPendingResume();
-          return;
+          return await sendPendingResume();
         }
         setMessageInput(JSON.stringify(patch, null, 2));
         if (sendNow) {
-          await sendChat(false);
+          return await sendChat(false);
         }
+        return {status: 'pass', mode: 'prepared_patch_only'};
       }
 
       async function sendPendingResume() {
         const patch = collectPendingPatch();
         if (!patch || Object.keys(patch).length < 1) {
           renderJsonOut({status: 'fail', error: 'pending form has no values'});
-          return;
+          return {status: 'fail', error: 'pending form has no values'};
         }
         const pid = selectedProjectId();
         const r = await apiPost('/api/chat/pending-submit', {
@@ -3706,6 +3788,7 @@ HTML = """
         }
         setMessageInput('', {persist: false});
         await loadRunRuntime();
+        return r.data;
       }
 
       async function previewArtifact() {
@@ -6618,6 +6701,10 @@ def _normalize_pending_memory_hints(matches: Any, *, limit: int = 5) -> List[Dic
         request_head = str(item.get("request_text_head") or "").strip()
         if request_head:
             row["request_text_head"] = request_head[:200]
+        key_facts_raw = item.get("key_facts") if isinstance(item.get("key_facts"), list) else []
+        key_facts = [str(x).strip() for x in key_facts_raw if str(x).strip()]
+        if key_facts:
+            row["key_facts"] = key_facts[:8]
         if not row:
             continue
         out.append(row)

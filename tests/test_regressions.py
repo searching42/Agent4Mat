@@ -8697,6 +8697,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("previewPendingHintTask(", html)
         self.assertIn("previewPendingHintMemoryContext(", html)
         self.assertIn("Preview Memory", html)
+        self.assertIn("pending_hint_confirm_run", html)
+        self.assertIn("confirm before Use + Run", html)
+        self.assertIn("summary.textContent = 'Context'", html)
         self.assertIn("Use + Run", html)
         self.assertIn("project_read_only", html)
         self.assertIn("updateProjectLockStatus()", html)
@@ -9500,6 +9503,7 @@ class UiPrototypeTests(unittest.TestCase):
                                     "score": 0.88,
                                     "property": "plqy",
                                     "request_text_head": "设计470nm附近且高PLQY分子",
+                                    "key_facts": ["target:plqy:maximize:90.000", "constraint:mw:150:700"],
                                     "memory_context_path": str(root / "runs" / "agent" / "prev_task_1" / "artifacts" / "memory_context.json"),
                                 }
                             ],
@@ -9545,6 +9549,9 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(str(first.get("candidate_data") or ""), "master_database")
                 self.assertEqual(str(first.get("run_label") or ""), "prev_task_1-20260516-010101")
                 self.assertEqual(str(first.get("execution_status") or ""), "success")
+                self.assertEqual(str(first.get("request_text_head") or ""), "设计470nm附近且高PLQY分子")
+                key_facts = first.get("key_facts") if isinstance(first.get("key_facts"), list) else []
+                self.assertIn("target:plqy:maximize:90.000", key_facts)
 
     def test_ui_chat_pending_submit_resume_success(self) -> None:
         ui_app_mod = self._load_ui_module()

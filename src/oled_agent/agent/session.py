@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 from oled_agent.agent.evaluator import build_evaluation_report
 from oled_agent.agent.experiment_trace import build_experiment_trace
+from oled_agent.agent.guardrails import build_guardrails_report
 from oled_agent.agent.executor import execute_plan, execute_plan_with_resume, save_execution_result
 from oled_agent.agent.planner import (
     DEFAULT_PLANNER_PROVIDER,
@@ -351,6 +352,7 @@ def _mirror_logging_and_result_layout(
     decision_summary_path: Path,
     task_state_path: Path,
     evaluation_report_path: Path,
+    guardrails_report_path: Path,
     experiment_trace_path: Optional[Path],
 ) -> Dict[str, Any]:
     logging_dir = (workspace_root / DEFAULT_LOGGING_OUT / run_label).resolve()
@@ -375,6 +377,8 @@ def _mirror_logging_and_result_layout(
     _copy_if_exists(task_state_path, logging_task_state_path)
     logging_evaluation_report_path = logging_dir / "evaluation_report.json"
     _copy_if_exists(evaluation_report_path, logging_evaluation_report_path)
+    logging_guardrails_report_path = logging_dir / "guardrails_report.json"
+    _copy_if_exists(guardrails_report_path, logging_guardrails_report_path)
     logging_experiment_trace_path = logging_dir / "experiment_trace.json"
     _copy_if_exists(experiment_trace_path, logging_experiment_trace_path)
 
@@ -423,6 +427,8 @@ def _mirror_logging_and_result_layout(
         _copy_if_exists(report_src, result_dir / "report.md")
     result_evaluation_report_path = result_dir / "evaluation_report.json"
     _copy_if_exists(evaluation_report_path, result_evaluation_report_path)
+    result_guardrails_report_path = result_dir / "guardrails_report.json"
+    _copy_if_exists(guardrails_report_path, result_guardrails_report_path)
     result_experiment_trace_path = result_dir / "experiment_trace.json"
     _copy_if_exists(experiment_trace_path, result_experiment_trace_path)
 
@@ -440,6 +446,7 @@ def _mirror_logging_and_result_layout(
             "target_structures_csv": str(target_structures_csv) if copied_target_structures else "",
             "report_md": str(result_dir / "report.md") if (result_dir / "report.md").exists() else "",
             "evaluation_report_json": str(result_evaluation_report_path) if result_evaluation_report_path.exists() else "",
+            "guardrails_report_json": str(result_guardrails_report_path) if result_guardrails_report_path.exists() else "",
             "experiment_trace_json": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
         },
     }
@@ -457,10 +464,12 @@ def _mirror_logging_and_result_layout(
         "logging_model_report_path": str(model_report_path),
         "logging_filtering_report_path": str(filtering_report_path),
         "logging_evaluation_report_path": str(logging_evaluation_report_path) if logging_evaluation_report_path.exists() else "",
+        "logging_guardrails_report_path": str(logging_guardrails_report_path) if logging_guardrails_report_path.exists() else "",
         "logging_experiment_trace_path": str(logging_experiment_trace_path) if logging_experiment_trace_path.exists() else "",
         "result_metadata_path": str(result_metadata_path),
         "result_target_structures_csv_path": str(target_structures_csv) if copied_target_structures else "",
         "result_evaluation_report_path": str(result_evaluation_report_path) if result_evaluation_report_path.exists() else "",
+        "result_guardrails_report_path": str(result_guardrails_report_path) if result_guardrails_report_path.exists() else "",
         "result_experiment_trace_path": str(result_experiment_trace_path) if result_experiment_trace_path.exists() else "",
     }
 
@@ -512,6 +521,23 @@ def _persist_agent_artifacts(
     )
     evaluation_report_path = artifact_dir / "evaluation_report.json"
     _write_json(evaluation_report_path, evaluation_report)
+    web_evidence_path = artifact_dir / "web_evidence.json"
+    constraints = (
+        plan_dict.get("design_spec", {}).get("constraints", {})
+        if isinstance(plan_dict.get("design_spec"), dict)
+        else {}
+    )
+    guardrails_report = build_guardrails_report(
+        task_id=task_id,
+        execution_mode="full_pipeline",
+        execution_payload=result_dict,
+        tool_state=tool_state,
+        workspace_root=workspace_root.resolve(),
+        constraints=constraints if isinstance(constraints, dict) else {},
+        web_evidence_path=web_evidence_path,
+    )
+    guardrails_report_path = artifact_dir / "guardrails_report.json"
+    _write_json(guardrails_report_path, guardrails_report)
 
     request_path: Optional[Path] = None
     if request_payload is not None:
@@ -527,10 +553,10 @@ def _persist_agent_artifacts(
         "decision_summary": decision_path,
         "task_state": task_state_path,
         "evaluation_report": evaluation_report_path,
+        "guardrails_report": guardrails_report_path,
     }
     if request_path is not None:
         artifact_paths["request"] = request_path
-    web_evidence_path = artifact_dir / "web_evidence.json"
     if web_evidence_path.exists():
         artifact_paths["web_evidence"] = web_evidence_path
     _write_json(
@@ -560,6 +586,7 @@ def _persist_agent_artifacts(
         decision_summary_path=decision_path,
         task_state_path=task_state_path,
         evaluation_report_path=evaluation_report_path,
+        guardrails_report_path=guardrails_report_path,
         experiment_trace_path=experiment_trace_path,
     )
 
@@ -572,6 +599,7 @@ def _persist_agent_artifacts(
         "decision_summary_path": str(decision_path),
         "task_state_path": str(task_state_path),
         "evaluation_report_path": str(evaluation_report_path),
+        "guardrails_report_path": str(guardrails_report_path),
         "experiment_trace_path": str(experiment_trace_path),
         **mirror,
     }

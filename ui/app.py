@@ -20,6 +20,7 @@ from oled_agent.agent.task_v2 import compute_missing_questions, legacy_request_t
 from oled_agent.agent.request_contract import (
     validate_decision_summary_payload,
     validate_evaluation_report_payload,
+    validate_guardrails_report_payload,
     validate_task_state_payload,
 )
 
@@ -51,6 +52,7 @@ ARTIFACT_NAME_TO_FILE = {
     "decision_summary": "decision_summary.json",
     "task_state": "task_state.json",
     "evaluation_report": "artifacts/evaluation_report.json",
+    "guardrails_report": "artifacts/guardrails_report.json",
     "web_evidence": "artifacts/web_evidence.json",
     "experiment_trace": "artifacts/experiment_trace.json",
 }
@@ -964,6 +966,7 @@ HTML = """
               <option value=\"task_state\">task_state</option>
               <option value=\"tool_state\">tool_state</option>
               <option value=\"evaluation_report\">evaluation_report</option>
+              <option value=\"guardrails_report\">guardrails_report</option>
               <option value=\"web_evidence\">web_evidence</option>
               <option value=\"experiment_trace\">experiment_trace</option>
             </select>
@@ -4507,6 +4510,19 @@ def _preview_payload(payload: Any, *, artifact_name: str) -> Any:
             "metrics": payload.get("metrics", {}),
             "checks_head": (payload.get("checks") or [])[:10] if isinstance(payload.get("checks"), list) else [],
         }
+    if artifact_name == "guardrails_report" and isinstance(payload, dict):
+        return {
+            "schema_version": payload.get("schema_version", ""),
+            "task_id": payload.get("task_id", ""),
+            "execution_mode": payload.get("execution_mode", ""),
+            "execution_status": payload.get("execution_status", ""),
+            "status": payload.get("status", ""),
+            "strict_status": payload.get("strict_status", ""),
+            "summary": payload.get("summary", {}),
+            "blocking_checks": payload.get("blocking_checks", []),
+            "strict_blocking_checks": payload.get("strict_blocking_checks", []),
+            "checks_head": (payload.get("checks") or [])[:10] if isinstance(payload.get("checks"), list) else [],
+        }
     if artifact_name == "experiment_trace" and isinstance(payload, dict):
         return {
             "schema_version": payload.get("schema_version", ""),
@@ -7858,6 +7874,7 @@ def api_task_summary(task_id: str):
         "decision_summary_path": by_name["decision_summary"],
         "task_state_path": by_name["task_state"],
         "evaluation_report_path": by_name["evaluation_report"],
+        "guardrails_report_path": by_name["guardrails_report"],
         "web_evidence_path": by_name["web_evidence"],
         "experiment_trace_path": by_name["experiment_trace"],
     }
@@ -7866,6 +7883,7 @@ def api_task_summary(task_id: str):
     task_state = _load_json_if_exists(artifacts["task_state_path"])
     decision = _load_json_if_exists(artifacts["decision_summary_path"])
     evaluation_report = _load_json_if_exists(artifacts["evaluation_report_path"])
+    guardrails_report = _load_json_if_exists(artifacts["guardrails_report_path"])
     web_evidence = _load_json_if_exists(artifacts["web_evidence_path"])
     experiment_trace = _load_json_if_exists(artifacts["experiment_trace_path"])
     return jsonify(
@@ -7884,6 +7902,11 @@ def api_task_summary(task_id: str):
             "evaluation_report_preview": (
                 _preview_payload(evaluation_report, artifact_name="evaluation_report")
                 if isinstance(evaluation_report, dict)
+                else {}
+            ),
+            "guardrails_report_preview": (
+                _preview_payload(guardrails_report, artifact_name="guardrails_report")
+                if isinstance(guardrails_report, dict)
                 else {}
             ),
             "web_evidence_preview": (
@@ -8148,7 +8171,7 @@ def api_task_validate(task_id: str):
 
     checks: List[Dict[str, str]] = []
     loaded: Dict[str, Any] = {}
-    required = ["plan", "execution", "tool_state", "decision_summary", "task_state", "evaluation_report"]
+    required = ["plan", "execution", "tool_state", "decision_summary", "task_state", "evaluation_report", "guardrails_report"]
     by_name = _task_artifact_paths(tid)
 
     for name in required:
@@ -8191,6 +8214,14 @@ def api_task_validate(task_id: str):
             checks.append({"name": "evaluation_report_schema", "status": "pass", "message": "schema valid"})
         except Exception as exc:
             checks.append({"name": "evaluation_report_schema", "status": "fail", "message": str(exc)})
+
+    guardrails_report = loaded.get("guardrails_report")
+    if isinstance(guardrails_report, dict):
+        try:
+            validate_guardrails_report_payload(guardrails_report, REPO_ROOT)
+            checks.append({"name": "guardrails_report_schema", "status": "pass", "message": "schema valid"})
+        except Exception as exc:
+            checks.append({"name": "guardrails_report_schema", "status": "fail", "message": str(exc)})
 
     pass_n = sum(1 for c in checks if c.get("status") == "pass")
     fail_n = sum(1 for c in checks if c.get("status") == "fail")

@@ -22,6 +22,7 @@ from oled_agent.agent.request_contract import (
     validate_decision_summary_payload,
     validate_evaluation_report_payload,
     validate_filtering_report_payload,
+    validate_guardrails_report_payload,
     validate_model_report_payload,
     validate_plan_payload,
     validate_request_payload,
@@ -1034,9 +1035,12 @@ class RegressionTests(unittest.TestCase):
             self.assertTrue((logging_dir / "model_report.json").exists())
             self.assertTrue((logging_dir / "filtering_report.json").exists())
             self.assertTrue((logging_dir / "evaluation_report.json").exists())
+            self.assertTrue((logging_dir / "guardrails_report.json").exists())
             self.assertTrue((result_dir / "metadata.json").exists())
             self.assertIn("evaluation_report_path", out)
             self.assertTrue(Path(out["evaluation_report_path"]).exists())
+            self.assertIn("guardrails_report_path", out)
+            self.assertTrue(Path(out["guardrails_report_path"]).exists())
             self.assertIn("experiment_trace_path", out)
             trace_path = Path(out["experiment_trace_path"])
             self.assertTrue(trace_path.exists())
@@ -1834,6 +1838,61 @@ class RegressionTests(unittest.TestCase):
             with self.assertRaises(RequestValidationError):
                 validate_evaluation_report_payload(payload, workspace_root=td_path)
 
+    def test_guardrails_report_schema_validates_happy_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-16T00:00:00Z",
+                "task_id": "task_guard_1",
+                "execution_mode": "full_pipeline",
+                "execution_status": "success",
+                "status": "warn",
+                "strict_status": "fail",
+                "summary": {
+                    "checks_total": 3,
+                    "pass_count": 2,
+                    "warn_count": 1,
+                    "fail_count": 0,
+                    "strict_blocking_count": 1,
+                },
+                "blocking_checks": [],
+                "strict_blocking_checks": ["fallback_adapters"],
+                "metrics": {"record_count": 8, "adapters": ["a1"]},
+                "checks": [
+                    {"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"},
+                    {"name": "fallback_adapters", "status": "warn", "strict_blocking": True, "message": "warn"},
+                    {"name": "final_report_output", "status": "pass", "strict_blocking": False, "message": "ok"},
+                ],
+            }
+            self.assertEqual(validate_guardrails_report_payload(payload, workspace_root=td_path), payload)
+
+    def test_guardrails_report_schema_rejects_invalid_strict_status(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-16T00:00:00Z",
+                "task_id": "task_guard_bad",
+                "execution_mode": "single_step",
+                "execution_status": "success",
+                "status": "pass",
+                "strict_status": "warn",
+                "summary": {
+                    "checks_total": 1,
+                    "pass_count": 1,
+                    "warn_count": 0,
+                    "fail_count": 0,
+                    "strict_blocking_count": 0,
+                },
+                "blocking_checks": [],
+                "strict_blocking_checks": [],
+                "metrics": {},
+                "checks": [{"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"}],
+            }
+            with self.assertRaises(RequestValidationError):
+                validate_guardrails_report_payload(payload, workspace_root=td_path)
+
     def test_agent_plan_json_happy_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -2001,10 +2060,12 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("logging_model_report_path", payload)
             self.assertIn("logging_filtering_report_path", payload)
             self.assertIn("logging_evaluation_report_path", payload)
+            self.assertIn("logging_guardrails_report_path", payload)
             self.assertTrue(Path(payload["logging_data_report_path"]).exists())
             self.assertTrue(Path(payload["logging_model_report_path"]).exists())
             self.assertTrue(Path(payload["logging_filtering_report_path"]).exists())
             self.assertTrue(Path(payload["logging_evaluation_report_path"]).exists())
+            self.assertTrue(Path(payload["logging_guardrails_report_path"]).exists())
 
     def test_agent_run_json_molscribe_smoke_uses_generation_input_source_image(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2691,14 +2752,17 @@ class RegressionTests(unittest.TestCase):
                 "decision_summary_path",
                 "task_state_path",
                 "evaluation_report_path",
+                "guardrails_report_path",
                 "experiment_trace_path",
                 "logging_data_report_path",
                 "logging_model_report_path",
                 "logging_filtering_report_path",
                 "logging_evaluation_report_path",
+                "logging_guardrails_report_path",
                 "logging_experiment_trace_path",
                 "result_metadata_path",
                 "result_evaluation_report_path",
+                "result_guardrails_report_path",
                 "result_experiment_trace_path",
             ):
                 self.assertTrue(Path(payload[key]).exists(), msg=f"missing artifact: {key}")
@@ -2853,6 +2917,104 @@ class RegressionTests(unittest.TestCase):
             )
             self.assertEqual(cp.returncode, 3, msg=cp.stderr + cp.stdout)
             self.assertIn("require-real-adapters", cp.stdout)
+
+    def test_agent_run_json_guardrails_strict_fails_on_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            generate_script = td_path / "gen_ok.py"
+            generate_script.write_text(
+                (
+                    "import csv,json,sys\n"
+                    "payload=json.loads(sys.stdin.read())\n"
+                    "out=payload['output_csv']\n"
+                    "with open(out,'w',encoding='utf-8',newline='') as f:\n"
+                    "  w=csv.DictWriter(f,fieldnames=['candidate_id','smiles'])\n"
+                    "  w.writeheader(); w.writerow({'candidate_id':'cand_000001','smiles':'c1ccccc1'})\n"
+                    "print(json.dumps({'status':'success','adapter':'catalog_generate_cmd','output_csv':out}))\n"
+                ),
+                encoding="utf-8",
+            )
+            score_script = td_path / "score_fail.py"
+            score_script.write_text("import sys\nprint('boom', file=sys.stderr)\nsys.exit(2)\n", encoding="utf-8")
+            catalog_json = td_path / "catalog.json"
+            catalog_json.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "pred_bad_score",
+                                "kind": "predictor",
+                                "backend": "mock_predictor",
+                                "task_types": ["plqy"],
+                                "runtime_profile": "cpu",
+                                "params": {
+                                    "adapters": {
+                                        "score_candidates_cmd": f"{sys.executable} {score_script}",
+                                    }
+                                },
+                            },
+                            {
+                                "id": "gen_ok",
+                                "kind": "generator",
+                                "backend": "mock_generator",
+                                "task_types": ["molecule_generation"],
+                                "runtime_profile": "cpu",
+                                "params": {
+                                    "adapters": {
+                                        "generate_candidates_cmd": f"{sys.executable} {generate_script}",
+                                    }
+                                },
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            request_json = td_path / "request_guardrails_strict.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_guardrails_strict_fail",
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 60.0}],
+                        "budget": {"max_candidates": 6},
+                        "model_preferences": {
+                            "predictor_id": "pred_bad_score",
+                            "generator_id": "gen_ok",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(catalog_json),
+                    "--request-json",
+                    str(request_json),
+                    "--guardrails-strict",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 4, msg=cp.stderr + cp.stdout)
+            self.assertIn("guardrails strict mode blocked execution", cp.stdout)
 
     def test_agent_run_step_require_real_adapters_fails_on_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -5685,6 +5847,94 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(cp.returncode, 1)
             self.assertIn("[FAIL] evaluation report schema invalid", cp.stdout)
 
+    def test_validate_guardrails_report_script_accepts_valid_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            rep_path = td_path / "runs" / "agent" / "task_guard_script_ok" / "artifacts" / "guardrails_report.json"
+            rep_path.parent.mkdir(parents=True, exist_ok=True)
+            rep_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-16T00:00:00Z",
+                        "task_id": "task_guard_script_ok",
+                        "execution_mode": "full_pipeline",
+                        "execution_status": "success",
+                        "status": "pass",
+                        "strict_status": "pass",
+                        "summary": {
+                            "checks_total": 1,
+                            "pass_count": 1,
+                            "warn_count": 0,
+                            "fail_count": 0,
+                            "strict_blocking_count": 0,
+                        },
+                        "blocking_checks": [],
+                        "strict_blocking_checks": [],
+                        "metrics": {"record_count": 1, "adapters": ["x"]},
+                        "checks": [{"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"}],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_guardrails_report.py", str(rep_path)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            self.assertIn("[PASS] guardrails report schema valid", cp.stdout)
+
+    def test_validate_guardrails_report_script_rejects_invalid_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            rep_path = td_path / "runs" / "agent" / "task_guard_script_bad" / "artifacts" / "guardrails_report.json"
+            rep_path.parent.mkdir(parents=True, exist_ok=True)
+            rep_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "generated_at": "2026-05-16T00:00:00Z",
+                        "task_id": "task_guard_script_bad",
+                        "execution_mode": "single_step",
+                        "execution_status": "success",
+                        "status": "pass",
+                        "strict_status": "warn",
+                        "summary": {
+                            "checks_total": 1,
+                            "pass_count": 1,
+                            "warn_count": 0,
+                            "fail_count": 0,
+                            "strict_blocking_count": 0,
+                        },
+                        "blocking_checks": [],
+                        "strict_blocking_checks": [],
+                        "metrics": {},
+                        "checks": [{"name": "execution_status", "status": "pass", "strict_blocking": True, "message": "ok"}],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [sys.executable, "scripts/validate_guardrails_report.py", str(rep_path)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cp.returncode, 1)
+            self.assertIn("[FAIL] guardrails report schema invalid", cp.stdout)
+
     def test_validate_run_artifacts_script_accepts_result_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_root = Path(__file__).resolve().parents[1]
@@ -5719,6 +5969,7 @@ class RegressionTests(unittest.TestCase):
             self.assertIn("[PASS] model report schema valid", cp.stdout)
             self.assertIn("[PASS] filtering report schema valid", cp.stdout)
             self.assertIn("[PASS] evaluation report schema valid", cp.stdout)
+            self.assertIn("[PASS] guardrails report schema valid", cp.stdout)
 
     def test_validate_run_artifacts_script_rejects_missing_result_keys(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -6534,6 +6785,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "archive_real_chain_baseline.py",
             repo_root / "scripts" / "validate_step_request_examples.py",
             repo_root / "scripts" / "validate_evaluation_report.py",
+            repo_root / "scripts" / "validate_guardrails_report.py",
             repo_root / "scripts" / "check_experiment_trace.py",
             repo_root / "scripts" / "check_ui_freeze_acceptance.py",
             repo_root / "scripts" / "summarize_experiments.py",

@@ -27,6 +27,7 @@ def _paths_from_result_json(result_json_path: Path, cwd: Path) -> Dict[str, Path
         "model_report": "logging_model_report_path",
         "filtering_report": "logging_filtering_report_path",
         "evaluation_report": "logging_evaluation_report_path",
+        "guardrails_report": "logging_guardrails_report_path",
     }
     out: Dict[str, Path] = {}
     for logical, key in required.items():
@@ -47,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model-report", default="", help="Path to model_report.json")
     p.add_argument("--filtering-report", default="", help="Path to filtering_report.json")
     p.add_argument("--evaluation-report", default="", help="Path to evaluation_report.json")
+    p.add_argument("--guardrails-report", default="", help="Path to guardrails_report.json")
     return p.parse_args()
 
 
@@ -65,6 +67,7 @@ def main() -> int:
         validate_decision_summary_payload,
         validate_evaluation_report_payload,
         validate_filtering_report_payload,
+        validate_guardrails_report_payload,
         validate_model_report_payload,
         validate_task_state_payload,
     )
@@ -84,6 +87,7 @@ def main() -> int:
                 "model_report": str(args.model_report).strip(),
                 "filtering_report": str(args.filtering_report).strip(),
                 "evaluation_report": str(args.evaluation_report).strip(),
+                "guardrails_report": str(args.guardrails_report).strip(),
             }
             missing = [k for k, v in raw_paths.items() if not v]
             if missing:
@@ -105,6 +109,7 @@ def main() -> int:
         model_report_payload = _load_json(paths["model_report"])
         filtering_report_payload = _load_json(paths["filtering_report"])
         evaluation_report_payload = _load_json(paths["evaluation_report"])
+        guardrails_report_payload = _load_json(paths["guardrails_report"])
 
         validate_decision_summary_payload(payload=decision_payload, workspace_root=workspace_root)
         print(f"[PASS] decision summary schema valid: {paths['decision_summary']}")
@@ -118,6 +123,8 @@ def main() -> int:
         print(f"[PASS] filtering report schema valid: {paths['filtering_report']}")
         validate_evaluation_report_payload(payload=evaluation_report_payload, workspace_root=workspace_root)
         print(f"[PASS] evaluation report schema valid: {paths['evaluation_report']}")
+        validate_guardrails_report_payload(payload=guardrails_report_payload, workspace_root=workspace_root)
+        print(f"[PASS] guardrails report schema valid: {paths['guardrails_report']}")
         return 0
     except RequestValidationError as exc:
         print(f"[FAIL] artifact schema invalid: {exc}")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from json import JSONDecodeError
 
@@ -119,6 +120,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail if fallback/local adapters are used",
     )
+    run_agent_p.add_argument(
+        "--guardrails-strict",
+        action="store_true",
+        help="Fail when guardrails strict_status is not pass",
+    )
 
     run_json_p = sub.add_parser("agent-run-json", help="Plan + execute from structured request JSON")
     run_json_p.add_argument("--request-json", required=True, help="Request JSON path (request.schema.json)")
@@ -129,6 +135,11 @@ def parse_args() -> argparse.Namespace:
         "--require-real-adapters",
         action="store_true",
         help="Fail if fallback/local adapters are used",
+    )
+    run_json_p.add_argument(
+        "--guardrails-strict",
+        action="store_true",
+        help="Fail when guardrails strict_status is not pass",
     )
 
     intake_p = sub.add_parser("agent-intake", help="Build task.v2 draft and missing info questions")
@@ -155,6 +166,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail if fallback/local adapters are used",
     )
+    run_step_p.add_argument(
+        "--guardrails-strict",
+        action="store_true",
+        help="Fail when guardrails strict_status is not pass",
+    )
 
     run_step_json_p = sub.add_parser("agent-run-step-json", help="Run single operation from step request JSON")
     run_step_json_p.add_argument("--step-request-json", required=True)
@@ -164,6 +180,11 @@ def parse_args() -> argparse.Namespace:
         "--require-real-adapters",
         action="store_true",
         help="Fail if fallback/local adapters are used",
+    )
+    run_step_json_p.add_argument(
+        "--guardrails-strict",
+        action="store_true",
+        help="Fail when guardrails strict_status is not pass",
     )
 
     resume_p = sub.add_parser("agent-resume", help="Resume task from task.json or request.json under runs/agent/<task_id>")
@@ -175,6 +196,11 @@ def parse_args() -> argparse.Namespace:
         "--require-real-adapters",
         action="store_true",
         help="Fail if fallback/local adapters are used",
+    )
+    resume_p.add_argument(
+        "--guardrails-strict",
+        action="store_true",
+        help="Fail when guardrails strict_status is not pass",
     )
     resume_p.add_argument("--candidate-data", default="", help="Override task candidate_data before resume")
     resume_p.add_argument("--train-data", default="", help="Override task train_data before resume")
@@ -248,6 +274,44 @@ def _assert_no_fallback(result_payload: dict) -> None:
         if adapter in forbidden:
             print(f"[FAIL] require-real-adapters hit fallback/stub adapter: {adapter}")
             raise SystemExit(3)
+
+
+def _is_true_env(name: str, default: str = "0") -> bool:
+    text = str(os.environ.get(name, default) or "").strip().lower()
+    return text in ("1", "true", "yes", "on")
+
+
+def _assert_guardrails(result_payload: dict, *, strict: bool) -> None:
+    path_raw = str(result_payload.get("guardrails_report_path") or "").strip()
+    if not path_raw:
+        path_raw = str(result_payload.get("logging_guardrails_report_path") or "").strip()
+    if not path_raw:
+        print("[FAIL] guardrails report path is missing in result payload")
+        raise SystemExit(4)
+    path = Path(path_raw).resolve()
+    if not path.exists():
+        print(f"[FAIL] guardrails report path not found: {path}")
+        raise SystemExit(4)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        print(f"[FAIL] guardrails report payload is not object: {path}")
+        raise SystemExit(4)
+    if strict:
+        status = str(payload.get("strict_status") or "").strip()
+        if status != "pass":
+            print(
+                "[FAIL] guardrails strict mode blocked execution: "
+                f"strict_status={status} strict_blocking_checks={payload.get('strict_blocking_checks', [])}"
+            )
+            raise SystemExit(4)
+        return
+    status = str(payload.get("status") or "").strip()
+    if status == "fail":
+        print(
+            "[FAIL] guardrails blocked execution: "
+            f"status={status} blocking_checks={payload.get('blocking_checks', [])}"
+        )
+        raise SystemExit(4)
         if res.get("fallback_error"):
             print(f"[FAIL] require-real-adapters found fallback_error in tool: {rec.get('name')}")
             raise SystemExit(3)
@@ -493,6 +557,9 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if bool(getattr(args, "require_real_adapters", False)):
             _assert_no_fallback(result)
+        guardrails_strict = bool(getattr(args, "guardrails_strict", False)) or _is_true_env("OLED_AGENT_GUARDRAILS_STRICT")
+        if guardrails_strict:
+            _assert_guardrails(result, strict=True)
         if result.get("status") != "success":
             raise SystemExit(1)
         return
@@ -514,6 +581,9 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if bool(getattr(args, "require_real_adapters", False)):
             _assert_no_fallback(result)
+        guardrails_strict = bool(getattr(args, "guardrails_strict", False)) or _is_true_env("OLED_AGENT_GUARDRAILS_STRICT")
+        if guardrails_strict:
+            _assert_guardrails(result, strict=True)
         if result.get("status") != "success":
             raise SystemExit(1)
         return
@@ -546,6 +616,9 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if bool(getattr(args, "require_real_adapters", False)):
             _assert_no_fallback(result)
+        guardrails_strict = bool(getattr(args, "guardrails_strict", False)) or _is_true_env("OLED_AGENT_GUARDRAILS_STRICT")
+        if guardrails_strict:
+            _assert_guardrails(result, strict=True)
         if result.get("status") != "success":
             raise SystemExit(1)
         return
@@ -567,6 +640,9 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if bool(getattr(args, "require_real_adapters", False)):
             _assert_no_fallback(result)
+        guardrails_strict = bool(getattr(args, "guardrails_strict", False)) or _is_true_env("OLED_AGENT_GUARDRAILS_STRICT")
+        if guardrails_strict:
+            _assert_guardrails(result, strict=True)
         if result.get("status") != "success":
             raise SystemExit(1)
         return
@@ -593,6 +669,9 @@ def main() -> None:
             print(json.dumps(result_exec, ensure_ascii=False, indent=2))
             if bool(getattr(args, "require_real_adapters", False)):
                 _assert_no_fallback(result_exec)
+            guardrails_strict = bool(getattr(args, "guardrails_strict", False)) or _is_true_env("OLED_AGENT_GUARDRAILS_STRICT")
+            if guardrails_strict:
+                _assert_guardrails(result_exec, strict=True)
             if result_exec.get("status") != "success":
                 raise SystemExit(1)
             return

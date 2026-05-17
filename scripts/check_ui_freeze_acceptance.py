@@ -431,6 +431,146 @@ def _run_check_bundle_download(client: Any, root: Path) -> Dict[str, Any]:
     )
 
 
+def _run_check_batch_compare_api(client: Any) -> Dict[str, Any]:
+    project_id = "ui_freeze_batch_compare_proj"
+    create = client.post("/api/projects", json={"project_id": project_id, "title": "batch compare smoke"})
+    save_a = client.post(
+        f"/api/projects/{project_id}/batch-export",
+        json={
+            "payload": {
+                "status": "pass",
+                "action": "batch_summary",
+                "limit": 2,
+                "count": 2,
+                "rows": [
+                    {"task_id": "ui_bc_t1", "project_id": project_id, "release_gate_status": "pass"},
+                    {"task_id": "ui_bc_t2", "project_id": project_id, "release_gate_status": "fail"},
+                ],
+                "results": [
+                    {"task_id": "ui_bc_t1", "project_id": project_id, "http_status": 200, "data": {"status": "pass"}},
+                    {"task_id": "ui_bc_t2", "project_id": project_id, "http_status": 404, "data": {"status": "missing"}},
+                ],
+                "created_at": "2026-05-17T09:00:00+08:00",
+            }
+        },
+    )
+    save_b = client.post(
+        f"/api/projects/{project_id}/batch-export",
+        json={
+            "payload": {
+                "status": "pass",
+                "action": "batch_summary",
+                "limit": 1,
+                "count": 1,
+                "rows": [
+                    {"task_id": "ui_bc_t1", "project_id": project_id, "release_gate_status": "missing"},
+                ],
+                "results": [
+                    {"task_id": "ui_bc_t1", "project_id": project_id, "http_status": 200, "data": {"status": "pass"}},
+                ],
+                "created_at": "2026-05-17T08:30:00+08:00",
+            }
+        },
+    )
+    listed = client.get(f"/api/projects/{project_id}/batch-exports?limit=10")
+    listed_payload = listed.get_json() if listed.is_json else {}
+    exports = listed_payload.get("exports") if isinstance(listed_payload.get("exports"), list) else []
+    if len(exports) < 2:
+        return _check_result(
+            "batch_compare_api",
+            ok=False,
+            error="not enough batch exports saved for compare",
+            details={
+                "http_codes": {
+                    "create": create.status_code,
+                    "save_a": save_a.status_code,
+                    "save_b": save_b.status_code,
+                    "list": listed.status_code,
+                },
+                "export_count": len(exports),
+            },
+        )
+    export_a = str(exports[0].get("export_id") or "")
+    export_b = str(exports[1].get("export_id") or "")
+    compare = client.get(
+        f"/api/projects/{project_id}/batch-exports/compare?primary_export_id={export_a}&other_export_id={export_b}"
+    )
+    compare_payload = compare.get_json() if compare.is_json else {}
+    gate_diff = compare_payload.get("release_gate_diff") if isinstance(compare_payload.get("release_gate_diff"), dict) else {}
+    diff = compare_payload.get("diff") if isinstance(compare_payload.get("diff"), dict) else {}
+    changed_rows = diff.get("changed") if isinstance(diff.get("changed"), list) else []
+    release_changed = [
+        row
+        for row in changed_rows
+        if isinstance(row, dict) and "release_gate" in str(row.get("path") or "").lower()
+    ]
+    status_other_resp = client.get(f"/api/projects/{project_id}/batch-exports?release_gate_status=other")
+    status_other_payload = status_other_resp.get_json() if status_other_resp.is_json else {}
+    status_other_rows = (
+        status_other_payload.get("exports")
+        if isinstance(status_other_payload.get("exports"), list)
+        else []
+    )
+    ok = (
+        create.status_code == 200
+        and save_a.status_code == 200
+        and save_b.status_code == 200
+        and listed.status_code == 200
+        and compare.status_code == 200
+        and str(compare_payload.get("status") or "") == "pass"
+        and isinstance(gate_diff.get("delta"), dict)
+        and len(release_changed) >= 1
+        and status_other_resp.status_code == 200
+        and len(status_other_rows) >= 1
+    )
+    return _check_result(
+        "batch_compare_api",
+        ok=ok,
+        error="" if ok else "batch compare endpoint assertions failed",
+        details={
+            "http_codes": {
+                "create": create.status_code,
+                "save_a": save_a.status_code,
+                "save_b": save_b.status_code,
+                "list": listed.status_code,
+                "compare": compare.status_code,
+                "status_other": status_other_resp.status_code,
+            },
+            "export_ids": [export_a, export_b],
+            "release_changed_count": len(release_changed),
+            "gate_delta": gate_diff.get("delta") if isinstance(gate_diff.get("delta"), dict) else {},
+            "status_other_count": len(status_other_rows),
+        },
+    )
+
+
+def _run_check_compare_ui_controls(client: Any) -> Dict[str, Any]:
+    resp = client.get("/")
+    html = resp.get_data(as_text=True) if resp.status_code == 200 else ""
+    required_tokens = [
+        "batch_compare_toggle_btn",
+        "batch_compare_path_filter",
+        "project_batch_compare_details",
+        "project_batch_compare_paths",
+        "project_batch_compare_selected_diff",
+        "renderBatchCompareChangedPaths(",
+        "renderBatchCompareSelectedDiff(",
+        "copyBatchComparePath(",
+        "copyBatchCompareDetails(",
+        "downloadLatestBatchCompare('json')",
+        "downloadLatestBatchCompare('txt')",
+        "compareBatchExportsById()",
+    ]
+    missing = [token for token in required_tokens if token not in html]
+    ok = resp.status_code == 200 and len(missing) == 0
+    return _check_result(
+        "compare_ui_controls",
+        ok=ok,
+        error="" if ok else f"missing compare ui tokens: {missing}",
+        details={"http_code": resp.status_code, "missing_tokens": missing},
+    )
+
+
 def _load_baseline(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
     if not path.exists():
         return None, f"baseline file missing: {path}"
@@ -540,6 +680,8 @@ def main() -> int:
             checks.append(_run_check_snapshot_roundtrip(client))
             checks.append(_run_check_read_only_lock(client))
             checks.append(_run_check_bundle_download(client, sandbox_root))
+            checks.append(_run_check_batch_compare_api(client))
+            checks.append(_run_check_compare_ui_controls(client))
 
     report["checks"] = checks
     report["check_count"] = len(checks)

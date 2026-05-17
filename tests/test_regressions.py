@@ -7271,10 +7271,12 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("real-chain-evidence:", content)
         self.assertIn("ui-freeze-acceptance:", content)
         self.assertIn("ui-smoke:", content)
+        self.assertIn("ui-stability-smoke:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/summarize_experiments.py", content)
         self.assertIn("scripts/check_ui_freeze_acceptance.py", content)
+        self.assertIn("runs/ci/ui_stability_smoke.json", content)
         self.assertIn("configs/acceptance/ui_freeze_acceptance_baseline.json", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/archive_real_chain_baseline.py", content)
@@ -7337,6 +7339,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("snapshot_roundtrip", names)
         self.assertIn("read_only_lock", names)
         self.assertIn("bundle_download", names)
+        self.assertIn("batch_compare_api", names)
+        self.assertIn("compare_ui_controls", names)
 
     def test_summarize_experiments_script_outputs_aggregate_payload(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

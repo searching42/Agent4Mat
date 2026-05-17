@@ -6,6 +6,8 @@
     {"name": "project_clone", "status": "pass"},
     {"name": "snapshot_roundtrip", "status": "pass"},
     {"name": "read_only_lock", "status": "pass"},
-    {"name": "bundle_download", "status": "pass"}
+    {"name": "bundle_download", "status": "pass"},
+    {"name": "batch_compare_api", "status": "pass"},
+    {"name": "compare_ui_controls", "status": "pass"}
   ]
 }

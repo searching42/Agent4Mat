@@ -7,7 +7,7 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke experiment-summary
 .PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard real-no-fallback-gate ui-freeze-acceptance
-.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run
+.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run ui-stability-smoke
 
 help:
 	@echo "Available targets:"
@@ -34,6 +34,7 @@ help:
 	@echo "  make real-chain-release-bundle-check - validate baseline summary + archive manifest (+tar.gz)"
 	@echo "  make real-chain-evidence   - collect release evidence from acceptance_result.json"
 	@echo "  make ui-smoke            - run lightweight UI smoke check"
+	@echo "  make ui-stability-smoke  - run targeted UI interaction regressions + freeze acceptance"
 	@echo "  make ui-run              - launch local UI prototype on http://127.0.0.1:8787"
 	@echo "  make quickstart          - run quickstart chain self-check"
 	@echo "  make adapter-validate    - validate adapter templates contract"
@@ -148,6 +149,13 @@ real-chain-evidence:
 
 ui-smoke:
 	@PYTHONPYCACHEPREFIX="$${TMPDIR:-/tmp}/agent4mat_pycache" $(PYTHON) -m py_compile ui/app.py
+
+ui-stability-smoke:
+	@$(MAKE) ui-smoke
+	@$(PYTHONPATH_ENV) $(PYTHON) -m unittest -v \
+		tests.test_regressions.UiPrototypeTests.test_ui_html_contains_workspace_url_controls \
+		tests.test_regressions.UiPrototypeTests.test_ui_batch_export_list_and_replay_latest
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_freeze_acceptance.py --workspace-root "$(WORKSPACE_ROOT)" --out "runs/ci/ui_stability_smoke.json" --baseline "configs/acceptance/ui_freeze_acceptance_baseline.json"
 
 ui-run:
 	@$(PYTHONPATH_ENV) $(PYTHON) ui/app.py

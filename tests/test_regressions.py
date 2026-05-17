@@ -7810,6 +7810,9 @@ class PlanProgressAssetsTests(unittest.TestCase):
                             "task_id": run_task_id,
                             "generate_adapter": "reinvent4_generate_adapter_v1",
                             "score_adapter": "unimol_score_adapter_v1",
+                            "guardrails_strict_status": "pass",
+                            "evaluation_failed_count": 0,
+                            "guardrails_failed_count": 0,
                         },
                         ensure_ascii=False,
                         indent=2,
@@ -7822,7 +7825,22 @@ class PlanProgressAssetsTests(unittest.TestCase):
                 decision_path.write_text(json.dumps({"score_step": {"used_fallback": False}}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                 task_state_path.write_text(json.dumps({"status": "success"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                 tool_state_path.write_text(json.dumps({"status": "ok"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                release_json.write_text(json.dumps({"overall": "pass"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                release_json.write_text(
+                    json.dumps(
+                        {
+                            "overall": "pass",
+                            "checks": {
+                                "guardrails_strict_status_pass": True,
+                                "evaluation_failure_diag_zero": True,
+                                "guardrails_failure_diag_zero": True,
+                            },
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
                 release_md.write_text("# evidence\n", encoding="utf-8")
                 result_path.write_text(
                     json.dumps(
@@ -7847,6 +7865,9 @@ class PlanProgressAssetsTests(unittest.TestCase):
                         "strict_summary": str(strict_path.relative_to(td_path)),
                         "result_json": str(result_path.relative_to(td_path)),
                         "release_evidence_json": str(release_json.relative_to(td_path)),
+                        "guardrails_strict_status": "pass",
+                        "evaluation_failed_count": 0,
+                        "guardrails_failed_count": 0,
                     }
                 )
 
@@ -7889,6 +7910,9 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(int(manifest.get("missing_required_count", -1)), 0)
             copied = manifest.get("copied", [])
             self.assertTrue(isinstance(copied, list) and len(copied) >= 10)
+            gate = manifest.get("release_gate_summary") if isinstance(manifest.get("release_gate_summary"), dict) else {}
+            self.assertEqual(str(gate.get("status") or ""), "pass")
+            self.assertEqual(int(gate.get("checked_runs") or 0), 3)
             self.assertTrue((out_dir / "files" / "runs" / "agent" / base_task_id / "baseline_summary.json").exists())
 
     def test_archive_real_chain_baseline_script_writes_tar_gz_package(self) -> None:
@@ -7913,13 +7937,41 @@ class PlanProgressAssetsTests(unittest.TestCase):
             task_state_path = run_dir / "task_state.json"
             tool_state_path = run_dir / "tool_state.json"
 
-            strict_path.write_text(json.dumps({"status": "pass"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            strict_path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "guardrails_strict_status": "pass",
+                        "evaluation_failed_count": 0,
+                        "guardrails_failed_count": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             plan_path.write_text(json.dumps({"summary": "ok"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             execution_path.write_text(json.dumps({"records": []}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             decision_path.write_text(json.dumps({"score_step": {"used_fallback": False}}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             task_state_path.write_text(json.dumps({"status": "success"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             tool_state_path.write_text(json.dumps({"status": "ok"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            release_json.write_text(json.dumps({"overall": "pass"}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            release_json.write_text(
+                json.dumps(
+                    {
+                        "overall": "pass",
+                        "checks": {
+                            "guardrails_strict_status_pass": True,
+                            "evaluation_failure_diag_zero": True,
+                            "guardrails_failure_diag_zero": True,
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             release_md.write_text("# evidence\n", encoding="utf-8")
             result_path.write_text(
                 json.dumps(
@@ -7952,6 +8004,9 @@ class PlanProgressAssetsTests(unittest.TestCase):
                                 "strict_summary": str(strict_path.relative_to(td_path)),
                                 "result_json": str(result_path.relative_to(td_path)),
                                 "release_evidence_json": str(release_json.relative_to(td_path)),
+                                "guardrails_strict_status": "pass",
+                                "evaluation_failed_count": 0,
+                                "guardrails_failed_count": 0,
                             }
                         ],
                         "failures": [],

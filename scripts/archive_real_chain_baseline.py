@@ -111,6 +111,118 @@ def _collect_entries(*, baseline: Dict[str, Any], workspace_root: Path, baseline
     return entries
 
 
+def _to_int(value: Any, *, default: int = -1) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _build_release_gate_summary(*, baseline: Dict[str, Any], workspace_root: Path) -> Dict[str, Any]:
+    runs = baseline.get("runs") if isinstance(baseline.get("runs"), list) else []
+    run_count_expected = _to_int(baseline.get("run_count"), default=len(runs))
+    rows: List[Dict[str, Any]] = []
+    failures: List[str] = []
+    pass_count = 0
+    fail_count = 0
+
+    for idx, item in enumerate(runs, start=1):
+        if not isinstance(item, dict):
+            failures.append(f"run#{idx}: row is not object")
+            fail_count += 1
+            continue
+        task_id = str(item.get("task_id") or f"run_{idx}")
+        reasons: List[str] = []
+
+        guardrails_strict_status = str(item.get("guardrails_strict_status") or "").strip()
+        evaluation_failed_count = _to_int(item.get("evaluation_failed_count"), default=-1)
+        guardrails_failed_count = _to_int(item.get("guardrails_failed_count"), default=-1)
+
+        strict_summary_raw = str(item.get("strict_summary") or "").strip()
+        if strict_summary_raw:
+            strict_summary_path = _resolve_path(strict_summary_raw, workspace_root)
+            if strict_summary_path.exists():
+                try:
+                    strict_payload = _load_json(strict_summary_path)
+                except Exception:
+                    strict_payload = {}
+                if not guardrails_strict_status:
+                    guardrails_strict_status = str(strict_payload.get("guardrails_strict_status") or "").strip()
+                if evaluation_failed_count < 0:
+                    evaluation_failed_count = _to_int(strict_payload.get("evaluation_failed_count"), default=-1)
+                if guardrails_failed_count < 0:
+                    guardrails_failed_count = _to_int(strict_payload.get("guardrails_failed_count"), default=-1)
+            else:
+                reasons.append("strict_summary_not_found")
+        else:
+            reasons.append("strict_summary_missing")
+
+        release_checks: Dict[str, Any] = {}
+        release_json_raw = str(item.get("release_evidence_json") or "").strip()
+        if release_json_raw:
+            release_json_path = _resolve_path(release_json_raw, workspace_root)
+            if release_json_path.exists():
+                try:
+                    release_payload = _load_json(release_json_path)
+                except Exception:
+                    release_payload = {}
+                if isinstance(release_payload.get("checks"), dict):
+                    release_checks = dict(release_payload.get("checks") or {})
+            else:
+                reasons.append("release_evidence_json_not_found")
+        else:
+            reasons.append("release_evidence_json_missing")
+
+        release_guardrails_ok = bool(release_checks.get("guardrails_strict_status_pass", False))
+        release_eval_diag_ok = bool(release_checks.get("evaluation_failure_diag_zero", False))
+        release_guard_diag_ok = bool(release_checks.get("guardrails_failure_diag_zero", False))
+
+        if guardrails_strict_status != "pass":
+            reasons.append(f"guardrails_strict_status={guardrails_strict_status or '-'}")
+        if evaluation_failed_count != 0:
+            reasons.append(f"evaluation_failed_count={evaluation_failed_count}")
+        if guardrails_failed_count != 0:
+            reasons.append(f"guardrails_failed_count={guardrails_failed_count}")
+        if not release_guardrails_ok:
+            reasons.append("release_check_guardrails_strict_status_pass=false")
+        if not release_eval_diag_ok:
+            reasons.append("release_check_evaluation_failure_diag_zero=false")
+        if not release_guard_diag_ok:
+            reasons.append("release_check_guardrails_failure_diag_zero=false")
+
+        run_status = "pass" if len(reasons) == 0 else "fail"
+        if run_status == "pass":
+            pass_count += 1
+        else:
+            fail_count += 1
+            failures.append(f"{task_id}: " + "; ".join(reasons))
+        rows.append(
+            {
+                "task_id": task_id,
+                "status": run_status,
+                "guardrails_strict_status": guardrails_strict_status,
+                "evaluation_failed_count": evaluation_failed_count,
+                "guardrails_failed_count": guardrails_failed_count,
+                "release_check_guardrails_strict_status_pass": release_guardrails_ok,
+                "release_check_evaluation_failure_diag_zero": release_eval_diag_ok,
+                "release_check_guardrails_failure_diag_zero": release_guard_diag_ok,
+                "reasons": reasons,
+            }
+        )
+
+    checked_runs = len(rows)
+    summary_status = "pass" if fail_count == 0 else "fail"
+    return {
+        "status": summary_status,
+        "run_count_expected": run_count_expected,
+        "checked_runs": checked_runs,
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "runs": rows,
+        "failures": failures,
+    }
+
+
 def _write_manifest_md(manifest: Dict[str, Any]) -> str:
     lines: List[str] = []
     lines.append("# Baseline Archive Manifest")
@@ -124,7 +236,22 @@ def _write_manifest_md(manifest: Dict[str, Any]) -> str:
     tar_gz_path = str(manifest.get("tar_gz_path") or "").strip()
     if tar_gz_path:
         lines.append(f"- tar_gz_path: `{tar_gz_path}`")
+    gate = manifest.get("release_gate_summary") if isinstance(manifest.get("release_gate_summary"), dict) else {}
+    if gate:
+        lines.append(f"- release_gate_status: `{gate.get('status')}`")
+        lines.append(
+            f"- release_gate_checked/pass/fail: `{gate.get('checked_runs', 0)}/{gate.get('pass_count', 0)}/{gate.get('fail_count', 0)}`"
+        )
     lines.append("")
+    if gate:
+        lines.append("## Release Gate Summary")
+        gate_failures = gate.get("failures") if isinstance(gate.get("failures"), list) else []
+        if gate_failures:
+            for row in gate_failures:
+                lines.append(f"- {row}")
+        else:
+            lines.append("- all runs passed failure-diagnostics gate checks")
+        lines.append("")
     lines.append("## Required Missing")
     missing = manifest.get("missing_required", [])
     if isinstance(missing, list) and missing:
@@ -257,6 +384,10 @@ def main() -> int:
         "copied": copied,
         "missing_required": missing_required,
         "optional_missing": optional_missing,
+        "release_gate_summary": _build_release_gate_summary(
+            baseline=baseline,
+            workspace_root=workspace_root,
+        ),
     }
     manifest_json = out_dir / "archive_manifest.json"
     manifest_md = out_dir / "archive_manifest.md"

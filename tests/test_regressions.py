@@ -7301,8 +7301,14 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("step-mode-guard:", content)
         self.assertIn("web-evidence-guard:", content)
         self.assertIn("experiment-trace-guard:", content)
+        self.assertIn("resume-idempotence-guard:", content)
+        self.assertIn("acceptance-local:", content)
         self.assertIn("real-no-fallback-gate:", content)
         self.assertIn("scripts/check_experiment_trace.py", content)
+        self.assertIn("scripts/check_resume_idempotence.py", content)
+        self.assertIn("$(MAKE) resume-idempotence-guard TASK_ID=\"$(TASK_ID)\" WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("scripts/check_resume_idempotence.py --workspace-root \"$(WORKSPACE_ROOT)\" --result-json \"runs/agent/$(TASK_ID)/quickstart_result.json\" --task-id \"$(TASK_ID)\"", content)
+        self.assertIn("scripts/validate_run_artifacts.py --workspace-root \"$(WORKSPACE_ROOT)\" --result-json \"runs/agent/$(TASK_ID)/quickstart_result.json\"", content)
 
 
 class PlanProgressAssetsTests(unittest.TestCase):
@@ -7319,6 +7325,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "validate_guardrails_report.py",
             repo_root / "scripts" / "validate_memory_context.py",
             repo_root / "scripts" / "check_experiment_trace.py",
+            repo_root / "scripts" / "check_resume_idempotence.py",
             repo_root / "scripts" / "check_ui_freeze_acceptance.py",
             repo_root / "scripts" / "check_ui_release_readiness.py",
             repo_root / "scripts" / "summarize_experiments.py",

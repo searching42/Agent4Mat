@@ -6,8 +6,9 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke experiment-summary
-.PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard real-no-fallback-gate ui-freeze-acceptance
+.PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard resume-idempotence-guard real-no-fallback-gate ui-freeze-acceptance
 .PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run ui-stability-smoke ui-release-readiness
+.PHONY: acceptance-local
 
 help:
 	@echo "Available targets:"
@@ -24,7 +25,9 @@ help:
 	@echo "  make step-mode-guard     - smoke check agent-run-step and agent-run-step-json"
 	@echo "  make web-evidence-guard  - smoke check intake web evidence artifact"
 	@echo "  make experiment-trace-guard - verify experiment trace artifacts for full/step modes"
+	@echo "  make resume-idempotence-guard - verify agent-resume idempotence for the latest quickstart task"
 	@echo "  make real-no-fallback-gate - run require-real-adapters acceptance smoke"
+	@echo "  make acceptance-local    - run local acceptance bundle (contracts/core/ci + resume/artifacts)"
 	@echo "  make ui-freeze-acceptance - run frozen UI acceptance chain checks + baseline contract"
 	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"
 	@echo "  make real-chain-acceptance-real - run non-stub real-chain acceptance (requires real env)"
@@ -121,6 +124,9 @@ web-evidence-guard:
 experiment-trace-guard:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_experiment_trace.py
 
+resume-idempotence-guard:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_resume_idempotence.py --workspace-root "$(WORKSPACE_ROOT)" --result-json "runs/agent/$(TASK_ID)/quickstart_result.json" --task-id "$(TASK_ID)" --planner-provider "rule_based_v1" --catalog "scripts/adapters/quickstart_catalog.json"
+
 real-no-fallback-gate:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_real_no_fallback.py
 
@@ -173,3 +179,15 @@ release-check:
 	@$(MAKE) quickstart TASK_ID="$(TASK_ID)"
 	@$(MAKE) llm-smoke
 	@$(MAKE) doctor WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+
+acceptance-local:
+	@$(MAKE) test-regressions WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) adapter-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) request-templates-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) step-request-templates-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) intake-contract-guard WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) step-mode-guard WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) web-evidence-guard WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) quickstart TASK_ID="$(TASK_ID)"
+	@$(MAKE) resume-idempotence-guard TASK_ID="$(TASK_ID)" WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/validate_run_artifacts.py --workspace-root "$(WORKSPACE_ROOT)" --result-json "runs/agent/$(TASK_ID)/quickstart_result.json"

@@ -516,6 +516,51 @@ HTML = """
         padding: 5px 8px;
         font-size: 0.72rem;
       }
+      .conversation-summary-card {
+        border: 1px solid #d7e2f3;
+        border-radius: 10px;
+        background: #f8fbff;
+        padding: 8px 10px;
+      }
+      .conversation-summary-card .cs-head {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #5d6b80;
+        margin-bottom: 4px;
+      }
+      .conversation-summary-card .cs-text {
+        font-size: 0.78rem;
+        color: #334155;
+      }
+      .conversation-summary-card .cs-preview {
+        margin: 6px 0 0 0;
+        padding: 7px;
+        border: 1px solid #dbe4f4;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #364152;
+        font-size: 0.72rem;
+        line-height: 1.35;
+        max-height: 120px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+      .conversation-summary-card .cs-actions {
+        margin-top: 8px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .conversation-summary-card .cs-actions button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
+      .conversation-summary-card button:disabled {
+        opacity: 0.54;
+        cursor: not-allowed;
+      }
       .chat-log {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -1187,11 +1232,6 @@ HTML = """
         <div class=\"btn-row\">
           <button type=\"button\" onclick=\"clearMemoryNotes()\">Clear Memory Notes</button>
         </div>
-        <div class=\"btn-row\">
-          <button type=\"button\" id=\"summary_preview_btn\" onclick=\"previewConversationSummary()\">Preview Summary</button>
-          <button type=\"button\" id=\"summary_rebuild_btn\" onclick=\"rebuildConversationSummary()\">Rebuild Summary</button>
-          <button type=\"button\" id=\"summary_clear_btn\" onclick=\"clearConversationSummary()\">Clear Summary</button>
-        </div>
 
         <div class=\"btn-row\">
           <button class=\"primary\" onclick=\"saveProject()\">Save/Load Project</button>
@@ -1305,6 +1345,16 @@ HTML = """
             <button type=\"button\" onclick=\"validateTask()\">Validate Task</button>
             <button type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
             <button type=\"button\" onclick=\"downloadTaskBundle()\">Download Bundle</button>
+          </div>
+        </div>
+        <div class=\"conversation-summary-card\" id=\"conversation_summary_card\">
+          <div class=\"cs-head\">Conversation Summary</div>
+          <div class=\"cs-text\" id=\"conversation_summary_card_text\">summary: loading...</div>
+          <pre class=\"cs-preview\" id=\"conversation_summary_card_preview\">(empty)</pre>
+          <div class=\"cs-actions\">
+            <button type=\"button\" id=\"summary_preview_btn\" onclick=\"previewConversationSummary()\">Preview Summary</button>
+            <button type=\"button\" id=\"summary_rebuild_btn\" onclick=\"rebuildConversationSummary()\">Rebuild Summary</button>
+            <button type=\"button\" id=\"summary_clear_btn\" onclick=\"clearConversationSummary()\">Clear Summary</button>
           </div>
         </div>
         <div class=\"chat-log\" id=\"chat_log\"></div>
@@ -2832,6 +2882,11 @@ HTML = """
         _setButtonDisabled('chat_resume_btn', !canResume, canResume ? '' : (hasTask ? 'Task already success' : noTaskMsg));
         _setButtonDisabled('simple_retry_failed_btn', !canRetryFailed, canRetryFailed ? '' : 'No failed step to retry');
         _setButtonDisabled('simple_resume_btn', !canResume, canResume ? '' : (hasTask ? 'Task already success' : noTaskMsg));
+        const p = state.project && typeof state.project === 'object' ? state.project : {};
+        const opts = (p.options && typeof p.options === 'object') ? p.options : {};
+        const readOnly = Boolean(opts.project_read_only);
+        _setButtonDisabled('summary_rebuild_btn', readOnly, readOnly ? 'Project is read-only' : '');
+        _setButtonDisabled('summary_clear_btn', readOnly, readOnly ? 'Project is read-only' : '');
       }
 
       function renderChatStatusRibbon(summaryPayload, timelinePayload, projectPayload) {
@@ -3627,6 +3682,7 @@ HTML = """
         document.getElementById('clone_project_id').value = '';
         refreshCloneTargetSuggestion();
         refreshWorkspaceHud();
+        renderConversationSummaryCard(project);
       }
 
       function bindWorkspaceUrlNavigation() {
@@ -3897,6 +3953,35 @@ HTML = """
         updateMemoryStatus();
       }
 
+      function renderConversationSummaryCard(project) {
+        const proj = project && typeof project === 'object' ? project : (state.project && typeof state.project === 'object' ? state.project : {});
+        const summary = String((proj && proj.conversation_summary) || '').trim();
+        const updated = String((proj && proj.conversation_summary_updated_at) || '').trim();
+        const opts = (proj && proj.options && typeof proj.options === 'object') ? proj.options : {};
+        const enabled = Boolean(opts.context_summary_enabled !== false);
+        const readOnly = Boolean(opts.project_read_only);
+        const textEle = document.getElementById('conversation_summary_card_text');
+        const previewEle = document.getElementById('conversation_summary_card_preview');
+        if (textEle) {
+          const stateTxt = enabled ? 'enabled' : 'disabled';
+          const updatedTxt = updated ? `, updated=${updated}` : '';
+          textEle.textContent = `summary: ${stateTxt}, chars=${summary.length}${updatedTxt}`;
+        }
+        if (previewEle) {
+          previewEle.textContent = summary || '(empty)';
+        }
+        const rebuildBtn = document.getElementById('summary_rebuild_btn');
+        const clearBtn = document.getElementById('summary_clear_btn');
+        if (rebuildBtn) {
+          rebuildBtn.disabled = Boolean(readOnly);
+          rebuildBtn.title = readOnly ? 'Project is read-only' : '';
+        }
+        if (clearBtn) {
+          clearBtn.disabled = Boolean(readOnly);
+          clearBtn.title = readOnly ? 'Project is read-only' : '';
+        }
+      }
+
       function renderConversationSummaryPreview(project) {
         const proj = project && typeof project === 'object' ? project : (state.project && typeof state.project === 'object' ? state.project : {});
         const summary = String((proj && proj.conversation_summary) || '').trim();
@@ -3918,6 +4003,7 @@ HTML = """
         if (r.status === 200 && r.data && r.data.project && typeof r.data.project === 'object') {
           applyProjectStateToUi(r.data.project);
         }
+        renderConversationSummaryPreview((r.data && r.data.project) ? r.data.project : null);
       }
 
       async function rebuildConversationSummary() {
@@ -6750,6 +6836,7 @@ HTML = """
           renderResumeDiagnostics(state.project || {});
           renderReleaseContextCard({}, {});
           renderQualityGuardCard({}, {});
+          renderConversationSummaryCard(state.project || {});
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -6778,6 +6865,7 @@ HTML = """
         renderResumeDiagnostics(state.project || {});
         renderReleaseContextCard(s, tl);
         renderQualityGuardCard(s, tl);
+        renderConversationSummaryCard(state.project || {});
       }
 
       async function boot() {

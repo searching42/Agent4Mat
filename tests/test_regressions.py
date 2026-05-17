@@ -9605,6 +9605,35 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(clear_payload.get("status"), "fail")
                 self.assertEqual(clear_payload.get("error"), "project_read_only")
 
+    def test_ui_project_conversation_summary_card_reflects_summary_content(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                create_resp = client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_proj_summary_card",
+                        "title": "summary card",
+                    },
+                )
+                self.assertEqual(create_resp.status_code, 200)
+                send_resp = client.post(
+                    "/api/chat/send",
+                    json={
+                        "project_id": "ui_proj_summary_card",
+                        "message": "设计470nm附近且高PLQY分子",
+                        "options": {"planner_provider": "rule_based_v1", "context_summary_enabled": True},
+                    },
+                )
+                self.assertEqual(send_resp.status_code, 200)
+                payload = send_resp.get_json()
+                proj = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                summary = str(proj.get("conversation_summary") or "")
+                self.assertIn("Conversation context summary:", summary)
+                self.assertIn("latest_user_goal", summary)
+
     def test_ui_chat_send_injects_web_preferences_into_intake_request(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -9936,6 +9965,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("renderQualityGuardCard(", html)
         self.assertIn("applyQualitySuggestion()", html)
         self.assertIn("qualityGateFailureNames(", html)
+        self.assertIn("conversation_summary_card", html)
+        self.assertIn("conversation_summary_card_text", html)
+        self.assertIn("conversation_summary_card_preview", html)
+        self.assertIn("renderConversationSummaryCard(", html)
         self.assertIn("ui_release_readiness_card", html)
         self.assertIn("ui_release_readiness_text", html)
         self.assertIn("ui_release_readiness_issues", html)

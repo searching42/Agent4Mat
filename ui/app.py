@@ -2618,6 +2618,16 @@ HTML = """
         return line;
       }
 
+      function formatResumeVisibilityCompact(raw) {
+        const rv = normalizeResumeVisibility(raw);
+        if (!rv.mode && rv.reused < 1 && rv.rerun < 1 && rv.total < 1) {
+          return '';
+        }
+        let line = `resume=${rv.mode || 'unknown'} ${rv.reused}/${rv.rerun}`;
+        if (rv.total > 0) line += `/${rv.total}`;
+        return line;
+      }
+
       function renderEvents(events) {
         const arr = Array.isArray(events) ? events : [];
         if (arr.length < 1) {
@@ -2726,11 +2736,14 @@ HTML = """
         _setButtonDisabled('simple_resume_btn', !canResume, canResume ? '' : (hasTask ? 'Task already success' : noTaskMsg));
       }
 
-      function renderChatStatusRibbon(summaryPayload, timelinePayload) {
+      function renderChatStatusRibbon(summaryPayload, timelinePayload, projectPayload) {
         const textEle = document.getElementById('chat_status_text');
         if (!textEle) return;
         const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
         const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const p = projectPayload && typeof projectPayload === 'object'
+          ? projectPayload
+          : (state.project && typeof state.project === 'object' ? state.project : {});
         const task = taskId() || '-';
         const exec = (s.execution_summary && typeof s.execution_summary === 'object') ? s.execution_summary : {};
         const fail = (s.failure_diagnostics && typeof s.failure_diagnostics === 'object') ? s.failure_diagnostics : {};
@@ -2746,12 +2759,17 @@ HTML = """
         const rel = Object.keys(relFromTimeline).length > 0 ? relFromTimeline : relFromSummary;
         const relGate = String(rel.archive_release_gate_status || '').trim();
         const relOverall = String(rel.release_overall || '').trim();
+        const lastRuntime = (p.last_runtime && typeof p.last_runtime === 'object') ? p.last_runtime : {};
+        const resumeCompact = formatResumeVisibilityCompact(lastRuntime.resume_visibility);
         let text = `task=${task} | status=${runStatus || '-'} | records=${records} | failed=${failedN} | elapsed=${durationText}`;
         if (failureKind || failedStep) {
           text += ` | failure=${failureKind || '-'} step=${failedStep || '-'}`;
         }
         if (relOverall || relGate) {
           text += ` | release=${relOverall || '-'} gate=${relGate || '-'}`;
+        }
+        if (resumeCompact) {
+          text += ` | ${resumeCompact}`;
         }
         textEle.textContent = text;
         setRuntimeElapsedHud(totalMs);
@@ -4951,6 +4969,8 @@ HTML = """
         const latestFailedError = String((row.runtime_health && row.runtime_health.latest_failed_error) || '').trim();
         const latestFailureKind = String((row.runtime_health && row.runtime_health.latest_failure_kind) || '').trim();
         const healthObj = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+        const lastRuntime = (row.last_runtime && typeof row.last_runtime === 'object') ? row.last_runtime : {};
+        const resumeCompact = formatResumeVisibilityCompact(lastRuntime.resume_visibility);
         const healthStatus = String(healthObj.status || 'none').toLowerCase();
         const health = formatRuntimeHealth(healthObj || {});
         const readinessStatus = projectReadinessStatus(row);
@@ -5010,7 +5030,7 @@ HTML = """
         const ratioText = totalSteps > 0 ? `${Math.round(successRatio * 100)}%` : '-';
         const durationText = runtimeSec > 0 ? `${runtimeSec.toFixed(2)}s` : '-';
         const recordCount = Number(healthObj.record_count || 0);
-        runtimeLine.textContent = `recent_duration=${durationText} | success_ratio=${ratioText} (${successSteps}/${totalSteps || 0}) | records=${recordCount}`;
+        runtimeLine.textContent = `recent_duration=${durationText} | success_ratio=${ratioText} (${successSteps}/${totalSteps || 0}) | records=${recordCount}${resumeCompact ? ` | ${resumeCompact}` : ''}`;
         card.appendChild(runtimeLine);
         const progress = document.createElement('div');
         progress.className = 'project-session-progress';
@@ -5253,6 +5273,10 @@ HTML = """
           let readinessPassN = 0;
           let readinessWarnN = 0;
           let readinessFailN = 0;
+          let resumeFullSkipN = 0;
+          let resumePartialN = 0;
+          let resumeFullRerunN = 0;
+          let resumeNoResumeN = 0;
           let ratioSum = 0.0;
           let ratioCnt = 0;
           let pinnedN = 0;
@@ -5274,6 +5298,15 @@ HTML = """
             if (readiness === 'pass') readinessPassN += 1;
             else if (readiness === 'fail') readinessFailN += 1;
             else readinessWarnN += 1;
+            const lastRuntime = (row.last_runtime && typeof row.last_runtime === 'object') ? row.last_runtime : {};
+            const resumeVisibility = lastRuntime.resume_visibility && typeof lastRuntime.resume_visibility === 'object'
+              ? normalizeResumeVisibility(lastRuntime.resume_visibility)
+              : {mode: ''};
+            const modeResume = String(resumeVisibility.mode || '').trim();
+            if (modeResume === 'full_skip') resumeFullSkipN += 1;
+            else if (modeResume === 'partial_rerun') resumePartialN += 1;
+            else if (modeResume === 'full_rerun') resumeFullRerunN += 1;
+            else if (modeResume) resumeNoResumeN += 1;
             const ratio = Number(rh.success_ratio || 0);
             if (Number.isFinite(ratio)) {
               ratioSum += ratio;
@@ -5283,7 +5316,7 @@ HTML = """
           const avgRatio = ratioCnt > 0 ? Math.round((ratioSum / ratioCnt) * 100) : 0;
           const mode = Boolean(controls.groupedView) ? 'grouped' : 'flat';
           const batchLimit = readSessionBatchLimit();
-          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | readiness(pass/warn/fail)=${readinessPassN}/${readinessWarnN}/${readinessFailN} | gate(pass/fail/missing/other)=${gatePassN}/${gateFailN}/${gateMissingN}/${gateOtherN} | avg_success_ratio=${avgRatio}% | mode=${mode} | batch_limit=${batchLimit}`;
+          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | readiness(pass/warn/fail)=${readinessPassN}/${readinessWarnN}/${readinessFailN} | gate(pass/fail/missing/other)=${gatePassN}/${gateFailN}/${gateMissingN}/${gateOtherN} | resume(skip/partial/full/no)=${resumeFullSkipN}/${resumePartialN}/${resumeFullRerunN}/${resumeNoResumeN} | avg_success_ratio=${avgRatio}% | mode=${mode} | batch_limit=${batchLimit}`;
           const failedBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('failed')\\\"]\");
           const successBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('success')\\\"]\");
           const noneBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('none')\\\"]\");
@@ -6381,7 +6414,7 @@ HTML = """
           renderRuntimeProgress(null);
           renderTimelineGroups(null);
           renderMemoryExplorerFromPreview(null, 'runtime');
-          renderChatStatusRibbon({}, {});
+          renderChatStatusRibbon({}, {}, state.project || {});
           renderReleaseContextCard({}, {});
           return;
         }
@@ -6407,7 +6440,7 @@ HTML = """
         renderRuntimeProgress(tl.summary || null);
         renderTimelineGroups(tl);
         renderMemoryExplorerFromSummary(s);
-        renderChatStatusRibbon(s, tl);
+        renderChatStatusRibbon(s, tl, state.project || {});
         renderReleaseContextCard(s, tl);
       }
 
@@ -10020,7 +10053,13 @@ def _chat_resume_from_pending(
 
     if resume.get("status") != "pass":
         _append_message(project, role="assistant", kind="assistant", content=_assistant_cli_fail_text("agent-resume", resume))
-        project["last_runtime"] = {"status": "failed", "duration_ms": elapsed_ms, "operation": "resume", "updated_at": _now_iso()}
+        project["last_runtime"] = {
+            "status": "failed",
+            "duration_ms": elapsed_ms,
+            "operation": "resume",
+            "resume_visibility": resume_visibility,
+            "updated_at": _now_iso(),
+        }
         project = _save_project_state(project)
         return {
             "status": "fail",
@@ -10073,6 +10112,7 @@ def _chat_resume_from_pending(
             "status": "need_user_input",
             "duration_ms": elapsed_ms,
             "operation": "resume",
+            "resume_visibility": resume_visibility,
             "updated_at": _now_iso(),
         }
         project = _save_project_state(project)
@@ -10100,7 +10140,13 @@ def _chat_resume_from_pending(
 
     if rr_status != "success":
         _append_message(project, role="assistant", kind="assistant", content=f"agent-resume 返回未知状态: {rr_status or '(empty)'}")
-        project["last_runtime"] = {"status": "failed", "duration_ms": elapsed_ms, "operation": "resume", "updated_at": _now_iso()}
+        project["last_runtime"] = {
+            "status": "failed",
+            "duration_ms": elapsed_ms,
+            "operation": "resume",
+            "resume_visibility": resume_visibility,
+            "updated_at": _now_iso(),
+        }
         project = _save_project_state(project)
         return {
             "status": "fail",
@@ -10161,6 +10207,7 @@ def _chat_resume_from_pending(
         "operation": "resume",
         "run_label": run_label,
         "result_dir": result_dir,
+        "resume_visibility": resume_visibility,
         "updated_at": _now_iso(),
     }
     project = _save_project_state(project)

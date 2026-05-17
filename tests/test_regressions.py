@@ -9918,7 +9918,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("/api/chat/pending-continue", html)
         self.assertIn("normalizeResumeVisibility(", html)
         self.assertIn("formatResumeVisibilityLine(", html)
+        self.assertIn("formatResumeVisibilityCompact(", html)
         self.assertIn("resume_visibility", html)
+        self.assertIn("resume(skip/partial/full/no)", html)
         self.assertIn("SESSION_BOARD_KEY", html)
         self.assertIn("loadSessionBoardState()", html)
         self.assertIn("saveSessionBoardState(", html)
@@ -10860,6 +10862,10 @@ class UiPrototypeTests(unittest.TestCase):
                 project_out = payload.get("project") if isinstance(payload.get("project"), dict) else {}
                 self.assertEqual(project_out.get("current_task_id"), "ui_chat_pending_task")
                 self.assertEqual(project_out.get("pending_input"), {})
+                last_runtime = project_out.get("last_runtime") if isinstance(project_out.get("last_runtime"), dict) else {}
+                self.assertEqual(str(last_runtime.get("operation") or ""), "resume")
+                runtime_vis = last_runtime.get("resume_visibility") if isinstance(last_runtime.get("resume_visibility"), dict) else {}
+                self.assertEqual(str(runtime_vis.get("mode") or ""), "partial_rerun")
                 cmd = mocked.call_args.args[0]
                 self.assertIn("agent-resume", cmd)
                 self.assertIn("--candidate-data", cmd)
@@ -10963,6 +10969,10 @@ class UiPrototypeTests(unittest.TestCase):
                 project_out = payload.get("project") if isinstance(payload.get("project"), dict) else {}
                 self.assertEqual(project_out.get("current_task_id"), "ui_chat_pending_continue_task")
                 self.assertEqual(project_out.get("pending_input"), {})
+                last_runtime = project_out.get("last_runtime") if isinstance(project_out.get("last_runtime"), dict) else {}
+                self.assertEqual(str(last_runtime.get("operation") or ""), "resume")
+                runtime_vis = last_runtime.get("resume_visibility") if isinstance(last_runtime.get("resume_visibility"), dict) else {}
+                self.assertEqual(str(runtime_vis.get("mode") or ""), "full_skip")
                 cmd = mocked.call_args.args[0]
                 self.assertIn("agent-resume", cmd)
                 self.assertNotIn("--candidate-data", cmd)

@@ -1003,6 +1003,7 @@ HTML = """
           </div>
           <div class=\"project-board-summary\" id=\"project_batch_history_summary\">batch_history: -</div>
           <div class=\"project-board-summary\" id=\"project_batch_history_metrics\">batch_metrics: -</div>
+          <div class=\"project-board-summary\" id=\"project_batch_compare_summary\">batch_compare: -</div>
           <div class=\"project-board-summary\" id=\"project_failed_queue_summary\">failed_queue: -</div>
           <div id=\"project_batch_history_list\" class=\"project-batch-history-list\"><div class=\"muted\">(none)</div></div>
           <pre id=\"project_batch_history\" style=\"margin: 0 0 8px 0; max-height: 120px; overflow: auto;\">(none)</pre>
@@ -4074,6 +4075,32 @@ HTML = """
         }
       }
 
+      function renderBatchCompareSummary(payload) {
+        const head = document.getElementById('project_batch_compare_summary');
+        if (!head) return;
+        const obj = (payload && typeof payload === 'object') ? payload : {};
+        const status = String(obj.status || '').trim().toLowerCase();
+        if (!obj || status !== 'pass') {
+          head.textContent = `batch_compare: ${status || 'idle'}`;
+          return;
+        }
+        const primaryId = String(obj.primary_export_id || '').trim();
+        const otherId = String(obj.other_export_id || '').trim();
+        const diff = (obj.diff && typeof obj.diff === 'object') ? obj.diff : {};
+        const gate = (obj.release_gate_diff && typeof obj.release_gate_diff === 'object') ? obj.release_gate_diff : {};
+        const delta = (gate.delta && typeof gate.delta === 'object') ? gate.delta : {};
+        const gatePrimary = String(gate.primary_status || '').trim() || '-';
+        const gateOther = String(gate.other_status || '').trim() || '-';
+        const passDelta = Number(delta.pass || 0);
+        const failDelta = Number(delta.fail || 0);
+        const missingDelta = Number(delta.missing || 0);
+        const otherDelta = Number(delta.other || 0);
+        const changed = Number(diff.changed_count || 0);
+        const onlyPrimary = Number(diff.only_in_primary_count || 0);
+        const onlyOther = Number(diff.only_in_other_count || 0);
+        head.textContent = `batch_compare: ${primaryId || '-'} vs ${otherId || '-'} | changed=${changed} only_primary=${onlyPrimary} only_other=${onlyOther} | gate=${gatePrimary}->${gateOther} delta(pass/fail/missing/other)=${passDelta}/${failDelta}/${missingDelta}/${otherDelta}`;
+      }
+
       async function loadFailedReplayQueueById() {
         const pid = selectedProjectId();
         const eid = readBatchExportId();
@@ -4121,14 +4148,17 @@ HTML = """
         const other = readBatchCompareExportId();
         if (!pid || !isSafeProjectId(pid)) {
           renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          renderBatchCompareSummary({status: 'fail'});
           return;
         }
         if (!primary || !other) {
           renderJsonOut({status: 'fail', error: 'missing export_id for compare'});
+          renderBatchCompareSummary({status: 'fail'});
           return;
         }
         const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports/compare?primary_export_id=${encodeURIComponent(primary)}&other_export_id=${encodeURIComponent(other)}`);
         renderJsonOut(r.data);
+        renderBatchCompareSummary(r.data);
       }
 
       function downloadBatchExportById(format) {

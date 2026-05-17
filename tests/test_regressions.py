@@ -9524,6 +9524,87 @@ class UiPrototypeTests(unittest.TestCase):
                 request_text = str(cmd[cmd.index("--request") + 1])
                 self.assertNotIn("Conversation context summary:", request_text)
 
+    def test_ui_project_conversation_summary_rebuild_get_clear(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                create_resp = client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_proj_summary_ops",
+                        "title": "summary ops",
+                    },
+                )
+                self.assertEqual(create_resp.status_code, 200)
+                send_resp = client.post(
+                    "/api/chat/send",
+                    json={
+                        "project_id": "ui_proj_summary_ops",
+                        "message": "/step clean_dataset",
+                        "options": {"planner_provider": "rule_based_v1"},
+                    },
+                )
+                self.assertEqual(send_resp.status_code, 200)
+
+                get_resp = client.get("/api/projects/ui_proj_summary_ops/conversation-summary")
+                self.assertEqual(get_resp.status_code, 200)
+                get_payload = get_resp.get_json()
+                self.assertEqual(get_payload.get("status"), "pass")
+                self.assertTrue(str(get_payload.get("summary") or "").strip())
+                self.assertGreater(int(get_payload.get("summary_chars") or 0), 0)
+
+                rebuild_resp = client.post("/api/projects/ui_proj_summary_ops/conversation-summary/rebuild", json={})
+                self.assertEqual(rebuild_resp.status_code, 200)
+                rebuild_payload = rebuild_resp.get_json()
+                self.assertEqual(rebuild_payload.get("status"), "pass")
+                self.assertEqual(rebuild_payload.get("action"), "rebuild")
+                self.assertTrue(str(rebuild_payload.get("summary") or "").strip())
+
+                clear_resp = client.post("/api/projects/ui_proj_summary_ops/conversation-summary/clear", json={})
+                self.assertEqual(clear_resp.status_code, 200)
+                clear_payload = clear_resp.get_json()
+                self.assertEqual(clear_payload.get("status"), "pass")
+                self.assertEqual(clear_payload.get("action"), "clear")
+                self.assertEqual(int(clear_payload.get("summary_chars", -1)), 0)
+                self.assertEqual(str(clear_payload.get("summary") or ""), "")
+
+                get_after_clear = client.get("/api/projects/ui_proj_summary_ops/conversation-summary")
+                self.assertEqual(get_after_clear.status_code, 200)
+                get_after_payload = get_after_clear.get_json()
+                self.assertEqual(get_after_payload.get("status"), "pass")
+                self.assertEqual(int(get_after_payload.get("summary_chars", -1)), 0)
+                self.assertEqual(str(get_after_payload.get("summary") or ""), "")
+
+    def test_ui_project_conversation_summary_mutation_respects_read_only(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                create_resp = client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_proj_summary_ro",
+                        "title": "summary ro",
+                        "options": {"project_read_only": True},
+                    },
+                )
+                self.assertEqual(create_resp.status_code, 200)
+
+                rebuild_resp = client.post("/api/projects/ui_proj_summary_ro/conversation-summary/rebuild", json={})
+                self.assertEqual(rebuild_resp.status_code, 409)
+                rebuild_payload = rebuild_resp.get_json()
+                self.assertEqual(rebuild_payload.get("status"), "fail")
+                self.assertEqual(rebuild_payload.get("error"), "project_read_only")
+
+                clear_resp = client.post("/api/projects/ui_proj_summary_ro/conversation-summary/clear", json={})
+                self.assertEqual(clear_resp.status_code, 409)
+                clear_payload = clear_resp.get_json()
+                self.assertEqual(clear_payload.get("status"), "fail")
+                self.assertEqual(clear_payload.get("error"), "project_read_only")
+
     def test_ui_chat_send_injects_web_preferences_into_intake_request(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -9632,7 +9713,11 @@ class UiPrototypeTests(unittest.TestCase):
                         json={
                             "project_id": "ui_chat_mem_off",
                             "message": "设计470nm附近且高PLQY分子",
-                            "options": {"planner_provider": "rule_based_v1", "memory_enabled": False},
+                            "options": {
+                                "planner_provider": "rule_based_v1",
+                                "memory_enabled": False,
+                                "context_summary_enabled": False,
+                            },
                         },
                     )
                 self.assertEqual(resp.status_code, 200)
@@ -9641,6 +9726,7 @@ class UiPrototypeTests(unittest.TestCase):
                 cmd = mocked.call_args.args[0]
                 request_text = str(cmd[cmd.index("--request") + 1])
                 self.assertNotIn("Project memory context:", request_text)
+                self.assertNotIn("Conversation context summary:", request_text)
                 self.assertEqual(request_text, "设计470nm附近且高PLQY分子")
 
     def test_ui_project_history_roundtrip_preserves_project_identity(self) -> None:
@@ -9804,6 +9890,15 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("memory_notes", html)
         self.assertIn("context_summary_enabled", html)
         self.assertIn("context_summary_status", html)
+        self.assertIn("summary_preview_btn", html)
+        self.assertIn("summary_rebuild_btn", html)
+        self.assertIn("summary_clear_btn", html)
+        self.assertIn("previewConversationSummary()", html)
+        self.assertIn("rebuildConversationSummary()", html)
+        self.assertIn("clearConversationSummary()", html)
+        self.assertIn("/api/projects/${encodeURIComponent(pid)}/conversation-summary", html)
+        self.assertIn("/api/projects/${encodeURIComponent(pid)}/conversation-summary/rebuild", html)
+        self.assertIn("/api/projects/${encodeURIComponent(pid)}/conversation-summary/clear", html)
         self.assertIn("updateMemoryStatus()", html)
         self.assertIn("pending_hints_box", html)
         self.assertIn("applyPendingSuggestedCandidateData(true)", html)

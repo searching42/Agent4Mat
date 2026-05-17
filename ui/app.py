@@ -1187,6 +1187,11 @@ HTML = """
         <div class=\"btn-row\">
           <button type=\"button\" onclick=\"clearMemoryNotes()\">Clear Memory Notes</button>
         </div>
+        <div class=\"btn-row\">
+          <button type=\"button\" id=\"summary_preview_btn\" onclick=\"previewConversationSummary()\">Preview Summary</button>
+          <button type=\"button\" id=\"summary_rebuild_btn\" onclick=\"rebuildConversationSummary()\">Rebuild Summary</button>
+          <button type=\"button\" id=\"summary_clear_btn\" onclick=\"clearConversationSummary()\">Clear Summary</button>
+        </div>
 
         <div class=\"btn-row\">
           <button class=\"primary\" onclick=\"saveProject()\">Save/Load Project</button>
@@ -3890,6 +3895,53 @@ HTML = """
       function clearMemoryNotes() {
         document.getElementById('memory_notes').value = '';
         updateMemoryStatus();
+      }
+
+      function renderConversationSummaryPreview(project) {
+        const proj = project && typeof project === 'object' ? project : (state.project && typeof state.project === 'object' ? state.project : {});
+        const summary = String((proj && proj.conversation_summary) || '').trim();
+        const updated = String((proj && proj.conversation_summary_updated_at) || '').trim();
+        renderJsonOut({
+          status: 'pass',
+          action: 'preview_conversation_summary',
+          project_id: selectedProjectId(),
+          summary_chars: summary.length,
+          summary_updated_at: updated,
+          summary: summary,
+        });
+      }
+
+      async function previewConversationSummary() {
+        const pid = selectedProjectId();
+        const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/conversation-summary`);
+        renderJsonOut(r.data);
+        if (r.status === 200 && r.data && r.data.project && typeof r.data.project === 'object') {
+          applyProjectStateToUi(r.data.project);
+        }
+      }
+
+      async function rebuildConversationSummary() {
+        const pid = selectedProjectId();
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/conversation-summary/rebuild`, {});
+        renderJsonOut(r.data);
+        if (r.status === 200 && r.data && r.data.project && typeof r.data.project === 'object') {
+          applyProjectStateToUi(r.data.project);
+          renderEvents([{stage: 'conversation_summary_rebuild', status: 'pass', operation: pid}]);
+        } else if (r.status >= 400) {
+          renderEvents([{stage: 'conversation_summary_rebuild', status: 'fail', operation: pid}]);
+        }
+      }
+
+      async function clearConversationSummary() {
+        const pid = selectedProjectId();
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/conversation-summary/clear`, {});
+        renderJsonOut(r.data);
+        if (r.status === 200 && r.data && r.data.project && typeof r.data.project === 'object') {
+          applyProjectStateToUi(r.data.project);
+          renderEvents([{stage: 'conversation_summary_clear', status: 'pass', operation: pid}]);
+        } else if (r.status >= 400) {
+          renderEvents([{stage: 'conversation_summary_clear', status: 'fail', operation: pid}]);
+        }
       }
 
       function normalizeMemoryFacts(raw) {
@@ -8585,10 +8637,19 @@ def _summary_message_line(msg: Dict[str, Any]) -> str:
     return f"- {prefix}: {content}"
 
 
-def _build_conversation_summary(project: Dict[str, Any]) -> str:
+def _summary_single_line(raw: Any, *, max_chars: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not text:
+        return ""
+    if len(text) > max_chars:
+        text = text[:max_chars] + "..."
+    return text
+
+
+def _summary_recent_dialog(project: Dict[str, Any]) -> List[Dict[str, Any]]:
     messages = project.get("messages")
     if not isinstance(messages, list):
-        return ""
+        return []
     usable: List[Dict[str, Any]] = []
     for item in messages:
         if not isinstance(item, dict):
@@ -8602,11 +8663,144 @@ def _build_conversation_summary(project: Dict[str, Any]) -> str:
         if not str(item.get("content") or "").strip():
             continue
         usable.append(item)
-    if not usable:
+    return usable[-SUMMARY_RECENT_MESSAGE_LIMIT:]
+
+
+def _summary_latest_user_goal(recent_dialog: List[Dict[str, Any]]) -> str:
+    for item in reversed(recent_dialog):
+        if str(item.get("role") or "").strip().lower() != "user":
+            continue
+        goal = _summary_single_line(item.get("content"), max_chars=200)
+        if goal:
+            return goal
+    return ""
+
+
+def _summary_latest_assistant_action(recent_dialog: List[Dict[str, Any]]) -> str:
+    keywords = (
+        "下一步",
+        "建议",
+        "请",
+        "执行",
+        "运行",
+        "设置",
+        "next",
+        "suggest",
+        "please",
+        "run",
+        "execute",
+    )
+    fallback = ""
+    for item in reversed(recent_dialog):
+        if str(item.get("role") or "").strip().lower() != "assistant":
+            continue
+        text = _summary_single_line(item.get("content"), max_chars=200)
+        if not text:
+            continue
+        if not fallback:
+            fallback = text
+        lower = text.lower()
+        if any(k in text for k in keywords if not k.isascii()) or any(k in lower for k in keywords if k.isascii()):
+            return text
+    return fallback
+
+
+def _summary_constraints(project: Dict[str, Any]) -> str:
+    task = _load_project_task_payload(project)
+    if not isinstance(task, dict):
         return ""
-    recent = usable[-SUMMARY_RECENT_MESSAGE_LIMIT:]
-    lines: List[str] = []
-    lines.append("Recent conversation summary:")
+    parts: List[str] = []
+    prop = _summary_single_line(task.get("property"), max_chars=72)
+    if prop:
+        parts.append(f"property={prop}")
+    target_range = task.get("range") if isinstance(task.get("range"), dict) else {}
+    if isinstance(target_range, dict) and target_range:
+        range_chunks: List[str] = []
+        for rk in ("target", "center", "min", "max", "unit"):
+            if rk not in target_range:
+                continue
+            rv = _summary_single_line(target_range.get(rk), max_chars=24)
+            if rv:
+                range_chunks.append(f"{rk}={rv}")
+        if range_chunks:
+            parts.append("range(" + ", ".join(range_chunks[:5]) + ")")
+    n_structures = task.get("n_structures")
+    if n_structures is not None:
+        parts.append(f"n_structures={n_structures}")
+    candidate_data = _summary_single_line(task.get("candidate_data"), max_chars=96)
+    if candidate_data:
+        parts.append(f"candidate_data={candidate_data}")
+    train_data = _summary_single_line(task.get("train_data"), max_chars=96)
+    if train_data:
+        parts.append(f"train_data={train_data}")
+    prediction_model = _summary_single_line(task.get("prediction_model"), max_chars=64)
+    if prediction_model:
+        parts.append(f"prediction_model={prediction_model}")
+    constraints = task.get("constraints") if isinstance(task.get("constraints"), dict) else {}
+    if isinstance(constraints, dict) and constraints:
+        c_parts: List[str] = []
+        for ck in ("wl_min", "wl_max", "plqy_min", "banned_alerts", "mw_min", "mw_max"):
+            if ck not in constraints:
+                continue
+            cv = _summary_single_line(constraints.get(ck), max_chars=48)
+            if cv:
+                c_parts.append(f"{ck}={cv}")
+        if c_parts:
+            parts.append("constraints(" + ", ".join(c_parts[:6]) + ")")
+    if not parts:
+        return ""
+    return _summary_single_line("; ".join(parts), max_chars=520)
+
+
+def _summary_latest_failure(project: Dict[str, Any]) -> str:
+    runtime = _project_runtime_health(project)
+    failed_steps = _as_int(runtime.get("failed_steps"), 0)
+    if failed_steps > 0:
+        segs: List[str] = []
+        step = _summary_single_line(runtime.get("latest_failed_step"), max_chars=72)
+        kind = _summary_single_line(runtime.get("latest_failure_kind"), max_chars=48)
+        err = _summary_single_line(runtime.get("latest_failed_error"), max_chars=120)
+        if step:
+            segs.append(f"step={step}")
+        if kind:
+            segs.append(f"kind={kind}")
+        if err:
+            segs.append(f"error={err}")
+        if segs:
+            return ", ".join(segs)
+    pending = project.get("pending_input") if isinstance(project.get("pending_input"), dict) else {}
+    missing = pending.get("missing_fields") if isinstance(pending.get("missing_fields"), list) else []
+    missing_norm = [str(x).strip() for x in missing if str(x).strip()]
+    if missing_norm:
+        return f"need_info missing_fields={', '.join(missing_norm[:6])}"
+    last_runtime = project.get("last_runtime") if isinstance(project.get("last_runtime"), dict) else {}
+    if str(last_runtime.get("status") or "").strip().lower() == "failed":
+        op = _summary_single_line(last_runtime.get("operation"), max_chars=48)
+        if op:
+            return f"operation={op}, status=failed"
+        return "status=failed"
+    return ""
+
+
+def _build_conversation_summary(project: Dict[str, Any]) -> str:
+    recent = _summary_recent_dialog(project)
+    latest_user_goal = _summary_latest_user_goal(recent)
+    key_constraints = _summary_constraints(project)
+    latest_failure = _summary_latest_failure(project)
+    latest_assistant_action = _summary_latest_assistant_action(recent)
+    if not recent and not latest_user_goal and not key_constraints and not latest_failure and not latest_assistant_action:
+        return ""
+    lines: List[str] = ["Conversation context summary:"]
+    if latest_user_goal:
+        lines.append(f"- latest_user_goal: {latest_user_goal}")
+    if key_constraints:
+        lines.append(f"- key_constraints: {key_constraints}")
+    if latest_failure:
+        lines.append(f"- latest_failure: {latest_failure}")
+    if latest_assistant_action:
+        lines.append(f"- latest_assistant_action: {latest_assistant_action}")
+    if recent:
+        lines.append("- recent_dialog:")
     for row in recent:
         line = _summary_message_line(row)
         if line:
@@ -8674,7 +8868,10 @@ def _compose_intake_request_text(*, message: str, project: Dict[str, Any], optio
     if bool(options.get("context_summary_enabled", True)):
         summary = _normalize_conversation_summary(project.get("conversation_summary"))
         if summary:
-            base = f"{base}\n\nConversation context summary:\n{summary}"
+            if summary.lower().startswith("conversation context summary:"):
+                base = f"{base}\n\n{summary}"
+            else:
+                base = f"{base}\n\nConversation context summary:\n{summary}"
     return base, memory_injected
 
 
@@ -11045,6 +11242,113 @@ def api_project_history(project_id: str):
             "project": _project_summary(project),
             "messages": _recent_messages(project, limit=limit),
             "attachments": project.get("attachments") if isinstance(project.get("attachments"), list) else [],
+        }
+    )
+
+
+@app.get("/api/projects/<project_id>/conversation-summary")
+def api_project_conversation_summary(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    summary = _normalize_conversation_summary(project.get("conversation_summary"))
+    updated_at = str(project.get("conversation_summary_updated_at") or "").strip()
+    return jsonify(
+        {
+            "status": "pass",
+            "project_id": pid,
+            "summary": summary,
+            "summary_chars": len(summary),
+            "summary_updated_at": updated_at,
+            "project": _project_summary(project),
+        }
+    )
+
+
+@app.post("/api/projects/<project_id>/conversation-summary/rebuild")
+def api_project_conversation_summary_rebuild(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    if _project_is_read_only(project):
+        return jsonify({"status": "fail", "error": "project_read_only", "project_id": pid}), 409
+    before = _normalize_conversation_summary(project.get("conversation_summary"))
+    _refresh_conversation_summary(project)
+    after = _normalize_conversation_summary(project.get("conversation_summary"))
+    if after != before:
+        _append_message(
+            project,
+            role="system",
+            kind="summary_rebuild",
+            content="Conversation summary rebuilt.",
+            meta={"previous_chars": len(before), "new_chars": len(after)},
+        )
+    saved = _save_project_state(project)
+    summary = _normalize_conversation_summary(saved.get("conversation_summary"))
+    updated_at = str(saved.get("conversation_summary_updated_at") or "").strip()
+    return jsonify(
+        {
+            "status": "pass",
+            "action": "rebuild",
+            "project_id": pid,
+            "changed": after != before,
+            "summary": summary,
+            "summary_chars": len(summary),
+            "summary_updated_at": updated_at,
+            "project": _project_summary(saved),
+            "messages": _recent_messages(saved),
+        }
+    )
+
+
+@app.post("/api/projects/<project_id>/conversation-summary/clear")
+def api_project_conversation_summary_clear(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    if _project_is_read_only(project):
+        return jsonify({"status": "fail", "error": "project_read_only", "project_id": pid}), 409
+    before = _normalize_conversation_summary(project.get("conversation_summary"))
+    project["conversation_summary"] = ""
+    project["conversation_summary_updated_at"] = ""
+    if before:
+        _append_message(
+            project,
+            role="system",
+            kind="summary_clear",
+            content="Conversation summary cleared.",
+            meta={"cleared_chars": len(before)},
+        )
+        # Keep clear action deterministic: appending system trace should not rehydrate summary.
+        project["conversation_summary"] = ""
+        project["conversation_summary_updated_at"] = ""
+    saved = _save_project_state(project)
+    return jsonify(
+        {
+            "status": "pass",
+            "action": "clear",
+            "project_id": pid,
+            "cleared": bool(before),
+            "summary": "",
+            "summary_chars": 0,
+            "summary_updated_at": "",
+            "project": _project_summary(saved),
+            "messages": _recent_messages(saved),
         }
     )
 

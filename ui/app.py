@@ -516,6 +516,51 @@ HTML = """
         padding: 5px 8px;
         font-size: 0.72rem;
       }
+      .agent-guidance-card {
+        border: 1px solid #d7e2f3;
+        border-radius: 10px;
+        background: #f8fbff;
+        padding: 8px 10px;
+      }
+      .agent-guidance-card .ag-head {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #5d6b80;
+        margin-bottom: 4px;
+      }
+      .agent-guidance-card .ag-text {
+        font-size: 0.8rem;
+        color: #334155;
+      }
+      .agent-guidance-card .ag-detail {
+        margin-top: 4px;
+        font-size: 0.72rem;
+        color: #6b7280;
+      }
+      .agent-guidance-card .ag-actions {
+        margin-top: 8px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .agent-guidance-card .ag-actions button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
+      .agent-guidance-card.state-pass {
+        border-color: #b8e5ce;
+        background: #ecfbf3;
+      }
+      .agent-guidance-card.state-warn {
+        border-color: #f3ddb0;
+        background: #fff8e8;
+      }
+      .agent-guidance-card.state-fail {
+        border-color: #f0c1c1;
+        background: #fff1f1;
+      }
       .conversation-summary-card {
         border: 1px solid #d7e2f3;
         border-radius: 10px;
@@ -1320,6 +1365,16 @@ HTML = """
             <button id=\"chat_retry_failed_btn\" onclick=\"retryFailedStep()\">Retry Failed</button>
             <button id=\"chat_resume_btn\" onclick=\"retryCurrentTask()\">Resume</button>
             <button id=\"chat_bundle_btn\" onclick=\"downloadTaskBundle()\">Bundle</button>
+          </div>
+        </div>
+        <div class=\"agent-guidance-card\" id=\"agent_guidance_card\">
+          <div class=\"ag-head\">Agent Guidance</div>
+          <div class=\"ag-text\" id=\"agent_guidance_text\">guidance: waiting for first task</div>
+          <div class=\"ag-detail\" id=\"agent_guidance_detail\">detail: -</div>
+          <div class=\"ag-actions\">
+            <button type=\"button\" id=\"agent_guidance_action_btn\" onclick=\"applyAgentGuidanceAction()\">Open Summary</button>
+            <button type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
+            <button type=\"button\" onclick=\"previewConversationSummary()\">Preview Memory</button>
           </div>
         </div>
         <div class=\"release-context-card\" id=\"release_context_card\">
@@ -3086,8 +3141,46 @@ HTML = """
         }
       }
 
-      async function applyQualitySuggestion() {
-        const btn = document.getElementById('quality_guard_suggest_btn');
+      function renderAgentGuidanceCard(summaryPayload, timelinePayload) {
+        const card = document.getElementById('agent_guidance_card');
+        const textEle = document.getElementById('agent_guidance_text');
+        const detailEle = document.getElementById('agent_guidance_detail');
+        const actionBtn = document.getElementById('agent_guidance_action_btn');
+        if (!card || !textEle || !detailEle || !actionBtn) return;
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const suggestion = computeQualitySuggestion(s, t);
+        const code = String(suggestion.code || 'open_summary').trim();
+        const label = String(suggestion.label || 'Open Summary').trim() || 'Open Summary';
+        const severityRaw = String(suggestion.severity || '').trim().toLowerCase();
+        const severity = severityRaw === 'pass' ? 'pass' : (severityRaw === 'warn' ? 'warn' : 'fail');
+        const reason = String(suggestion.reason || '').trim() || '-';
+        const exec = (s.execution_summary && typeof s.execution_summary === 'object') ? s.execution_summary : {};
+        const runStatus = String(exec.status || s.status || '-').trim();
+        const failedN = Number(exec.failed_count || 0);
+        const recordN = Number(exec.record_count || 0);
+        const relFromSummary = (s.release_context && typeof s.release_context === 'object') ? s.release_context : {};
+        const relFromTimeline = (t.release_context && typeof t.release_context === 'object') ? t.release_context : {};
+        const rel = Object.keys(relFromTimeline).length > 0 ? relFromTimeline : relFromSummary;
+        const gate = String(rel.archive_release_gate_status || '-').trim() || '-';
+
+        textEle.textContent = `next: ${label} | severity=${severity} | run=${runStatus} | records=${recordN} | failed=${failedN} | gate=${gate}`;
+        detailEle.textContent = `detail: ${reason}`;
+        actionBtn.textContent = label;
+        actionBtn.dataset.action = code;
+        actionBtn.dataset.severity = severity;
+        card.classList.remove('state-pass', 'state-warn', 'state-fail');
+        if (severity === 'pass') {
+          card.classList.add('state-pass');
+        } else if (severity === 'warn') {
+          card.classList.add('state-warn');
+        } else {
+          card.classList.add('state-fail');
+        }
+      }
+
+      async function applyAgentGuidanceAction() {
+        const btn = document.getElementById('agent_guidance_action_btn');
         const action = String((btn && btn.dataset && btn.dataset.action) || '').trim() || 'open_summary';
         if (action === 'retry_failed_step') {
           await retryFailedStep();
@@ -3106,6 +3199,16 @@ HTML = """
           return;
         }
         await showCurrentTaskSummaryInline();
+      }
+
+      async function applyQualitySuggestion() {
+        const btn = document.getElementById('quality_guard_suggest_btn');
+        const action = String((btn && btn.dataset && btn.dataset.action) || '').trim() || 'open_summary';
+        const guidanceBtn = document.getElementById('agent_guidance_action_btn');
+        if (guidanceBtn) {
+          guidanceBtn.dataset.action = action;
+        }
+        await applyAgentGuidanceAction();
       }
 
       function renderUiReleaseReadiness(payload) {
@@ -6837,6 +6940,7 @@ HTML = """
           renderReleaseContextCard({}, {});
           renderQualityGuardCard({}, {});
           renderConversationSummaryCard(state.project || {});
+          renderAgentGuidanceCard({}, {});
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -6866,6 +6970,7 @@ HTML = """
         renderReleaseContextCard(s, tl);
         renderQualityGuardCard(s, tl);
         renderConversationSummaryCard(state.project || {});
+        renderAgentGuidanceCard(s, tl);
       }
 
       async function boot() {

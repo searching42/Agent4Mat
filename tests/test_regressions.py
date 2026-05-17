@@ -11165,6 +11165,34 @@ class UiPrototypeTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            (a / "release_evidence.json").write_text(
+                json.dumps(
+                    {
+                        "overall": "fail",
+                        "baseline_context": {
+                            "base_task_id": "tg_a",
+                            "archive_release_gate_status": "fail",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (b / "release_evidence.json").write_text(
+                json.dumps(
+                    {
+                        "overall": "pass",
+                        "baseline_context": {
+                            "base_task_id": "tg_b",
+                            "archive_release_gate_status": "pass",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             os.utime(a, (1700000000, 1700000000))
             os.utime(b, (1800000000, 1800000000))
             with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
@@ -11177,6 +11205,11 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(int(payload.get("task_count") or 0), 2)
             failed_items = payload.get("failed_items") if isinstance(payload.get("failed_items"), list) else []
             self.assertTrue(any(isinstance(it, dict) and str(it.get("name") or "").endswith(":score_candidates") for it in failed_items))
+            release_items = payload.get("release_task_items") if isinstance(payload.get("release_task_items"), list) else []
+            self.assertEqual(len(release_items), 2)
+            gate_counts = payload.get("release_gate_counts") if isinstance(payload.get("release_gate_counts"), dict) else {}
+            self.assertEqual(int(gate_counts.get("pass") or 0), 1)
+            self.assertEqual(int(gate_counts.get("fail") or 0), 1)
 
     def test_ui_timeline_groups_endpoint_rejects_invalid_scope(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -2671,10 +2671,14 @@ HTML = """
         const running = Array.isArray(payload && payload.running_items) ? payload.running_items : [];
         const completed = Array.isArray(payload && payload.completed_items) ? payload.completed_items : [];
         const failed = Array.isArray(payload && payload.failed_items) ? payload.failed_items : [];
+        const gateCounts = (payload && typeof payload.release_gate_counts === 'object') ? payload.release_gate_counts : {};
+        const gatePass = Number(gateCounts.pass || 0);
+        const gateFail = Number(gateCounts.fail || 0);
+        const gateMissing = Number(gateCounts.missing || 0);
         const total = Number(payload && payload.total_steps ? payload.total_steps : (running.length + completed.length + failed.length));
         const scope = String(payload && payload.scope ? payload.scope : 'recent_tasks');
         const tasksN = Number(payload && payload.task_count ? payload.task_count : 0);
-        head.textContent = `Run Timeline Groups (${scope}, tasks=${tasksN}, total=${total}, success=${completed.length}, failed=${failed.length})`;
+        head.textContent = `Run Timeline Groups (${scope}, tasks=${tasksN}, total=${total}, success=${completed.length}, failed=${failed.length}, gate_pass=${gatePass}, gate_fail=${gateFail}, gate_missing=${gateMissing})`;
         setListItems('tg_running', running);
         setListItems('tg_completed', completed);
         setListItems('tg_failed', failed);
@@ -6451,6 +6455,8 @@ def _timeline_groups_recent_tasks(*, limit: int) -> Dict[str, Any]:
     running_items: List[Dict[str, Any]] = []
     completed_items: List[Dict[str, Any]] = []
     failed_items: List[Dict[str, Any]] = []
+    release_task_items: List[Dict[str, Any]] = []
+    release_gate_counts: Dict[str, int] = {"pass": 0, "fail": 0, "missing": 0, "other": 0}
     task_ids: List[str] = []
     for item in selected:
         tid = str(item.get("task_id") or "")
@@ -6458,6 +6464,20 @@ def _timeline_groups_recent_tasks(*, limit: int) -> Dict[str, Any]:
         if not tid or not isinstance(run_dir, Path):
             continue
         task_ids.append(tid)
+        release_ctx = _release_context_for_task(tid, run_dir)
+        gate_status = str(release_ctx.get("archive_release_gate_status") or "missing").strip().lower() or "missing"
+        if gate_status not in release_gate_counts:
+            release_gate_counts["other"] = int(release_gate_counts.get("other") or 0) + 1
+        else:
+            release_gate_counts[gate_status] = int(release_gate_counts.get(gate_status) or 0) + 1
+        release_task_items.append(
+            {
+                "task_id": tid,
+                "base_task_id": str(release_ctx.get("base_task_id") or ""),
+                "release_overall": str(release_ctx.get("release_overall") or ""),
+                "release_gate_status": str(release_ctx.get("archive_release_gate_status") or ""),
+            }
+        )
         execution = _load_json_if_exists(run_dir / "execution.json")
         if not isinstance(execution, dict):
             continue
@@ -6484,6 +6504,8 @@ def _timeline_groups_recent_tasks(*, limit: int) -> Dict[str, Any]:
         "running_items": running_items,
         "completed_items": completed_items,
         "failed_items": failed_items,
+        "release_task_items": release_task_items,
+        "release_gate_counts": release_gate_counts,
         "tasks": task_ids,
     }
 

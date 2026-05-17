@@ -9869,7 +9869,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("buildBatchCompareDetailsText(", html)
         self.assertIn("applyBatchComparePathFilterToUi()", html)
         self.assertIn("aggregateReleaseGateStats(", html)
+        self.assertIn("aggregateReadinessStats(", html)
         self.assertIn("normalizeReleaseGateStats(", html)
+        self.assertIn("normalizeReadinessStats(", html)
         self.assertIn("applyReplayPreset('safe')", html)
         self.assertIn("applyReplayPreset('fast')", html)
         self.assertIn("applyReplayPreset('dryrun')", html)
@@ -9886,6 +9888,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("batch_history_action_filter", html)
         self.assertIn("batch_history_status_filter", html)
         self.assertIn("batch_history_release_gate_filter", html)
+        self.assertIn("batch_history_readiness_filter", html)
         self.assertIn("batch_history_page_size", html)
         self.assertIn("batch_history_offset", html)
         self.assertIn("session_batch_limit", html)
@@ -10332,8 +10335,18 @@ class UiPrototypeTests(unittest.TestCase):
                             "limit": 2,
                             "count": 2,
                             "rows": [
-                                {"task_id": task_id, "project_id": "ui_proj_batch", "release_gate_status": "pass"},
-                                {"task_id": "ui_proj_batch_missing", "project_id": "ui_proj_batch", "release_gate_status": "fail"},
+                                {
+                                    "task_id": task_id,
+                                    "project_id": "ui_proj_batch",
+                                    "release_gate_status": "pass",
+                                    "readiness_status": "pass",
+                                },
+                                {
+                                    "task_id": "ui_proj_batch_missing",
+                                    "project_id": "ui_proj_batch",
+                                    "release_gate_status": "fail",
+                                    "readiness_status": "fail",
+                                },
                             ],
                             "results": [
                                 {
@@ -10369,7 +10382,14 @@ class UiPrototypeTests(unittest.TestCase):
                             "action": "batch_validate",
                             "limit": 1,
                             "count": 1,
-                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch", "release_gate_status": "missing"}],
+                            "rows": [
+                                {
+                                    "task_id": task_id,
+                                    "project_id": "ui_proj_batch",
+                                    "release_gate_status": "missing",
+                                    "readiness_status": "warn",
+                                }
+                            ],
                             "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
                             "created_at": "2026-05-15T09:00:00+08:00",
                         }
@@ -10385,7 +10405,14 @@ class UiPrototypeTests(unittest.TestCase):
                             "action": "batch_summary",
                             "limit": 1,
                             "count": 1,
-                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch", "release_gate_status": "pass"}],
+                            "rows": [
+                                {
+                                    "task_id": task_id,
+                                    "project_id": "ui_proj_batch",
+                                    "release_gate_status": "pass",
+                                    "readiness_status": "pass",
+                                }
+                            ],
                             "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
                             "created_at": "2026-05-15T08:30:00+08:00",
                         }
@@ -10427,6 +10454,11 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(int(release_gate_stats.get("fail") or 0), 1)
                 self.assertEqual(int(release_gate_stats.get("missing") or 0), 0)
                 self.assertEqual(str(exports[0].get("release_gate_status") or ""), "other")
+                readiness_stats = exports[0].get("readiness_stats") if isinstance(exports[0].get("readiness_stats"), dict) else {}
+                self.assertEqual(int(readiness_stats.get("pass") or 0), 1)
+                self.assertEqual(int(readiness_stats.get("fail") or 0), 1)
+                self.assertEqual(int(readiness_stats.get("warn") or 0), 0)
+                self.assertEqual(str(exports[0].get("readiness_status") or ""), "other")
                 export_id = str(exports[0].get("export_id") or "")
                 self.assertTrue(export_id)
                 other_export_id = str(exports[1].get("export_id") or "") if len(exports) > 1 else ""
@@ -10448,6 +10480,21 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(gate_invalid_payload.get("status"), "fail")
                 self.assertEqual(gate_invalid_payload.get("error"), "invalid release_gate_status")
 
+                readiness_filter_resp = client.get("/api/projects/ui_proj_batch/batch-exports?readiness_status=warn")
+                self.assertEqual(readiness_filter_resp.status_code, 200)
+                readiness_filter_payload = readiness_filter_resp.get_json()
+                self.assertEqual(readiness_filter_payload.get("status"), "pass")
+                self.assertEqual(str(readiness_filter_payload.get("readiness_status_filter") or ""), "warn")
+                readiness_exports = readiness_filter_payload.get("exports") if isinstance(readiness_filter_payload.get("exports"), list) else []
+                self.assertEqual(len(readiness_exports), 1)
+                self.assertEqual(str(readiness_exports[0].get("readiness_status") or ""), "warn")
+
+                readiness_invalid_resp = client.get("/api/projects/ui_proj_batch/batch-exports?readiness_status=broken")
+                self.assertEqual(readiness_invalid_resp.status_code, 400)
+                readiness_invalid_payload = readiness_invalid_resp.get_json()
+                self.assertEqual(readiness_invalid_payload.get("status"), "fail")
+                self.assertEqual(readiness_invalid_payload.get("error"), "invalid readiness_status")
+
                 compare_resp = client.get(
                     f"/api/projects/ui_proj_batch/batch-exports/compare?primary_export_id={export_id}&other_export_id={other_export_id}"
                 )
@@ -10464,9 +10511,17 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(int(gate_delta.get("pass") or 0), 1)
                 self.assertEqual(int(gate_delta.get("fail") or 0), 1)
                 self.assertEqual(int(gate_delta.get("missing") or 0), -1)
+                readiness_diff = compare_payload.get("readiness_diff") if isinstance(compare_payload.get("readiness_diff"), dict) else {}
+                self.assertEqual(str(readiness_diff.get("primary_status") or ""), "other")
+                self.assertEqual(str(readiness_diff.get("other_status") or ""), "warn")
+                readiness_delta = readiness_diff.get("delta") if isinstance(readiness_diff.get("delta"), dict) else {}
+                self.assertEqual(int(readiness_delta.get("pass") or 0), 1)
+                self.assertEqual(int(readiness_delta.get("fail") or 0), 1)
+                self.assertEqual(int(readiness_delta.get("warn") or 0), -1)
                 compare_lines = compare_payload.get("compare_lines") if isinstance(compare_payload.get("compare_lines"), list) else []
                 self.assertGreaterEqual(len(compare_lines), 1)
                 self.assertTrue(any("release_gate(pass/fail/missing/other)" in str(line) for line in compare_lines))
+                self.assertTrue(any("readiness(pass/warn/fail/other)" in str(line) for line in compare_lines))
 
                 compare_same_resp = client.get(
                     f"/api/projects/ui_proj_batch/batch-exports/compare?primary_export_id={export_id}&other_export_id={export_id}"

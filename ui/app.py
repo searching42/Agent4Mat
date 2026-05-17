@@ -1011,6 +1011,13 @@ HTML = """
               <option value=\"missing\">gate: missing</option>
               <option value=\"other\">gate: other</option>
             </select>
+            <select id=\"batch_history_readiness_filter\" onchange=\"resetBatchHistoryOffsetAndReload()\">
+              <option value=\"all\" selected>readiness: all</option>
+              <option value=\"pass\">readiness: pass</option>
+              <option value=\"warn\">readiness: warn</option>
+              <option value=\"fail\">readiness: fail</option>
+              <option value=\"other\">readiness: other</option>
+            </select>
             <select id=\"batch_history_page_size\" onchange=\"resetBatchHistoryOffsetAndReload()\">
               <option value=\"10\">page size: 10</option>
               <option value=\"20\" selected>page size: 20</option>
@@ -3914,6 +3921,30 @@ HTML = """
         return out;
       }
 
+      function normalizeReadinessStats(stats) {
+        const out = {pass: 0, warn: 0, fail: 0, other: 0};
+        const raw = (stats && typeof stats === 'object') ? stats : {};
+        for (const key of ['pass', 'warn', 'fail', 'other']) {
+          const value = Number(raw[key] || 0);
+          out[key] = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+        }
+        return out;
+      }
+
+      function aggregateReadinessStats(rows) {
+        const out = {pass: 0, warn: 0, fail: 0, other: 0};
+        const items = Array.isArray(rows) ? rows : [];
+        for (const row of items) {
+          if (!row || typeof row !== 'object') continue;
+          const status = String((row.readiness_status || row.readiness || '')).trim().toLowerCase();
+          if (status === 'pass') out.pass += 1;
+          else if (status === 'warn') out.warn += 1;
+          else if (status === 'fail') out.fail += 1;
+          else out.other += 1;
+        }
+        return out;
+      }
+
       function readLatestBatchPayload() {
         try {
           const raw = sessionStorage.getItem('agent4mat.ui.latest_batch_payload');
@@ -3972,11 +4003,12 @@ HTML = """
         const action = String((document.getElementById('batch_history_action_filter').value || '')).trim();
         const status = String((document.getElementById('batch_history_status_filter').value || '')).trim().toLowerCase();
         const releaseGateStatus = String((document.getElementById('batch_history_release_gate_filter').value || 'all')).trim().toLowerCase() || 'all';
+        const readinessStatus = String((document.getElementById('batch_history_readiness_filter').value || 'all')).trim().toLowerCase() || 'all';
         const limitRaw = Number(document.getElementById('batch_history_page_size').value || 20);
         const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.floor(limitRaw))) : 20;
         const offsetRaw = Number(document.getElementById('batch_history_offset').value || 0);
         const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
-        return {action, status, releaseGateStatus, limit, offset};
+        return {action, status, releaseGateStatus, readinessStatus, limit, offset};
       }
 
       function setBatchHistoryOffset(offset) {
@@ -4028,15 +4060,19 @@ HTML = """
           const dryN = Number(metrics.dry_run_count || 0);
           const elapsedMs = Number(metrics.elapsed_ms || 0);
           const gateStats = normalizeReleaseGateStats(item.release_gate_stats);
+          const readinessStats = normalizeReadinessStats(item.readiness_stats);
           const gateText = (gateStats.pass + gateStats.fail + gateStats.missing + gateStats.other) > 0
             ? ` | gate=${gateStats.pass}/${gateStats.fail}/${gateStats.missing}/${gateStats.other}`
+            : '';
+          const readinessText = (readinessStats.pass + readinessStats.warn + readinessStats.fail + readinessStats.other) > 0
+            ? ` | readiness=${readinessStats.pass}/${readinessStats.warn}/${readinessStats.fail}/${readinessStats.other}`
             : '';
           const metricsText = (okN + failN + skipN + dryN) > 0
             ? ` | ok=${okN} fail=${failN} skipped=${skipN} dry=${dryN} elapsed_ms=${elapsedMs}`
             : '';
           const row = document.createElement('div');
           row.className = 'project-batch-history-item';
-          row.textContent = `${String(item.created_at || '-')} | ${String(item.action || '-')} | status=${String(item.status || '-')} | count=${String(item.count || 0)} | export_id=${eid || '-'}${gateText}${metricsText}`;
+          row.textContent = `${String(item.created_at || '-')} | ${String(item.action || '-')} | status=${String(item.status || '-')} | count=${String(item.count || 0)} | export_id=${eid || '-'}${gateText}${readinessText}${metricsText}`;
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.textContent = 'Use ID';
@@ -4073,6 +4109,7 @@ HTML = """
         if (c.action) qs.set('action', c.action);
         if (c.status) qs.set('status', c.status);
         if (c.releaseGateStatus && c.releaseGateStatus !== 'all') qs.set('release_gate_status', c.releaseGateStatus);
+        if (c.readinessStatus && c.readinessStatus !== 'all') qs.set('readiness_status', c.readinessStatus);
         const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports?${qs.toString()}`);
         const items = Array.isArray(r.data && r.data.exports) ? r.data.exports : [];
         const total = Number((r.data && r.data.total_count) || items.length);
@@ -4086,6 +4123,7 @@ HTML = """
           action: c.action,
           status: c.status,
           release_gate_status: c.releaseGateStatus,
+          readiness_status: c.readinessStatus,
         };
         const head = document.getElementById('project_batch_history_summary');
         const box = document.getElementById('project_batch_history');
@@ -4171,6 +4209,10 @@ HTML = """
         let gateFailN = 0;
         let gateMissingN = 0;
         let gateOtherN = 0;
+        let readyPassN = 0;
+        let readyWarnN = 0;
+        let readyFailN = 0;
+        let readyOtherN = 0;
         for (const row of rows) {
           if (!row || typeof row !== 'object') continue;
           const st = String(row.status || '').trim().toLowerCase();
@@ -4192,9 +4234,14 @@ HTML = """
           gateFailN += Number(gate.fail || 0);
           gateMissingN += Number(gate.missing || 0);
           gateOtherN += Number(gate.other || 0);
+          const readiness = normalizeReadinessStats(row.readiness_stats);
+          readyPassN += Number(readiness.pass || 0);
+          readyWarnN += Number(readiness.warn || 0);
+          readyFailN += Number(readiness.fail || 0);
+          readyOtherN += Number(readiness.other || 0);
         }
         const avgElapsedMs = elapsedCnt > 0 ? Math.round(totalElapsedMs / elapsedCnt) : 0;
-        box.textContent = `batch_metrics: shown=${rows.length} | pass=${passN} partial=${partialN} fail=${failN} | replay(ok/fail/skipped/dry)=${okN}/${errN}/${skippedN}/${dryN} | gate(pass/fail/missing/other)=${gatePassN}/${gateFailN}/${gateMissingN}/${gateOtherN} | avg_elapsed_ms=${avgElapsedMs}`;
+        box.textContent = `batch_metrics: shown=${rows.length} | pass=${passN} partial=${partialN} fail=${failN} | replay(ok/fail/skipped/dry)=${okN}/${errN}/${skippedN}/${dryN} | gate(pass/fail/missing/other)=${gatePassN}/${gateFailN}/${gateMissingN}/${gateOtherN} | readiness(pass/warn/fail/other)=${readyPassN}/${readyWarnN}/${readyFailN}/${readyOtherN} | avg_elapsed_ms=${avgElapsedMs}`;
       }
 
       function renderFailedReplayQueue(queuePayload) {
@@ -4236,10 +4283,18 @@ HTML = """
         const failDelta = Number(delta.fail || 0);
         const missingDelta = Number(delta.missing || 0);
         const otherDelta = Number(delta.other || 0);
+        const readiness = (obj.readiness_diff && typeof obj.readiness_diff === 'object') ? obj.readiness_diff : {};
+        const readinessDelta = (readiness.delta && typeof readiness.delta === 'object') ? readiness.delta : {};
+        const readinessPrimary = String(readiness.primary_status || '').trim() || '-';
+        const readinessOther = String(readiness.other_status || '').trim() || '-';
+        const readyPassDelta = Number(readinessDelta.pass || 0);
+        const readyWarnDelta = Number(readinessDelta.warn || 0);
+        const readyFailDelta = Number(readinessDelta.fail || 0);
+        const readyOtherDelta = Number(readinessDelta.other || 0);
         const changed = Number(diff.changed_count || 0);
         const onlyPrimary = Number(diff.only_in_primary_count || 0);
         const onlyOther = Number(diff.only_in_other_count || 0);
-        head.textContent = `batch_compare: ${primaryId || '-'} vs ${otherId || '-'} | changed=${changed} only_primary=${onlyPrimary} only_other=${onlyOther} | gate=${gatePrimary}->${gateOther} delta(pass/fail/missing/other)=${passDelta}/${failDelta}/${missingDelta}/${otherDelta}`;
+        head.textContent = `batch_compare: ${primaryId || '-'} vs ${otherId || '-'} | changed=${changed} only_primary=${onlyPrimary} only_other=${onlyOther} | gate=${gatePrimary}->${gateOther} delta(pass/fail/missing/other)=${passDelta}/${failDelta}/${missingDelta}/${otherDelta} | readiness=${readinessPrimary}->${readinessOther} delta(pass/warn/fail/other)=${readyPassDelta}/${readyWarnDelta}/${readyFailDelta}/${readyOtherDelta}`;
       }
 
       function batchCompareValueText(value) {
@@ -4297,11 +4352,14 @@ HTML = """
         const diff = (obj.diff && typeof obj.diff === 'object') ? obj.diff : {};
         const gate = (obj.release_gate_diff && typeof obj.release_gate_diff === 'object') ? obj.release_gate_diff : {};
         const gateDelta = (gate.delta && typeof gate.delta === 'object') ? gate.delta : {};
+        const readiness = (obj.readiness_diff && typeof obj.readiness_diff === 'object') ? obj.readiness_diff : {};
+        const readinessDelta = (readiness.delta && typeof readiness.delta === 'object') ? readiness.delta : {};
         const lines = [];
         const filterToken = String(pathFilterText || '').trim().toLowerCase();
         lines.push(`batch_compare ${primaryId} vs ${otherId}`);
         lines.push(`changed_count=${Number(diff.changed_count || 0)} only_in_primary=${Number(diff.only_in_primary_count || 0)} only_in_other=${Number(diff.only_in_other_count || 0)}`);
         lines.push(`gate primary=${String(gate.primary_status || '-')}, other=${String(gate.other_status || '-')}, delta(pass/fail/missing/other)=${Number(gateDelta.pass || 0)}/${Number(gateDelta.fail || 0)}/${Number(gateDelta.missing || 0)}/${Number(gateDelta.other || 0)}`);
+        lines.push(`readiness primary=${String(readiness.primary_status || '-')}, other=${String(readiness.other_status || '-')}, delta(pass/warn/fail/other)=${Number(readinessDelta.pass || 0)}/${Number(readinessDelta.warn || 0)}/${Number(readinessDelta.fail || 0)}/${Number(readinessDelta.other || 0)}`);
         const changedRows = Array.isArray(diff.changed) ? diff.changed : [];
         const filteredRows = getBatchCompareChangedRows(obj, filterToken);
         if (filterToken) {
@@ -4893,6 +4951,7 @@ HTML = """
           count: results.length,
           rows: summaryRows,
           release_gate_stats: aggregateReleaseGateStats(summaryRows),
+          readiness_stats: aggregateReadinessStats(summaryRows),
           results: results,
           created_at: nowIso(),
         };
@@ -4925,6 +4984,7 @@ HTML = """
           count: results.length,
           rows: summaryRows,
           release_gate_stats: aggregateReleaseGateStats(summaryRows),
+          readiness_stats: aggregateReadinessStats(summaryRows),
           results: results,
           created_at: nowIso(),
         };
@@ -4971,6 +5031,7 @@ HTML = """
           count: retries.length,
           rows: summaryRows,
           release_gate_stats: aggregateReleaseGateStats(summaryRows),
+          readiness_stats: aggregateReadinessStats(summaryRows),
           retries: retries,
           created_at: nowIso(),
         };
@@ -8005,6 +8066,7 @@ def _list_batch_export_entries(
     action_filter: str = "",
     status_filter: str = "",
     release_gate_status_filter: str = "",
+    readiness_status_filter: str = "",
 ) -> Tuple[List[Dict[str, Any]], int]:
     root = _ui_batch_exports_root(project_id)
     rows: List[Dict[str, Any]] = []
@@ -8033,6 +8095,11 @@ def _list_batch_export_entries(
                     fallback_rows=[],
                 ),
                 "release_gate_status": _release_gate_status_from_stats(summary.get("release_gate_stats")),
+                "readiness_stats": _normalize_readiness_stats(
+                    summary.get("readiness_stats"),
+                    fallback_rows=[],
+                ),
+                "readiness_status": _readiness_status_from_stats(summary.get("readiness_stats")),
                 "replay_metrics": replay_metrics,
                 "replay_options": {
                     "dry_run": bool(replay_options.get("dry_run")),
@@ -8053,6 +8120,9 @@ def _list_batch_export_entries(
     gate = str(release_gate_status_filter or "").strip().lower()
     if gate and gate != "all":
         rows = [row for row in rows if str(row.get("release_gate_status") or "other").strip().lower() == gate]
+    readiness = str(readiness_status_filter or "").strip().lower()
+    if readiness and readiness != "all":
+        rows = [row for row in rows if str(row.get("readiness_status") or "other").strip().lower() == readiness]
     total = len(rows)
     safe_limit = max(1, min(limit, 100))
     safe_offset = max(0, offset)
@@ -8118,12 +8188,57 @@ def _release_gate_status_from_stats(stats: Any) -> str:
     return nonzero[0]
 
 
+def _readiness_status_from_row(row: Any) -> str:
+    if not isinstance(row, dict):
+        return "warn"
+    raw = str(row.get("readiness_status") or row.get("readiness") or "").strip().lower()
+    if raw in {"pass", "warn", "fail"}:
+        return raw
+    gate = _release_gate_status_key(row.get("release_gate_status"))
+    health = str(row.get("health") or "").strip().lower()
+    if health == "failed" or gate == "fail":
+        return "fail"
+    if health == "success" and gate == "pass":
+        return "pass"
+    return "warn"
+
+
+def _readiness_stats_from_rows(rows: List[Any]) -> Dict[str, int]:
+    counts: Dict[str, int] = {"pass": 0, "warn": 0, "fail": 0, "other": 0}
+    for row in rows:
+        status = _readiness_status_from_row(row)
+        if status not in counts:
+            counts["other"] = int(counts.get("other") or 0) + 1
+        else:
+            counts[status] = int(counts.get(status) or 0) + 1
+    return counts
+
+
+def _normalize_readiness_stats(value: Any, *, fallback_rows: List[Any]) -> Dict[str, int]:
+    fallback = _readiness_stats_from_rows(fallback_rows)
+    if not isinstance(value, dict):
+        return fallback
+    out: Dict[str, int] = {}
+    for key in ("pass", "warn", "fail", "other"):
+        out[key] = max(0, _as_int(value.get(key), fallback.get(key, 0)))
+    return out
+
+
+def _readiness_status_from_stats(stats: Any) -> str:
+    normalized = _normalize_readiness_stats(stats, fallback_rows=[])
+    nonzero = [key for key in ("pass", "warn", "fail", "other") if int(normalized.get(key) or 0) > 0]
+    if len(nonzero) != 1:
+        return "other"
+    return nonzero[0]
+
+
 def _batch_export_summary(payload: Dict[str, Any], *, export_id: str, project_id: str) -> Dict[str, Any]:
     source = _batch_export_source_payload(payload)
     rows = source.get("rows") if isinstance(source.get("rows"), list) else []
     results = source.get("results") if isinstance(source.get("results"), list) else []
     retries = source.get("retries") if isinstance(source.get("retries"), list) else []
     release_gate_stats = _normalize_release_gate_stats(source.get("release_gate_stats"), fallback_rows=rows)
+    readiness_stats = _normalize_readiness_stats(source.get("readiness_stats"), fallback_rows=rows)
     count_default = len(results) + len(retries)
     if count_default < 1:
         count_default = len(rows)
@@ -8140,6 +8255,7 @@ def _batch_export_summary(payload: Dict[str, Any], *, export_id: str, project_id
         "created_at": str(payload.get("created_at") or source.get("created_at") or ""),
         "replayed_from_export_id": str(source.get("replayed_from_export_id") or payload.get("source_export_id") or ""),
         "release_gate_stats": release_gate_stats,
+        "readiness_stats": readiness_stats,
     }
 
 
@@ -8148,6 +8264,8 @@ def _batch_export_compare_lines(primary: Dict[str, Any], other: Dict[str, Any], 
     o_eid = str(other.get("export_id") or "")
     p_gate = _normalize_release_gate_stats(primary.get("release_gate_stats"), fallback_rows=[])
     o_gate = _normalize_release_gate_stats(other.get("release_gate_stats"), fallback_rows=[])
+    p_ready = _normalize_readiness_stats(primary.get("readiness_stats"), fallback_rows=[])
+    o_ready = _normalize_readiness_stats(other.get("readiness_stats"), fallback_rows=[])
     out = [
         f"action {p_eid}={str(primary.get('action') or '')} vs {o_eid}={str(other.get('action') or '')}",
         f"status {p_eid}={str(primary.get('status') or '')} vs {o_eid}={str(other.get('status') or '')}",
@@ -8157,6 +8275,11 @@ def _batch_export_compare_lines(primary: Dict[str, Any], other: Dict[str, Any], 
             f"release_gate(pass/fail/missing/other) "
             f"{p_eid}={int(p_gate.get('pass') or 0)}/{int(p_gate.get('fail') or 0)}/{int(p_gate.get('missing') or 0)}/{int(p_gate.get('other') or 0)} "
             f"vs {o_eid}={int(o_gate.get('pass') or 0)}/{int(o_gate.get('fail') or 0)}/{int(o_gate.get('missing') or 0)}/{int(o_gate.get('other') or 0)}"
+        ),
+        (
+            f"readiness(pass/warn/fail/other) "
+            f"{p_eid}={int(p_ready.get('pass') or 0)}/{int(p_ready.get('warn') or 0)}/{int(p_ready.get('fail') or 0)}/{int(p_ready.get('other') or 0)} "
+            f"vs {o_eid}={int(o_ready.get('pass') or 0)}/{int(o_ready.get('warn') or 0)}/{int(o_ready.get('fail') or 0)}/{int(o_ready.get('other') or 0)}"
         ),
         f"changed_paths={int(diff.get('changed_count') or 0)} only_primary={int(diff.get('only_in_primary_count') or 0)} only_other={int(diff.get('only_in_other_count') or 0)}",
     ]
@@ -8175,6 +8298,24 @@ def _batch_export_release_gate_diff(primary: Dict[str, Any], other: Dict[str, An
     return {
         "primary_status": _release_gate_status_from_stats(p_stats),
         "other_status": _release_gate_status_from_stats(o_stats),
+        "primary": p_stats,
+        "other": o_stats,
+        "delta": delta,
+    }
+
+
+def _batch_export_readiness_diff(primary: Dict[str, Any], other: Dict[str, Any]) -> Dict[str, Any]:
+    p_stats = _normalize_readiness_stats(primary.get("readiness_stats"), fallback_rows=[])
+    o_stats = _normalize_readiness_stats(other.get("readiness_stats"), fallback_rows=[])
+    delta = {
+        "pass": int(p_stats.get("pass") or 0) - int(o_stats.get("pass") or 0),
+        "warn": int(p_stats.get("warn") or 0) - int(o_stats.get("warn") or 0),
+        "fail": int(p_stats.get("fail") or 0) - int(o_stats.get("fail") or 0),
+        "other": int(p_stats.get("other") or 0) - int(o_stats.get("other") or 0),
+    }
+    return {
+        "primary_status": _readiness_status_from_stats(p_stats),
+        "other_status": _readiness_status_from_stats(o_stats),
         "primary": p_stats,
         "other": o_stats,
         "delta": delta,
@@ -10389,12 +10530,15 @@ def api_project_batch_exports(project_id: str):
     action_filter = str(request.args.get("action") or "").strip()
     status_filter = str(request.args.get("status") or "").strip().lower()
     release_gate_status_filter = str(request.args.get("release_gate_status") or "all").strip().lower() or "all"
+    readiness_status_filter = str(request.args.get("readiness_status") or "all").strip().lower() or "all"
     if action_filter and not _safe_filter_token(action_filter):
         return jsonify({"status": "fail", "error": "invalid action filter"}), 400
     if status_filter and status_filter not in {"pass", "partial", "fail"}:
         return jsonify({"status": "fail", "error": "invalid status filter"}), 400
     if release_gate_status_filter not in {"all", "pass", "fail", "missing", "other"}:
         return jsonify({"status": "fail", "error": "invalid release_gate_status"}), 400
+    if readiness_status_filter not in {"all", "pass", "warn", "fail", "other"}:
+        return jsonify({"status": "fail", "error": "invalid readiness_status"}), 400
     exports, total_count = _list_batch_export_entries(
         pid,
         limit=limit,
@@ -10402,6 +10546,7 @@ def api_project_batch_exports(project_id: str):
         action_filter=action_filter,
         status_filter=status_filter,
         release_gate_status_filter=release_gate_status_filter,
+        readiness_status_filter=readiness_status_filter,
     )
     return jsonify(
         {
@@ -10412,6 +10557,7 @@ def api_project_batch_exports(project_id: str):
             "action_filter": action_filter,
             "status_filter": status_filter,
             "release_gate_status_filter": release_gate_status_filter,
+            "readiness_status_filter": readiness_status_filter,
             "count": len(exports),
             "total_count": total_count,
             "has_more": (offset + len(exports)) < total_count,
@@ -10467,6 +10613,7 @@ def api_project_batch_exports_compare(project_id: str):
             "other": other_summary,
             "diff": diff,
             "release_gate_diff": _batch_export_release_gate_diff(primary_summary, other_summary),
+            "readiness_diff": _batch_export_readiness_diff(primary_summary, other_summary),
             "compare_lines": _batch_export_compare_lines(primary_summary, other_summary, diff),
         }
     )

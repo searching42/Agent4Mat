@@ -9561,6 +9561,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("timeline_groups_drawer", html)
         self.assertIn("session_filter_release_gate", html)
         self.assertIn("quickFilterByReleaseGate(", html)
+        self.assertIn("release_gate_status=${encodeURIComponent(gateFilter)}", html)
         self.assertIn("task_compare_drawer", html)
         self.assertIn("memory_explorer_drawer", html)
         self.assertIn("memory_explorer_status", html)
@@ -11279,6 +11280,7 @@ class UiPrototypeTests(unittest.TestCase):
             payload = resp.get_json()
             self.assertEqual(payload.get("status"), "pass")
             self.assertEqual(payload.get("scope"), "recent_tasks")
+            self.assertEqual(payload.get("release_gate_status"), "all")
             self.assertEqual(int(payload.get("task_count") or 0), 2)
             failed_items = payload.get("failed_items") if isinstance(payload.get("failed_items"), list) else []
             self.assertTrue(any(isinstance(it, dict) and str(it.get("name") or "").endswith(":score_candidates") for it in failed_items))
@@ -11288,6 +11290,21 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(int(gate_counts.get("pass") or 0), 1)
             self.assertEqual(int(gate_counts.get("fail") or 0), 1)
 
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp2 = client.get("/api/timeline-groups?scope=recent_tasks&limit=3&release_gate_status=fail")
+            self.assertEqual(resp2.status_code, 200)
+            payload2 = resp2.get_json()
+            self.assertEqual(payload2.get("status"), "pass")
+            self.assertEqual(payload2.get("release_gate_status"), "fail")
+            self.assertEqual(int(payload2.get("task_count") or 0), 1)
+            release_items2 = payload2.get("release_task_items") if isinstance(payload2.get("release_task_items"), list) else []
+            self.assertEqual(len(release_items2), 1)
+            self.assertEqual(str(release_items2[0].get("task_id") or ""), "tg_a")
+            gate_counts2 = payload2.get("release_gate_counts") if isinstance(payload2.get("release_gate_counts"), dict) else {}
+            self.assertEqual(int(gate_counts2.get("fail") or 0), 1)
+            self.assertEqual(int(gate_counts2.get("pass") or 0), 0)
+
     def test_ui_timeline_groups_endpoint_rejects_invalid_scope(self) -> None:
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()
@@ -11296,6 +11313,11 @@ class UiPrototypeTests(unittest.TestCase):
         payload = resp.get_json()
         self.assertEqual(payload.get("status"), "fail")
         self.assertEqual(payload.get("error"), "invalid scope")
+        resp2 = client.get("/api/timeline-groups?scope=recent_tasks&release_gate_status=weird")
+        self.assertEqual(resp2.status_code, 400)
+        payload2 = resp2.get_json()
+        self.assertEqual(payload2.get("status"), "fail")
+        self.assertEqual(payload2.get("error"), "invalid release_gate_status")
 
     def test_ui_html_contains_retry_tool_name_and_step_template_controls(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -2755,8 +2755,9 @@ HTML = """
         const gateMissing = Number(gateCounts.missing || 0);
         const total = Number(payload && payload.total_steps ? payload.total_steps : (running.length + completed.length + failed.length));
         const scope = String(payload && payload.scope ? payload.scope : 'recent_tasks');
+        const gateFilter = String(payload && payload.release_gate_status ? payload.release_gate_status : 'all');
         const tasksN = Number(payload && payload.task_count ? payload.task_count : 0);
-        head.textContent = `Run Timeline Groups (${scope}, tasks=${tasksN}, total=${total}, success=${completed.length}, failed=${failed.length}, gate_pass=${gatePass}, gate_fail=${gateFail}, gate_missing=${gateMissing})`;
+        head.textContent = `Run Timeline Groups (${scope}, gate_filter=${gateFilter}, tasks=${tasksN}, total=${total}, success=${completed.length}, failed=${failed.length}, gate_pass=${gatePass}, gate_fail=${gateFail}, gate_missing=${gateMissing})`;
         setListItems('tg_running', running);
         setListItems('tg_completed', completed);
         setListItems('tg_failed', failed);
@@ -2770,7 +2771,9 @@ HTML = """
         }
         const limitRaw = Number(document.getElementById('timeline_recent_limit').value || 5);
         const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(20, Math.floor(limitRaw))) : 5;
-        const r = await apiGet(`/api/timeline-groups?scope=recent_tasks&limit=${encodeURIComponent(String(limit))}`);
+        const gateFilterRaw = String((state.sessionBoard && state.sessionBoard.releaseGate) || 'all').trim().toLowerCase();
+        const gateFilter = (new Set(['all', 'pass', 'fail', 'missing', 'other'])).has(gateFilterRaw) ? gateFilterRaw : 'all';
+        const r = await apiGet(`/api/timeline-groups?scope=recent_tasks&limit=${encodeURIComponent(String(limit))}&release_gate_status=${encodeURIComponent(gateFilter)}`);
         renderJsonOut(r.data);
         renderTimelineGroupsAggregate(r.data);
       }
@@ -6553,12 +6556,14 @@ def _events_from_execution(execution: Dict[str, Any]) -> List[Dict[str, Any]]:
     return events
 
 
-def _timeline_groups_recent_tasks(*, limit: int) -> Dict[str, Any]:
+def _timeline_groups_recent_tasks(*, limit: int, release_gate_status: str = "all") -> Dict[str, Any]:
+    gate_filter = str(release_gate_status or "all").strip().lower() or "all"
     runs_root = (REPO_ROOT / "runs" / "agent").resolve()
     if not runs_root.exists():
         return {
             "status": "pass",
             "scope": "recent_tasks",
+            "release_gate_status": gate_filter,
             "task_count": 0,
             "total_steps": 0,
             "running_items": [],
@@ -6577,7 +6582,21 @@ def _timeline_groups_recent_tasks(*, limit: int) -> Dict[str, Any]:
         updated_ms = _task_updated_epoch_ms(child)
         rows.append({"task_id": tid, "run_dir": child, "updated_ms": updated_ms})
     rows.sort(key=lambda item: int(item.get("updated_ms") or 0), reverse=True)
-    selected = rows[: max(1, min(limit, 50))]
+    filtered_rows: List[Dict[str, Any]] = []
+    for item in rows:
+        tid = str(item.get("task_id") or "")
+        run_dir = item.get("run_dir")
+        if not tid or not isinstance(run_dir, Path):
+            continue
+        release_ctx = _release_context_for_task(tid, run_dir)
+        gate_status = str(release_ctx.get("archive_release_gate_status") or "missing").strip().lower() or "missing"
+        if gate_filter != "all" and gate_status != gate_filter:
+            continue
+        merged = dict(item)
+        merged["release_context"] = release_ctx
+        merged["release_gate_status"] = gate_status
+        filtered_rows.append(merged)
+    selected = filtered_rows[: max(1, min(limit, 50))]
 
     running_items: List[Dict[str, Any]] = []
     completed_items: List[Dict[str, Any]] = []
@@ -6591,8 +6610,8 @@ def _timeline_groups_recent_tasks(*, limit: int) -> Dict[str, Any]:
         if not tid or not isinstance(run_dir, Path):
             continue
         task_ids.append(tid)
-        release_ctx = _release_context_for_task(tid, run_dir)
-        gate_status = str(release_ctx.get("archive_release_gate_status") or "missing").strip().lower() or "missing"
+        release_ctx = item.get("release_context") if isinstance(item.get("release_context"), dict) else {}
+        gate_status = str(item.get("release_gate_status") or "missing").strip().lower() or "missing"
         if gate_status not in release_gate_counts:
             release_gate_counts["other"] = int(release_gate_counts.get("other") or 0) + 1
         else:
@@ -6626,6 +6645,7 @@ def _timeline_groups_recent_tasks(*, limit: int) -> Dict[str, Any]:
     return {
         "status": "pass",
         "scope": "recent_tasks",
+        "release_gate_status": gate_filter,
         "task_count": len(task_ids),
         "total_steps": len(running_items) + len(completed_items) + len(failed_items),
         "running_items": running_items,
@@ -10097,9 +10117,12 @@ def api_timeline_groups():
     scope = str(request.args.get("scope") or "recent_tasks").strip()
     if scope not in {"recent_tasks"}:
         return jsonify({"status": "fail", "error": "invalid scope"}), 400
+    release_gate_status = str(request.args.get("release_gate_status") or "all").strip().lower()
+    if release_gate_status not in {"all", "pass", "fail", "missing", "other"}:
+        return jsonify({"status": "fail", "error": "invalid release_gate_status"}), 400
     limit = _as_int(request.args.get("limit"), 5)
     limit = max(1, min(limit, 50))
-    out = _timeline_groups_recent_tasks(limit=limit)
+    out = _timeline_groups_recent_tasks(limit=limit, release_gate_status=release_gate_status)
     out["limit"] = limit
     return jsonify(out)
 

@@ -9882,7 +9882,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("batch_export_compare_id", html)
         self.assertIn("batch_replay_dry_run", html)
         self.assertIn("batch_replay_failed_only", html)
-        self.assertIn("batch_replay_readiness_only", html)
+        self.assertIn("batch_replay_readiness_mode", html)
         self.assertIn("batch_replay_retry_max", html)
         self.assertIn("batch_replay_retry_backoff_ms", html)
         self.assertIn("batch_replay_max_concurrency", html)
@@ -10005,6 +10005,7 @@ class UiPrototypeTests(unittest.TestCase):
                 replay_defaults = src_options.get("batch_replay_defaults") if isinstance(src_options.get("batch_replay_defaults"), dict) else {}
                 self.assertIn("dry_run", replay_defaults)
                 self.assertIn("failed_only", replay_defaults)
+                self.assertIn("readiness_mode", replay_defaults)
                 self.assertIn("readiness_only", replay_defaults)
 
                 import_resp = client.post(
@@ -10569,7 +10570,7 @@ class UiPrototypeTests(unittest.TestCase):
 
                 replay_by_id_resp = client.post(
                     f"/api/projects/ui_proj_batch/batch-exports/{export_id}/replay",
-                    json={"options": {"dry_run": True, "failed_only": True, "readiness_only": True, "retry_max": 2, "retry_backoff_ms": 10, "max_concurrency": 3}},
+                    json={"options": {"dry_run": True, "failed_only": True, "readiness_mode": "fail_or_warn", "retry_max": 2, "retry_backoff_ms": 10, "max_concurrency": 3}},
                 )
                 self.assertEqual(replay_by_id_resp.status_code, 200)
                 replay_by_id_payload = replay_by_id_resp.get_json()
@@ -10582,11 +10583,13 @@ class UiPrototypeTests(unittest.TestCase):
                 replay_options = replay_by_id_entry.get("replay_options") if isinstance(replay_by_id_entry.get("replay_options"), dict) else {}
                 self.assertEqual(bool(replay_options.get("dry_run")), True)
                 self.assertEqual(bool(replay_options.get("failed_only")), True)
+                self.assertEqual(str(replay_options.get("readiness_mode") or ""), "fail_or_warn")
                 self.assertEqual(bool(replay_options.get("readiness_only")), True)
                 replay_metrics = replay_by_id_entry.get("replay_metrics") if isinstance(replay_by_id_entry.get("replay_metrics"), dict) else {}
                 self.assertGreaterEqual(int(replay_metrics.get("dry_run_count") or 0), 1)
                 self.assertEqual(int(replay_metrics.get("max_concurrency_requested") or 0), 3)
                 self.assertEqual(int(replay_metrics.get("failed_only") or 0), 1)
+                self.assertEqual(str(replay_metrics.get("readiness_mode") or ""), "fail_or_warn")
                 self.assertEqual(int(replay_metrics.get("readiness_only") or 0), 1)
                 self.assertGreaterEqual(int(replay_metrics.get("failed_source_count") or 0), 1)
                 self.assertGreaterEqual(int(replay_metrics.get("readiness_source_count") or 0), 1)

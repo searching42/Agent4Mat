@@ -978,7 +978,12 @@ HTML = """
           <div class=\"project-batch-history-controls\">
             <label><input id=\"batch_replay_dry_run\" type=\"checkbox\" /> replay dry-run</label>
             <label><input id=\"batch_replay_failed_only\" type=\"checkbox\" /> replay failed-only</label>
-            <label><input id=\"batch_replay_readiness_only\" type=\"checkbox\" /> replay readiness-only (fail/warn)</label>
+            <select id=\"batch_replay_readiness_mode\">
+              <option value=\"all\" selected>readiness replay: all</option>
+              <option value=\"fail_or_warn\">readiness replay: fail_or_warn</option>
+              <option value=\"fail\">readiness replay: fail only</option>
+              <option value=\"warn\">readiness replay: warn only</option>
+            </select>
             <select id=\"batch_replay_retry_max\">
               <option value=\"0\" selected>retry max: 0</option>
               <option value=\"1\">retry max: 1</option>
@@ -2959,14 +2964,17 @@ HTML = """
         const maxConcurrency = Number.isFinite(concurrencyRaw) ? Math.max(1, Math.min(8, Math.floor(concurrencyRaw))) : 2;
         const dryRun = Boolean(opts.dry_run);
         const failedOnly = Boolean(opts.failed_only);
-        const readinessOnly = Boolean(opts.readiness_only);
+        const readinessModeRaw = String(opts.readiness_mode || '').trim().toLowerCase();
+        const readinessMode = (readinessModeRaw === 'fail' || readinessModeRaw === 'warn' || readinessModeRaw === 'fail_or_warn' || readinessModeRaw === 'all')
+          ? readinessModeRaw
+          : (Boolean(opts.readiness_only) ? 'fail_or_warn' : 'all');
 
         const dryEle = document.getElementById('batch_replay_dry_run');
         if (dryEle) dryEle.checked = dryRun;
         const failedEle = document.getElementById('batch_replay_failed_only');
         if (failedEle) failedEle.checked = failedOnly;
-        const readinessEle = document.getElementById('batch_replay_readiness_only');
-        if (readinessEle) readinessEle.checked = readinessOnly;
+        const readinessEle = document.getElementById('batch_replay_readiness_mode');
+        if (readinessEle) readinessEle.value = readinessMode;
         const retryEle = document.getElementById('batch_replay_retry_max');
         if (retryEle) retryEle.value = String(retryMax);
         const backoffEle = document.getElementById('batch_replay_retry_backoff_ms');
@@ -2978,12 +2986,12 @@ HTML = """
       function replayPresetOptions(mode) {
         const m = String(mode || '').trim().toLowerCase();
         if (m === 'fast') {
-          return {dry_run: false, failed_only: false, readiness_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 6};
+          return {dry_run: false, failed_only: false, readiness_mode: 'all', readiness_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 6};
         }
         if (m === 'dryrun') {
-          return {dry_run: true, failed_only: false, readiness_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 1};
+          return {dry_run: true, failed_only: false, readiness_mode: 'all', readiness_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 1};
         }
-        return {dry_run: false, failed_only: false, readiness_only: true, retry_max: 2, retry_backoff_ms: 200, max_concurrency: 2};
+        return {dry_run: false, failed_only: false, readiness_mode: 'fail_or_warn', readiness_only: true, retry_max: 2, retry_backoff_ms: 200, max_concurrency: 2};
       }
 
       function applyReplayPreset(mode) {
@@ -4177,7 +4185,10 @@ HTML = """
       function readBatchReplayOptions(forceFailedOnly) {
         const dryRun = Boolean(document.getElementById('batch_replay_dry_run').checked);
         const failedOnlyRaw = Boolean(document.getElementById('batch_replay_failed_only').checked);
-        const readinessOnlyRaw = Boolean(document.getElementById('batch_replay_readiness_only').checked);
+        const readinessModeRaw = String((document.getElementById('batch_replay_readiness_mode') || {}).value || '').trim().toLowerCase();
+        const readinessMode = (readinessModeRaw === 'fail' || readinessModeRaw === 'warn' || readinessModeRaw === 'fail_or_warn' || readinessModeRaw === 'all')
+          ? readinessModeRaw
+          : 'all';
         const retryMaxRaw = Number(document.getElementById('batch_replay_retry_max').value || 0);
         const retryMax = Number.isFinite(retryMaxRaw) ? Math.max(0, Math.min(3, Math.floor(retryMaxRaw))) : 0;
         const backoffRaw = Number(document.getElementById('batch_replay_retry_backoff_ms').value || 150);
@@ -4187,7 +4198,8 @@ HTML = """
         return {
           dry_run: dryRun,
           failed_only: Boolean(forceFailedOnly) ? true : failedOnlyRaw,
-          readiness_only: readinessOnlyRaw,
+          readiness_mode: readinessMode,
+          readiness_only: readinessMode !== 'all',
           retry_max: retryMax,
           retry_backoff_ms: retryBackoffMs,
           max_concurrency: maxConcurrency,
@@ -8432,10 +8444,16 @@ def _normalize_batch_replay_options(raw: Any) -> Dict[str, Any]:
     retry_max = max(0, min(_as_int(body.get("retry_max"), 0), 3))
     retry_backoff_ms = max(0, min(_as_int(body.get("retry_backoff_ms"), 150), 5000))
     max_concurrency = max(1, min(_as_int(body.get("max_concurrency"), 2), 8))
+    mode_raw = str(body.get("readiness_mode") or "").strip().lower()
+    allowed_modes = {"all", "fail", "warn", "fail_or_warn"}
+    if mode_raw not in allowed_modes:
+        mode_raw = "fail_or_warn" if bool(body.get("readiness_only")) else "all"
+    readiness_only = mode_raw != "all"
     return {
         "dry_run": bool(body.get("dry_run")),
         "failed_only": bool(body.get("failed_only")),
-        "readiness_only": bool(body.get("readiness_only")),
+        "readiness_mode": mode_raw,
+        "readiness_only": readiness_only,
         "retry_max": retry_max,
         "retry_backoff_ms": retry_backoff_ms,
         "max_concurrency": max_concurrency,
@@ -8498,13 +8516,23 @@ def _filter_failed_only_replay_rows(
     return picked, len(failed_task_ids)
 
 
-def _filter_readiness_only_replay_rows(*, rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+def _filter_readiness_replay_rows(*, rows: List[Dict[str, Any]], mode: str) -> Tuple[List[Dict[str, Any]], int]:
+    mode_norm = str(mode or "").strip().lower()
+    if mode_norm == "all":
+        return list(rows), len(rows)
+    allowed: set[str] = set()
+    if mode_norm == "fail":
+        allowed = {"fail"}
+    elif mode_norm == "warn":
+        allowed = {"warn"}
+    else:
+        allowed = {"fail", "warn"}
     picked: List[Dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         readiness = _readiness_status_from_row(row)
-        if readiness in {"fail", "warn"}:
+        if readiness in allowed:
             picked.append(row)
     return picked, len(picked)
 
@@ -8801,8 +8829,9 @@ def _replay_batch_export_payload(
 
     failed_source_count = 0
     readiness_source_count = 0
-    if bool(options.get("readiness_only")):
-        replay_rows, readiness_source_count = _filter_readiness_only_replay_rows(rows=replay_rows)
+    readiness_mode = str(options.get("readiness_mode") or "all").strip().lower()
+    if readiness_mode != "all":
+        replay_rows, readiness_source_count = _filter_readiness_replay_rows(rows=replay_rows, mode=readiness_mode)
     if bool(options.get("failed_only")):
         replay_rows, failed_source_count = _filter_failed_only_replay_rows(action=action, rows=replay_rows, source_batch=source_batch)
 
@@ -8853,6 +8882,7 @@ def _replay_batch_export_payload(
     replay_metrics["failed_source_count"] = int(failed_source_count)
     replay_metrics["readiness_source_count"] = int(readiness_source_count)
     replay_metrics["failed_only"] = bool(options.get("failed_only"))
+    replay_metrics["readiness_mode"] = readiness_mode
     replay_metrics["readiness_only"] = bool(options.get("readiness_only"))
     top_status = "pass" if int(replay_metrics.get("fail_count") or 0) < 1 else "partial"
     out = {

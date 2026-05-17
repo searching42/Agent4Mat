@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -7272,11 +7273,15 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("ui-freeze-acceptance:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("ui-stability-smoke:", content)
+        self.assertIn("ui-release-readiness:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/summarize_experiments.py", content)
         self.assertIn("scripts/check_ui_freeze_acceptance.py", content)
+        self.assertIn("scripts/check_ui_release_readiness.py", content)
         self.assertIn("runs/ci/ui_stability_smoke.json", content)
+        self.assertIn("runs/ci/ui_release_readiness.json", content)
+        self.assertIn("runs/ci/ui_release_readiness.md", content)
         self.assertIn("configs/acceptance/ui_freeze_acceptance_baseline.json", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/archive_real_chain_baseline.py", content)
@@ -7287,6 +7292,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/run_real_chain_baseline.sh", content)
         self.assertIn("archive_real_chain_baseline.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --tar-gz", content)
         self.assertIn("check_real_chain_release_bundle.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --require-tar-gz", content)
+        self.assertIn("$(MAKE) ui-release-readiness WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
         self.assertIn("experiment-summary:", content)
@@ -7314,6 +7320,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "validate_memory_context.py",
             repo_root / "scripts" / "check_experiment_trace.py",
             repo_root / "scripts" / "check_ui_freeze_acceptance.py",
+            repo_root / "scripts" / "check_ui_release_readiness.py",
             repo_root / "scripts" / "summarize_experiments.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
@@ -8518,11 +8525,96 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
             payload = json.loads(cp.stdout)
             self.assertEqual(payload.get("status"), "pass")
-            self.assertEqual(int(payload.get("check_count") or 0), 6)
+            self.assertEqual(int(payload.get("check_count") or 0), 8)
             self.assertEqual(int(payload.get("failed_count") or 0), 0)
             self.assertEqual(payload.get("missing_required_checks"), [])
             self.assertEqual(payload.get("mismatched_required_checks"), [])
             self.assertTrue(out_path.exists())
+
+    def test_check_ui_release_readiness_script_reports_pass(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            stability_path = ci_dir / "ui_stability_smoke.json"
+            freeze_path = ci_dir / "ui_freeze_acceptance.json"
+            now = datetime.now(timezone.utc).isoformat()
+            payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 8,
+                "failed_count": 0,
+            }
+            stability_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            freeze_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            out_json = ci_dir / "ui_release_readiness.json"
+            out_md = ci_dir / "ui_release_readiness.md"
+            script = repo_root / "scripts" / "check_ui_release_readiness.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--require-freeze-report",
+                    "--max-age-hours",
+                    "24",
+                    "--out-json",
+                    str(out_json),
+                    "--out-md",
+                    str(out_md),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            report = json.loads(cp.stdout)
+            self.assertEqual(str(report.get("status") or ""), "pass")
+            self.assertEqual(int(report.get("failure_count", -1)), 0)
+            self.assertTrue(out_json.exists())
+            self.assertTrue(out_md.exists())
+
+    def test_check_ui_release_readiness_script_detects_stale_report(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            stale_payload = {
+                "status": "pass",
+                "generated_at": "2020-01-01T00:00:00+00:00",
+                "check_count": 8,
+                "failed_count": 0,
+            }
+            (ci_dir / "ui_stability_smoke.json").write_text(
+                json.dumps(stale_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            script = repo_root / "scripts" / "check_ui_release_readiness.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--max-age-hours",
+                    "1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            report = json.loads(cp.stdout)
+            self.assertEqual(str(report.get("status") or ""), "fail")
+            failures = report.get("failures") if isinstance(report.get("failures"), list) else []
+            self.assertTrue(any("freshness" in str(item.get("name") or "") for item in failures if isinstance(item, dict)))
 
 
 class ModelCatalogTests(unittest.TestCase):

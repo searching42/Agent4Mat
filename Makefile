@@ -7,7 +7,7 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke experiment-summary
 .PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard real-no-fallback-gate ui-freeze-acceptance
-.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run ui-stability-smoke
+.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run ui-stability-smoke ui-release-readiness
 
 help:
 	@echo "Available targets:"
@@ -35,6 +35,7 @@ help:
 	@echo "  make real-chain-evidence   - collect release evidence from acceptance_result.json"
 	@echo "  make ui-smoke            - run lightweight UI smoke check"
 	@echo "  make ui-stability-smoke  - run targeted UI interaction regressions + freeze acceptance"
+	@echo "  make ui-release-readiness - run UI stability smoke + readiness summary gate"
 	@echo "  make ui-run              - launch local UI prototype on http://127.0.0.1:8787"
 	@echo "  make quickstart          - run quickstart chain self-check"
 	@echo "  make adapter-validate    - validate adapter templates contract"
@@ -157,6 +158,10 @@ ui-stability-smoke:
 		tests.test_regressions.UiPrototypeTests.test_ui_batch_export_list_and_replay_latest
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_freeze_acceptance.py --workspace-root "$(WORKSPACE_ROOT)" --out "runs/ci/ui_stability_smoke.json" --baseline "configs/acceptance/ui_freeze_acceptance_baseline.json"
 
+ui-release-readiness:
+	@$(MAKE) ui-stability-smoke
+	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
+
 ui-run:
 	@$(PYTHONPATH_ENV) $(PYTHON) ui/app.py
 
@@ -164,6 +169,7 @@ release-check:
 	@$(MAKE) adapter-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(MAKE) request-templates-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(MAKE) step-request-templates-validate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) ui-release-readiness WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(MAKE) quickstart TASK_ID="$(TASK_ID)"
 	@$(MAKE) llm-smoke
 	@$(MAKE) doctor WORKSPACE_ROOT="$(WORKSPACE_ROOT)"

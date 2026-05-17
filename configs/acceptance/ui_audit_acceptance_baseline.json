@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "required_checks": [
+    {"name": "select_task_success_context_sync", "status": "pass"},
+    {"name": "audit_artifact_actions_api_contract", "status": "pass"},
+    {"name": "select_task_missing_run_dir_hints", "status": "pass"},
+    {"name": "select_task_read_only_hints", "status": "pass"},
+    {"name": "invalid_task_id_rejected", "status": "pass"},
+    {"name": "audit_ui_tokens_present", "status": "pass"}
+  ]
+}

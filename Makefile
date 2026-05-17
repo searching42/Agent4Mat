@@ -6,7 +6,7 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke experiment-summary
-.PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard resume-idempotence-guard real-no-fallback-gate ui-freeze-acceptance
+.PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard resume-idempotence-guard real-no-fallback-gate ui-freeze-acceptance ui-audit-acceptance
 .PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run ui-stability-smoke ui-release-readiness
 .PHONY: acceptance-local
 
@@ -29,6 +29,7 @@ help:
 	@echo "  make real-no-fallback-gate - run require-real-adapters acceptance smoke"
 	@echo "  make acceptance-local    - run local acceptance bundle (contracts/core/ci + resume/artifacts)"
 	@echo "  make ui-freeze-acceptance - run frozen UI acceptance chain checks + baseline contract"
+	@echo "  make ui-audit-acceptance - run targeted UI audit-link acceptance checks + baseline contract"
 	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"
 	@echo "  make real-chain-acceptance-real - run non-stub real-chain acceptance (requires real env)"
 	@echo "  make real-chain-baseline   - run strict real-chain acceptance repeatedly (default x3)"
@@ -37,7 +38,7 @@ help:
 	@echo "  make real-chain-release-bundle-check - validate baseline summary + archive manifest (+tar.gz)"
 	@echo "  make real-chain-evidence   - collect release evidence from acceptance_result.json"
 	@echo "  make ui-smoke            - run lightweight UI smoke check"
-	@echo "  make ui-stability-smoke  - run targeted UI interaction regressions + freeze acceptance"
+	@echo "  make ui-stability-smoke  - run targeted UI interaction regressions + freeze+audit acceptance"
 	@echo "  make ui-release-readiness - run UI stability smoke + readiness summary gate"
 	@echo "  make ui-run              - launch local UI prototype on http://127.0.0.1:8787"
 	@echo "  make quickstart          - run quickstart chain self-check"
@@ -134,6 +135,9 @@ real-no-fallback-gate:
 ui-freeze-acceptance:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_freeze_acceptance.py --workspace-root "$(WORKSPACE_ROOT)" --out "runs/ci/ui_freeze_acceptance.json" --baseline "configs/acceptance/ui_freeze_acceptance_baseline.json"
 
+ui-audit-acceptance:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_audit_acceptance.py --workspace-root "$(WORKSPACE_ROOT)" --out "runs/ci/ui_audit_acceptance.json" --baseline "configs/acceptance/ui_audit_acceptance_baseline.json"
+
 real-chain-acceptance:
 	@./scripts/run_real_chain_acceptance_minimal.sh "$(WORKSPACE_ROOT)" "$(TASK_ID)"
 
@@ -164,6 +168,7 @@ ui-stability-smoke:
 		tests.test_regressions.UiPrototypeTests.test_ui_html_contains_workspace_url_controls \
 		tests.test_regressions.UiPrototypeTests.test_ui_batch_export_list_and_replay_latest
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_freeze_acceptance.py --workspace-root "$(WORKSPACE_ROOT)" --out "runs/ci/ui_stability_smoke.json" --baseline "configs/acceptance/ui_freeze_acceptance_baseline.json"
+	@$(MAKE) ui-audit-acceptance WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 
 ui-release-readiness:
 	@$(MAKE) ui-stability-smoke
@@ -191,4 +196,5 @@ acceptance-local:
 	@$(MAKE) web-evidence-guard WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(MAKE) quickstart TASK_ID="$(TASK_ID)"
 	@$(MAKE) resume-idempotence-guard TASK_ID="$(TASK_ID)" WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) ui-audit-acceptance WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/validate_run_artifacts.py --workspace-root "$(WORKSPACE_ROOT)" --result-json "runs/agent/$(TASK_ID)/quickstart_result.json"

@@ -7286,6 +7286,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("real-chain-evidence:", content)
         self.assertIn("real-no-fallback-gate:", content)
         self.assertIn("ui-freeze-acceptance:", content)
+        self.assertIn("ui-audit-acceptance:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("ui-stability-smoke:", content)
         self.assertIn("ui-release-readiness:", content)
@@ -7293,11 +7294,14 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/summarize_experiments.py", content)
         self.assertIn("scripts/check_ui_freeze_acceptance.py", content)
+        self.assertIn("scripts/check_ui_audit_acceptance.py", content)
         self.assertIn("scripts/check_ui_release_readiness.py", content)
         self.assertIn("runs/ci/ui_stability_smoke.json", content)
+        self.assertIn("runs/ci/ui_audit_acceptance.json", content)
         self.assertIn("runs/ci/ui_release_readiness.json", content)
         self.assertIn("runs/ci/ui_release_readiness.md", content)
         self.assertIn("configs/acceptance/ui_freeze_acceptance_baseline.json", content)
+        self.assertIn("configs/acceptance/ui_audit_acceptance_baseline.json", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
         self.assertIn("scripts/archive_real_chain_baseline.py", content)
         self.assertIn("scripts/check_real_chain_release_bundle.py", content)
@@ -7321,6 +7325,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/check_experiment_trace.py", content)
         self.assertIn("scripts/check_resume_idempotence.py", content)
         self.assertIn("$(MAKE) resume-idempotence-guard TASK_ID=\"$(TASK_ID)\" WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("$(MAKE) ui-audit-acceptance WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("scripts/check_resume_idempotence.py --workspace-root \"$(WORKSPACE_ROOT)\" --result-json \"runs/agent/$(TASK_ID)/quickstart_result.json\" --task-id \"$(TASK_ID)\"", content)
         self.assertIn("scripts/check_real_no_fallback.py --workspace-root \"$(WORKSPACE_ROOT)\" --out-json \"runs/ci/real_no_fallback_gate.json\"", content)
         self.assertIn("scripts/validate_run_artifacts.py --workspace-root \"$(WORKSPACE_ROOT)\" --result-json \"runs/agent/$(TASK_ID)/quickstart_result.json\"", content)
@@ -7342,6 +7347,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "check_experiment_trace.py",
             repo_root / "scripts" / "check_resume_idempotence.py",
             repo_root / "scripts" / "check_ui_freeze_acceptance.py",
+            repo_root / "scripts" / "check_ui_audit_acceptance.py",
             repo_root / "scripts" / "check_ui_release_readiness.py",
             repo_root / "scripts" / "summarize_experiments.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
@@ -7370,6 +7376,22 @@ class PlanProgressAssetsTests(unittest.TestCase):
         self.assertIn("bundle_download", names)
         self.assertIn("batch_compare_api", names)
         self.assertIn("compare_ui_controls", names)
+
+    def test_ui_audit_acceptance_baseline_exists_and_has_required_checks(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        baseline_path = repo_root / "configs" / "acceptance" / "ui_audit_acceptance_baseline.json"
+        self.assertTrue(baseline_path.exists(), msg=f"missing baseline: {baseline_path}")
+        payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+        self.assertEqual(str(payload.get("schema_version") or ""), "1.0")
+        rows = payload.get("required_checks")
+        self.assertTrue(isinstance(rows, list) and len(rows) >= 6)
+        names = [str(row.get("name") or "") for row in rows if isinstance(row, dict)]
+        self.assertIn("select_task_success_context_sync", names)
+        self.assertIn("audit_artifact_actions_api_contract", names)
+        self.assertIn("select_task_missing_run_dir_hints", names)
+        self.assertIn("select_task_read_only_hints", names)
+        self.assertIn("invalid_task_id_rejected", names)
+        self.assertIn("audit_ui_tokens_present", names)
 
     def test_summarize_experiments_script_outputs_aggregate_payload(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -8548,6 +8570,37 @@ class PlanProgressAssetsTests(unittest.TestCase):
             payload = json.loads(cp.stdout)
             self.assertEqual(payload.get("status"), "pass")
             self.assertEqual(int(payload.get("check_count") or 0), 8)
+            self.assertEqual(int(payload.get("failed_count") or 0), 0)
+            self.assertEqual(payload.get("missing_required_checks"), [])
+            self.assertEqual(payload.get("mismatched_required_checks"), [])
+            self.assertTrue(out_path.exists())
+
+    def test_check_ui_audit_acceptance_script_smoke(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            out_path = td_path / "ui_audit_acceptance.json"
+            script = repo_root / "scripts" / "check_ui_audit_acceptance.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(repo_root),
+                    "--out",
+                    str(out_path),
+                    "--baseline",
+                    "configs/acceptance/ui_audit_acceptance_baseline.json",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(int(payload.get("check_count") or 0), 6)
             self.assertEqual(int(payload.get("failed_count") or 0), 0)
             self.assertEqual(payload.get("missing_required_checks"), [])
             self.assertEqual(payload.get("mismatched_required_checks"), [])

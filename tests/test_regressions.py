@@ -9657,6 +9657,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("readBatchCompareExportId()", html)
         self.assertIn("readBatchReplayOptions()", html)
         self.assertIn("renderBatchHistoryMetrics(", html)
+        self.assertIn("aggregateReleaseGateStats(", html)
+        self.assertIn("normalizeReleaseGateStats(", html)
         self.assertIn("applyReplayPreset('safe')", html)
         self.assertIn("applyReplayPreset('fast')", html)
         self.assertIn("applyReplayPreset('dryrun')", html)
@@ -10112,8 +10114,8 @@ class UiPrototypeTests(unittest.TestCase):
                             "limit": 2,
                             "count": 2,
                             "rows": [
-                                {"task_id": task_id, "project_id": "ui_proj_batch"},
-                                {"task_id": "ui_proj_batch_missing", "project_id": "ui_proj_batch"},
+                                {"task_id": task_id, "project_id": "ui_proj_batch", "release_gate_status": "pass"},
+                                {"task_id": "ui_proj_batch_missing", "project_id": "ui_proj_batch", "release_gate_status": "fail"},
                             ],
                             "results": [
                                 {
@@ -10149,7 +10151,7 @@ class UiPrototypeTests(unittest.TestCase):
                             "action": "batch_validate",
                             "limit": 1,
                             "count": 1,
-                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch", "release_gate_status": "missing"}],
                             "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
                             "created_at": "2026-05-15T09:00:00+08:00",
                         }
@@ -10165,7 +10167,7 @@ class UiPrototypeTests(unittest.TestCase):
                             "action": "batch_summary",
                             "limit": 1,
                             "count": 1,
-                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
+                            "rows": [{"task_id": task_id, "project_id": "ui_proj_batch", "release_gate_status": "pass"}],
                             "results": [{"task_id": task_id, "project_id": "ui_proj_batch"}],
                             "created_at": "2026-05-15T08:30:00+08:00",
                         }
@@ -10202,6 +10204,10 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(listed.get("status"), "pass")
                 exports = listed.get("exports") if isinstance(listed.get("exports"), list) else []
                 self.assertGreaterEqual(len(exports), 1)
+                release_gate_stats = exports[0].get("release_gate_stats") if isinstance(exports[0].get("release_gate_stats"), dict) else {}
+                self.assertEqual(int(release_gate_stats.get("pass") or 0), 1)
+                self.assertEqual(int(release_gate_stats.get("fail") or 0), 1)
+                self.assertEqual(int(release_gate_stats.get("missing") or 0), 0)
                 export_id = str(exports[0].get("export_id") or "")
                 self.assertTrue(export_id)
                 other_export_id = str(exports[1].get("export_id") or "") if len(exports) > 1 else ""
@@ -10219,6 +10225,7 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertIn("diff", compare_payload)
                 compare_lines = compare_payload.get("compare_lines") if isinstance(compare_payload.get("compare_lines"), list) else []
                 self.assertGreaterEqual(len(compare_lines), 1)
+                self.assertTrue(any("release_gate(pass/fail/missing/other)" in str(line) for line in compare_lines))
 
                 compare_same_resp = client.get(
                     f"/api/projects/ui_proj_batch/batch-exports/compare?primary_export_id={export_id}&other_export_id={export_id}"

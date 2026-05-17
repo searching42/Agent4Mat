@@ -3741,6 +3741,30 @@ HTML = """
         };
       }
 
+      function normalizeReleaseGateStats(stats) {
+        const out = {pass: 0, fail: 0, missing: 0, other: 0};
+        const raw = (stats && typeof stats === 'object') ? stats : {};
+        for (const key of ['pass', 'fail', 'missing', 'other']) {
+          const value = Number(raw[key] || 0);
+          out[key] = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+        }
+        return out;
+      }
+
+      function aggregateReleaseGateStats(rows) {
+        const out = {pass: 0, fail: 0, missing: 0, other: 0};
+        const items = Array.isArray(rows) ? rows : [];
+        for (const row of items) {
+          if (!row || typeof row !== 'object') continue;
+          const gate = String(row.release_gate_status || '').trim().toLowerCase();
+          if (gate === 'pass') out.pass += 1;
+          else if (gate === 'fail') out.fail += 1;
+          else if (gate === 'missing' || !gate) out.missing += 1;
+          else out.other += 1;
+        }
+        return out;
+      }
+
       function readLatestBatchPayload() {
         try {
           const raw = sessionStorage.getItem('agent4mat.ui.latest_batch_payload');
@@ -3853,12 +3877,16 @@ HTML = """
           const skipN = Number(metrics.skipped_count || 0);
           const dryN = Number(metrics.dry_run_count || 0);
           const elapsedMs = Number(metrics.elapsed_ms || 0);
+          const gateStats = normalizeReleaseGateStats(item.release_gate_stats);
+          const gateText = (gateStats.pass + gateStats.fail + gateStats.missing + gateStats.other) > 0
+            ? ` | gate=${gateStats.pass}/${gateStats.fail}/${gateStats.missing}/${gateStats.other}`
+            : '';
           const metricsText = (okN + failN + skipN + dryN) > 0
             ? ` | ok=${okN} fail=${failN} skipped=${skipN} dry=${dryN} elapsed_ms=${elapsedMs}`
             : '';
           const row = document.createElement('div');
           row.className = 'project-batch-history-item';
-          row.textContent = `${String(item.created_at || '-')} | ${String(item.action || '-')} | status=${String(item.status || '-')} | count=${String(item.count || 0)} | export_id=${eid || '-'}${metricsText}`;
+          row.textContent = `${String(item.created_at || '-')} | ${String(item.action || '-')} | status=${String(item.status || '-')} | count=${String(item.count || 0)} | export_id=${eid || '-'}${gateText}${metricsText}`;
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.textContent = 'Use ID';
@@ -3980,6 +4008,10 @@ HTML = """
         let errN = 0;
         let skippedN = 0;
         let dryN = 0;
+        let gatePassN = 0;
+        let gateFailN = 0;
+        let gateMissingN = 0;
+        let gateOtherN = 0;
         for (const row of rows) {
           if (!row || typeof row !== 'object') continue;
           const st = String(row.status || '').trim().toLowerCase();
@@ -3996,9 +4028,14 @@ HTML = """
           errN += Number(m.fail_count || 0);
           skippedN += Number(m.skipped_count || 0);
           dryN += Number(m.dry_run_count || 0);
+          const gate = normalizeReleaseGateStats(row.release_gate_stats);
+          gatePassN += Number(gate.pass || 0);
+          gateFailN += Number(gate.fail || 0);
+          gateMissingN += Number(gate.missing || 0);
+          gateOtherN += Number(gate.other || 0);
         }
         const avgElapsedMs = elapsedCnt > 0 ? Math.round(totalElapsedMs / elapsedCnt) : 0;
-        box.textContent = `batch_metrics: shown=${rows.length} | pass=${passN} partial=${partialN} fail=${failN} | replay(ok/fail/skipped/dry)=${okN}/${errN}/${skippedN}/${dryN} | avg_elapsed_ms=${avgElapsedMs}`;
+        box.textContent = `batch_metrics: shown=${rows.length} | pass=${passN} partial=${partialN} fail=${failN} | replay(ok/fail/skipped/dry)=${okN}/${errN}/${skippedN}/${dryN} | gate(pass/fail/missing/other)=${gatePassN}/${gateFailN}/${gateMissingN}/${gateOtherN} | avg_elapsed_ms=${avgElapsedMs}`;
       }
 
       function renderFailedReplayQueue(queuePayload) {
@@ -4376,12 +4413,14 @@ HTML = """
           const resp = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
           results.push({project_id: pid, task_id: tid, http_status: resp.status, data: resp.data});
         }
+        const summaryRows = picked.map((row) => summarizeBatchRow(row));
         const out = {
           status: 'pass',
           action: 'batch_summary',
           limit: limit,
           count: results.length,
-          rows: picked.map((row) => summarizeBatchRow(row)),
+          rows: summaryRows,
+          release_gate_stats: aggregateReleaseGateStats(summaryRows),
           results: results,
           created_at: nowIso(),
         };
@@ -4406,12 +4445,14 @@ HTML = """
           const resp = await apiGet(`/api/task/${encodeURIComponent(tid)}/validate`);
           results.push({project_id: pid, task_id: tid, http_status: resp.status, data: resp.data});
         }
+        const summaryRows = picked.map((row) => summarizeBatchRow(row));
         const out = {
           status: 'pass',
           action: 'batch_validate',
           limit: limit,
           count: results.length,
-          rows: picked.map((row) => summarizeBatchRow(row)),
+          rows: summaryRows,
+          release_gate_stats: aggregateReleaseGateStats(summaryRows),
           results: results,
           created_at: nowIso(),
         };
@@ -4450,12 +4491,14 @@ HTML = """
             data: resp.data,
           });
         }
+        const summaryRows = picked.map((row) => summarizeBatchRow(row));
         const out = {
           status: 'pass',
           action: 'batch_retry_failed',
           limit: limit,
           count: retries.length,
-          rows: picked.map((row) => summarizeBatchRow(row)),
+          rows: summaryRows,
+          release_gate_stats: aggregateReleaseGateStats(summaryRows),
           retries: retries,
           created_at: nowIso(),
         };
@@ -7386,6 +7429,10 @@ def _list_batch_export_entries(
                 "limit": _as_int(summary.get("limit"), 0),
                 "action": str(summary.get("action") or payload.get("action") or ""),
                 "status": str(summary.get("status") or payload.get("status") or ""),
+                "release_gate_stats": _normalize_release_gate_stats(
+                    summary.get("release_gate_stats"),
+                    fallback_rows=[],
+                ),
                 "replay_metrics": replay_metrics,
                 "replay_options": {
                     "dry_run": bool(replay_options.get("dry_run")),
@@ -7429,11 +7476,43 @@ def _batch_export_source_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _release_gate_status_key(raw: Any) -> str:
+    gate = str(raw or "").strip().lower()
+    if gate == "pass":
+        return "pass"
+    if gate == "fail":
+        return "fail"
+    if gate == "missing" or not gate:
+        return "missing"
+    return "other"
+
+
+def _release_gate_stats_from_rows(rows: List[Any]) -> Dict[str, int]:
+    counts: Dict[str, int] = {"pass": 0, "fail": 0, "missing": 0, "other": 0}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = _release_gate_status_key(row.get("release_gate_status"))
+        counts[key] = int(counts.get(key) or 0) + 1
+    return counts
+
+
+def _normalize_release_gate_stats(value: Any, *, fallback_rows: List[Any]) -> Dict[str, int]:
+    fallback = _release_gate_stats_from_rows(fallback_rows)
+    if not isinstance(value, dict):
+        return fallback
+    out: Dict[str, int] = {}
+    for key in ("pass", "fail", "missing", "other"):
+        out[key] = max(0, _as_int(value.get(key), fallback.get(key, 0)))
+    return out
+
+
 def _batch_export_summary(payload: Dict[str, Any], *, export_id: str, project_id: str) -> Dict[str, Any]:
     source = _batch_export_source_payload(payload)
     rows = source.get("rows") if isinstance(source.get("rows"), list) else []
     results = source.get("results") if isinstance(source.get("results"), list) else []
     retries = source.get("retries") if isinstance(source.get("retries"), list) else []
+    release_gate_stats = _normalize_release_gate_stats(source.get("release_gate_stats"), fallback_rows=rows)
     count_default = len(results) + len(retries)
     if count_default < 1:
         count_default = len(rows)
@@ -7449,17 +7528,25 @@ def _batch_export_summary(payload: Dict[str, Any], *, export_id: str, project_id
         "retries_count": len(retries),
         "created_at": str(payload.get("created_at") or source.get("created_at") or ""),
         "replayed_from_export_id": str(source.get("replayed_from_export_id") or payload.get("source_export_id") or ""),
+        "release_gate_stats": release_gate_stats,
     }
 
 
 def _batch_export_compare_lines(primary: Dict[str, Any], other: Dict[str, Any], diff: Dict[str, Any]) -> List[str]:
     p_eid = str(primary.get("export_id") or "")
     o_eid = str(other.get("export_id") or "")
+    p_gate = _normalize_release_gate_stats(primary.get("release_gate_stats"), fallback_rows=[])
+    o_gate = _normalize_release_gate_stats(other.get("release_gate_stats"), fallback_rows=[])
     out = [
         f"action {p_eid}={str(primary.get('action') or '')} vs {o_eid}={str(other.get('action') or '')}",
         f"status {p_eid}={str(primary.get('status') or '')} vs {o_eid}={str(other.get('status') or '')}",
         f"count {p_eid}={int(primary.get('count') or 0)} vs {o_eid}={int(other.get('count') or 0)} delta={int(primary.get('count') or 0) - int(other.get('count') or 0)}",
         f"rows {p_eid}={int(primary.get('rows_count') or 0)} vs {o_eid}={int(other.get('rows_count') or 0)} delta={int(primary.get('rows_count') or 0) - int(other.get('rows_count') or 0)}",
+        (
+            f"release_gate(pass/fail/missing/other) "
+            f"{p_eid}={int(p_gate.get('pass') or 0)}/{int(p_gate.get('fail') or 0)}/{int(p_gate.get('missing') or 0)}/{int(p_gate.get('other') or 0)} "
+            f"vs {o_eid}={int(o_gate.get('pass') or 0)}/{int(o_gate.get('fail') or 0)}/{int(o_gate.get('missing') or 0)}/{int(o_gate.get('other') or 0)}"
+        ),
         f"changed_paths={int(diff.get('changed_count') or 0)} only_primary={int(diff.get('only_in_primary_count') or 0)} only_other={int(diff.get('only_in_other_count') or 0)}",
     ]
     return out

@@ -9353,6 +9353,60 @@ class UiPrototypeTests(unittest.TestCase):
                 attachments = hist.get("attachments") if isinstance(hist.get("attachments"), list) else []
                 self.assertEqual(len(attachments), 1)
 
+    def test_ui_project_select_task_updates_current_task_and_paths(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_proj_switch", "title": "switch"})
+                task_id = "ui_switch_task_20260517"
+                run_dir = root / "runs" / "agent" / task_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "task.draft.json").write_text("{}", encoding="utf-8")
+                (run_dir / "task.json").write_text("{}", encoding="utf-8")
+                (run_dir / "request_from_task.json").write_text("{}", encoding="utf-8")
+                (run_dir / "decision_summary.json").write_text(
+                    json.dumps({"status": "success"}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+                (run_dir / "artifacts" / "experiment_trace.json").write_text(
+                    json.dumps({"task_id": task_id, "run_label": f"{task_id}-20260517-120000"}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                (root / "result" / f"{task_id}-20260517-120000").mkdir(parents=True, exist_ok=True)
+
+                resp = client.post(f"/api/projects/ui_proj_switch/select-task", json={"task_id": task_id})
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                self.assertEqual(payload.get("task_id"), task_id)
+                selected = payload.get("selected_task") if isinstance(payload.get("selected_task"), dict) else {}
+                self.assertEqual(selected.get("task_id"), task_id)
+                self.assertEqual(selected.get("run_label"), f"{task_id}-20260517-120000")
+                project = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                self.assertEqual(project.get("current_task_id"), task_id)
+                self.assertTrue(str(project.get("task_draft_path") or "").endswith(f"/{task_id}/task.draft.json"))
+                self.assertTrue(str(project.get("task_json_path") or "").endswith(f"/{task_id}/task.json"))
+                self.assertTrue(str(project.get("request_path") or "").endswith(f"/{task_id}/request_from_task.json"))
+                runtime = project.get("last_runtime") if isinstance(project.get("last_runtime"), dict) else {}
+                self.assertEqual(str(runtime.get("operation") or ""), "select_task")
+                self.assertEqual(str(runtime.get("task_id") or ""), task_id)
+
+    def test_ui_project_select_task_rejects_invalid_task_id(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_proj_switch_invalid", "title": "switch"})
+                resp = client.post("/api/projects/ui_proj_switch_invalid/select-task", json={"task_id": "bad..id"})
+                self.assertEqual(resp.status_code, 400)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "fail")
+                self.assertEqual(payload.get("error"), "invalid task_id")
+
     def test_ui_project_memory_roundtrip_persists(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -9984,12 +10038,14 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("applyControlCenterAuditSort(", html)
         self.assertIn("applyControlCenterAuditQuery(", html)
         self.assertIn("openAuditTaskSummary(", html)
+        self.assertIn("activateAuditTask(", html)
         self.assertIn("openAuditDecisionSummary(", html)
         self.assertIn("openAuditArtifactLinks(", html)
         self.assertIn("copyAuditResultDirPath(", html)
         self.assertIn("control_center_audit_copy_btn", html)
         self.assertIn("control_center_audit_export_btn", html)
         self.assertIn("/api/task/${encodeURIComponent(tid)}/artifact-links", html)
+        self.assertIn("/api/projects/${encodeURIComponent(pid)}/select-task", html)
         self.assertIn("classifyControlCenterAuditStatus(", html)
         self.assertIn("syncNoviceGuidanceAction(", html)
         self.assertIn("prefersGuidedRecovery(", html)

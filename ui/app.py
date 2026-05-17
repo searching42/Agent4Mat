@@ -2291,14 +2291,41 @@ HTML = """
         return rows;
       }
 
-      async function openAuditTaskSummary(taskId) {
+      async function activateAuditTask(taskId, opts) {
         const tid = _normalizeAuditTaskId(taskId);
         if (!tid) {
-          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_summary', task_id: String(taskId || '')});
-          return;
+          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_activate', task_id: String(taskId || '')});
+          return {ok: false, task_id: ''};
         }
+        const pid = selectedProjectId();
+        const r = await apiPost(`/api/projects/${encodeURIComponent(pid)}/select-task`, {task_id: tid});
+        const data = r.data && typeof r.data === 'object' ? r.data : {};
+        const ok = r.status === 200 && String(data.status || '') === 'pass' && data.project && typeof data.project === 'object';
+        if (!ok) {
+          renderJsonOut(data);
+          return {ok: false, task_id: tid, data: data};
+        }
+        state.project = data.project;
+        applyProjectStateToUi(data.project);
+        await loadRunRuntime();
+        await refreshProjects();
+        if (!opts || opts.verbose !== false) {
+          renderJsonOut(data);
+        }
+        renderEvents([{stage: 'audit_activate_task', status: 'pass', operation: tid, task_id: tid}], data);
+        return {ok: true, task_id: tid, data: data};
+      }
+
+      async function openAuditTaskSummary(taskId) {
+        const switched = await activateAuditTask(taskId, {verbose: false});
+        if (!switched.ok) return;
+        const tid = switched.task_id;
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
         renderJsonOut(r.data);
+        renderSummaryEventLines(r.data);
+        renderMemoryExplorerFromSummary(r.data);
+        renderQualityGuardCard(r.data, {});
+        setQuickCandidateStatus(`audit summary loaded for task=${tid}`, r.data && r.data.status === 'pass' ? 'pass' : 'warn');
       }
 
       async function openAuditDecisionSummary(taskId) {
@@ -2386,6 +2413,12 @@ HTML = """
         }
         const actions = document.createElement('div');
         actions.className = 'ca-row-actions';
+
+        const activateBtn = document.createElement('button');
+        activateBtn.type = 'button';
+        activateBtn.textContent = 'Activate';
+        activateBtn.addEventListener('click', () => { void activateAuditTask(taskId, {verbose: true}); });
+        actions.appendChild(activateBtn);
 
         const summaryBtn = document.createElement('button');
         summaryBtn.type = 'button';
@@ -12350,6 +12383,68 @@ def api_projects_upsert():
         _apply_project_memory_update(project, memory_notes, provided=memory_notes_provided)
     project = _save_project_state(project)
     return jsonify({"status": "pass", "project": _project_summary(project), "messages": _recent_messages(project)})
+
+
+@app.post("/api/projects/<project_id>/select-task")
+def api_project_select_task(project_id: str):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(pid):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+
+    body = request.get_json(silent=True) or {}
+    task_id = str(body.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(task_id):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+
+    project = _load_project_state(pid)
+    if not isinstance(project, dict):
+        return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+
+    selected_task = _task_artifact_links_payload(task_id)
+    run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
+    task_draft_path = run_dir / "task.draft.json"
+    task_json_path = run_dir / "task.json"
+    request_path = run_dir / "request_from_task.json"
+
+    project["current_task_id"] = task_id
+    project["task_draft_path"] = str(task_draft_path) if task_draft_path.exists() else ""
+    project["task_json_path"] = str(task_json_path) if task_json_path.exists() else ""
+    project["request_path"] = str(request_path) if request_path.exists() else ""
+    project["pending_input"] = {}
+
+    last_runtime = project.get("last_runtime") if isinstance(project.get("last_runtime"), dict) else {}
+    result_meta = selected_task.get("result_dir") if isinstance(selected_task.get("result_dir"), dict) else {}
+    project["last_runtime"] = {
+        **dict(last_runtime),
+        "status": "selected",
+        "operation": "select_task",
+        "task_id": task_id,
+        "run_label": str(selected_task.get("run_label") or ""),
+        "result_dir": str(result_meta.get("path") or ""),
+        "updated_at": _now_iso(),
+    }
+    _append_message(
+        project,
+        role="system",
+        kind="task_select",
+        content=f"Current task switched to: {task_id}",
+        meta={"task_id": task_id, "selected_task": selected_task},
+    )
+    project = _save_project_state(project)
+    return jsonify(
+        {
+            "status": "pass",
+            "project_id": pid,
+            "task_id": task_id,
+            "selected_task": selected_task,
+            "project": _project_summary(project),
+            "messages": _recent_messages(project),
+        }
+    )
 
 
 @app.get("/api/projects/<project_id>/history")

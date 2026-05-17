@@ -478,6 +478,42 @@ HTML = """
         font-size: 0.72rem;
         color: #7a3f00;
       }
+      .quality-guard-card {
+        border: 1px solid #d7e2f3;
+        border-radius: 10px;
+        background: #f8fbff;
+        padding: 8px 10px;
+      }
+      .quality-guard-card .qg-head {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #5d6b80;
+        margin-bottom: 4px;
+      }
+      .quality-guard-card .qg-text {
+        font-size: 0.78rem;
+        color: #334155;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .quality-guard-card .qg-issues {
+        margin-top: 4px;
+        font-size: 0.72rem;
+        color: #7a3f00;
+      }
+      .quality-guard-card .qg-actions {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .quality-guard-card .qg-actions button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
       .chat-log {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -1249,6 +1285,17 @@ HTML = """
           <div class=\"status-actions\" style=\"margin-top: 8px;\">
             <button type=\"button\" onclick=\"loadUiReleaseReadiness(true)\">Load Gate</button>
             <button type=\"button\" onclick=\"refreshUiReleaseReadiness(true)\">Run Gate</button>
+          </div>
+        </div>
+        <div class=\"quality-guard-card\" id=\"quality_guard_card\">
+          <div class=\"qg-head\">Quality & Guardrails</div>
+          <div class=\"qg-text\" id=\"quality_guard_text\">quality: waiting for first task</div>
+          <div class=\"qg-issues\" id=\"quality_guard_issues\"></div>
+          <div class=\"qg-actions\">
+            <button type=\"button\" id=\"quality_guard_suggest_btn\" onclick=\"applyQualitySuggestion()\">Apply Suggestion</button>
+            <button type=\"button\" onclick=\"validateTask()\">Validate Task</button>
+            <button type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
+            <button type=\"button\" onclick=\"downloadTaskBundle()\">Download Bundle</button>
           </div>
         </div>
         <div class=\"chat-log\" id=\"chat_log\"></div>
@@ -2851,6 +2898,150 @@ HTML = """
         } else {
           failEle.textContent = '';
         }
+      }
+
+      function qualityGateFailureNames(checks) {
+        const rows = Array.isArray(checks) ? checks : [];
+        const out = [];
+        for (const row of rows) {
+          if (!row || typeof row !== 'object') continue;
+          const st = String(row.status || '').trim().toLowerCase();
+          if (st !== 'fail') continue;
+          const name = String(row.name || '').trim();
+          if (!name) continue;
+          out.push(name);
+          if (out.length >= 4) break;
+        }
+        return out;
+      }
+
+      function computeQualitySuggestion(summaryPayload, timelinePayload) {
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const exec = (s.execution_summary && typeof s.execution_summary === 'object') ? s.execution_summary : {};
+        const fail = (s.failure_diagnostics && typeof s.failure_diagnostics === 'object') ? s.failure_diagnostics : {};
+        const relFromSummary = (s.release_context && typeof s.release_context === 'object') ? s.release_context : {};
+        const relFromTimeline = (t.release_context && typeof t.release_context === 'object') ? t.release_context : {};
+        const rel = Object.keys(relFromTimeline).length > 0 ? relFromTimeline : relFromSummary;
+        const evalPrev = (s.evaluation_report_preview && typeof s.evaluation_report_preview === 'object') ? s.evaluation_report_preview : {};
+        const guardPrev = (s.guardrails_report_preview && typeof s.guardrails_report_preview === 'object') ? s.guardrails_report_preview : {};
+        const runStatus = String(exec.status || s.status || '').trim().toLowerCase();
+        const failedN = Number(exec.failed_count || 0);
+        const failureKind = String(fail.latest_failure_kind || '').trim().toLowerCase();
+        const failedStep = String(fail.latest_failed_step || '').trim();
+        const relOverall = String(rel.release_overall || '').trim().toLowerCase();
+        const gateStatus = String(rel.archive_release_gate_status || '').trim().toLowerCase();
+        const evalStatus = String(evalPrev.status || '').trim().toLowerCase();
+        const guardStatus = String(guardPrev.status || '').trim().toLowerCase();
+        const evalFails = qualityGateFailureNames(evalPrev.failed_checks);
+        const guardFails = qualityGateFailureNames(guardPrev.failed_checks);
+
+        if (failedN > 0 || runStatus === 'failed') {
+          if (failedStep) {
+            return {
+              code: 'retry_failed_step',
+              label: `Retry failed step: ${failedStep}`,
+              severity: 'high',
+              reason: `runtime failed on ${failedStep}${failureKind ? ` (${failureKind})` : ''}`,
+            };
+          }
+          return {
+            code: 'resume_task',
+            label: 'Resume task',
+            severity: 'high',
+            reason: `runtime status=${runStatus || 'failed'}`,
+          };
+        }
+        if (evalStatus === 'fail' || guardStatus === 'fail') {
+          const first = (evalFails[0] || guardFails[0] || '').trim();
+          return {
+            code: 'validate_task',
+            label: 'Open validate details',
+            severity: 'high',
+            reason: first ? `schema/check failed: ${first}` : 'evaluation/guardrails check failed',
+          };
+        }
+        if (relOverall === 'fail' || gateStatus === 'fail') {
+          return {
+            code: 'open_summary',
+            label: 'Inspect release context',
+            severity: 'warn',
+            reason: `release gate=${gateStatus || '-'} overall=${relOverall || '-'}`,
+          };
+        }
+        if (runStatus === 'success') {
+          return {
+            code: 'download_bundle',
+            label: 'Download task bundle',
+            severity: 'pass',
+            reason: 'runtime, evaluation, and guardrails look healthy',
+          };
+        }
+        return {
+          code: 'open_summary',
+          label: 'Review current summary',
+          severity: 'warn',
+          reason: `runtime status=${runStatus || '-'}`,
+        };
+      }
+
+      function renderQualityGuardCard(summaryPayload, timelinePayload) {
+        const textEle = document.getElementById('quality_guard_text');
+        const issuesEle = document.getElementById('quality_guard_issues');
+        const suggestBtn = document.getElementById('quality_guard_suggest_btn');
+        if (!textEle || !issuesEle || !suggestBtn) return;
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const exec = (s.execution_summary && typeof s.execution_summary === 'object') ? s.execution_summary : {};
+        const evalPrev = (s.evaluation_report_preview && typeof s.evaluation_report_preview === 'object') ? s.evaluation_report_preview : {};
+        const guardPrev = (s.guardrails_report_preview && typeof s.guardrails_report_preview === 'object') ? s.guardrails_report_preview : {};
+        const evalSummary = (evalPrev.summary && typeof evalPrev.summary === 'object') ? evalPrev.summary : {};
+        const guardSummary = (guardPrev.summary && typeof guardPrev.summary === 'object') ? guardPrev.summary : {};
+        const runStatus = String(exec.status || s.status || '-').trim();
+        const failedN = Number(exec.failed_count || 0);
+        const evalStatus = String(evalPrev.status || '-').trim();
+        const guardStatus = String(guardPrev.status || '-').trim();
+        const evalFailN = Number(evalSummary.fail_count || 0);
+        const guardFailN = Number(guardSummary.fail_count || 0);
+        const suggestion = computeQualitySuggestion(s, t);
+        const severity = String(suggestion.severity || '').trim().toLowerCase();
+        textEle.textContent =
+          `runtime=${runStatus || '-'} failed_steps=${failedN} | eval=${evalStatus || '-'} fail=${evalFailN} | guard=${guardStatus || '-'} fail=${guardFailN}`;
+        const detail = String(suggestion.reason || '').trim();
+        issuesEle.textContent = detail ? `next: ${detail}` : '';
+        suggestBtn.textContent = String(suggestion.label || 'Apply Suggestion');
+        suggestBtn.dataset.action = String(suggestion.code || 'open_summary');
+        suggestBtn.dataset.severity = severity;
+        suggestBtn.classList.remove('state-pass', 'state-warn', 'state-fail');
+        if (severity === 'pass') {
+          suggestBtn.classList.add('state-pass');
+        } else if (severity === 'warn') {
+          suggestBtn.classList.add('state-warn');
+        } else {
+          suggestBtn.classList.add('state-fail');
+        }
+      }
+
+      async function applyQualitySuggestion() {
+        const btn = document.getElementById('quality_guard_suggest_btn');
+        const action = String((btn && btn.dataset && btn.dataset.action) || '').trim() || 'open_summary';
+        if (action === 'retry_failed_step') {
+          await retryFailedStep();
+          return;
+        }
+        if (action === 'resume_task') {
+          await retryCurrentTask();
+          return;
+        }
+        if (action === 'validate_task') {
+          await validateTask();
+          return;
+        }
+        if (action === 'download_bundle') {
+          downloadTaskBundle();
+          return;
+        }
+        await showCurrentTaskSummaryInline();
       }
 
       function renderUiReleaseReadiness(payload) {
@@ -5617,6 +5808,7 @@ HTML = """
         renderSummaryEventLines(r.data);
         renderMemoryExplorerFromSummary(r.data);
         renderReleaseContextCard(r.data, {});
+        renderQualityGuardCard(r.data, {});
       }
 
       async function validateProjectTask(projectId, taskId) {
@@ -6257,6 +6449,7 @@ HTML = """
         renderJsonOut(r.data);
         renderSummaryEventLines(r.data);
         renderMemoryExplorerFromSummary(r.data);
+        renderQualityGuardCard(r.data, {});
         setQuickCandidateStatus(`quick summary loaded for task=${tid}`, r.data && r.data.status === 'pass' ? 'pass' : 'warn');
       }
 
@@ -6484,6 +6677,7 @@ HTML = """
           renderChatStatusRibbon({}, {}, state.project || {});
           renderResumeDiagnostics(state.project || {});
           renderReleaseContextCard({}, {});
+          renderQualityGuardCard({}, {});
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -6511,6 +6705,7 @@ HTML = """
         renderChatStatusRibbon(s, tl, state.project || {});
         renderResumeDiagnostics(state.project || {});
         renderReleaseContextCard(s, tl);
+        renderQualityGuardCard(s, tl);
       }
 
       async function boot() {

@@ -549,6 +549,37 @@ HTML = """
       .control-center-audit .ca-list li {
         margin: 2px 0;
       }
+      .control-center-audit .ca-row {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+      .control-center-audit .ca-row-line {
+        word-break: break-word;
+      }
+      .control-center-audit .ca-row-links {
+        color: #5d6b80;
+        font-size: 0.7rem;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .control-center-audit .ca-row-links span {
+        border: 1px solid #d7e2f3;
+        border-radius: 999px;
+        padding: 1px 6px;
+        background: #f7faff;
+      }
+      .control-center-audit .ca-row-actions {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+      }
+      .control-center-audit .ca-row-actions button {
+        margin-top: 0;
+        padding: 3px 7px;
+        font-size: 0.68rem;
+      }
       .control-center-audit .ca-empty {
         font-size: 0.74rem;
         color: #6b7280;
@@ -1898,7 +1929,7 @@ HTML = """
       };
 
       const PROMPT_HISTORY_LIMIT = 8;
-      const CONTROL_CENTER_AUDIT_LIMIT = 12;
+      const CONTROL_CENTER_AUDIT_LIMIT = 30;
       const SESSION_BOARD_KEY = 'agent4mat.ui.session_board.v1';
       const UI_PREFS_KEY = 'agent4mat.ui.prefs.v1';
 
@@ -2062,6 +2093,50 @@ HTML = """
         }
       }
 
+      function _normalizeAuditTaskId(raw) {
+        const tid = String(raw || '').trim();
+        return (/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).test(tid) ? tid : '';
+      }
+
+      function _normalizeAuditText(raw, maxLen) {
+        return String(raw || '').trim().slice(0, maxLen > 0 ? maxLen : 200);
+      }
+
+      function _extractAuditArtifactContext(source) {
+        const src = source && typeof source === 'object' ? source : {};
+        const taskId = _normalizeAuditTaskId(src.task_id || src.taskId);
+        const runLabel = _normalizeAuditText(src.run_label || src.runLabel, 180);
+        const resultDir = _normalizeAuditText(src.result_dir || src.resultDir, 400);
+        const decisionSummaryPath = _normalizeAuditText(src.decision_summary_path || src.decisionSummaryPath, 400);
+        const runDir = _normalizeAuditText(src.run_dir || src.runDir, 400);
+        return {
+          task_id: taskId,
+          run_label: runLabel,
+          result_dir: resultDir,
+          decision_summary_path: decisionSummaryPath,
+          run_dir: runDir,
+        };
+      }
+
+      function _mergeAuditArtifactContext(...sources) {
+        const out = {
+          task_id: '',
+          run_label: '',
+          result_dir: '',
+          decision_summary_path: '',
+          run_dir: '',
+        };
+        for (const src of sources) {
+          const row = _extractAuditArtifactContext(src);
+          if (!out.task_id && row.task_id) out.task_id = row.task_id;
+          if (!out.run_label && row.run_label) out.run_label = row.run_label;
+          if (!out.result_dir && row.result_dir) out.result_dir = row.result_dir;
+          if (!out.decision_summary_path && row.decision_summary_path) out.decision_summary_path = row.decision_summary_path;
+          if (!out.run_dir && row.run_dir) out.run_dir = row.run_dir;
+        }
+        return out;
+      }
+
       function appendControlCenterAudit(entry) {
         const row = entry && typeof entry === 'object' ? entry : {};
         const stage = String(row.stage || '').trim() || 'action';
@@ -2069,6 +2144,14 @@ HTML = """
         const operation = String(row.operation || '').trim();
         const detail = String(row.detail || row.reason || '').trim();
         const at = String(row.at || _auditNowIso()).trim();
+        const project = state.project && typeof state.project === 'object' ? state.project : {};
+        const lastRuntime = project.last_runtime && typeof project.last_runtime === 'object' ? project.last_runtime : {};
+        const artifactCtx = _mergeAuditArtifactContext(
+          row,
+          row.artifact_context,
+          {task_id: _normalizeAuditTaskId(project.current_task_id)},
+          lastRuntime,
+        );
         state.controlCenterAudit = Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit : [];
         state.controlCenterAudit.push({
           at: at,
@@ -2076,6 +2159,11 @@ HTML = """
           status: status,
           operation: operation,
           detail: detail,
+          task_id: artifactCtx.task_id,
+          run_label: artifactCtx.run_label,
+          result_dir: artifactCtx.result_dir,
+          decision_summary_path: artifactCtx.decision_summary_path,
+          run_dir: artifactCtx.run_dir,
         });
         if (state.controlCenterAudit.length > CONTROL_CENTER_AUDIT_LIMIT) {
           state.controlCenterAudit = state.controlCenterAudit.slice(-CONTROL_CENTER_AUDIT_LIMIT);
@@ -2187,7 +2275,7 @@ HTML = """
         if (query) {
           rows = rows.filter((row) => {
             if (!row || typeof row !== 'object') return false;
-            const merged = `${row.stage || ''} ${row.status || ''} ${row.operation || ''} ${row.detail || ''}`.toLowerCase();
+            const merged = `${row.stage || ''} ${row.status || ''} ${row.operation || ''} ${row.detail || ''} ${row.task_id || ''} ${row.run_label || ''}`.toLowerCase();
             return merged.includes(query);
           });
         }
@@ -2201,6 +2289,129 @@ HTML = """
           rows.reverse();
         }
         return rows;
+      }
+
+      async function openAuditTaskSummary(taskId) {
+        const tid = _normalizeAuditTaskId(taskId);
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_summary', task_id: String(taskId || '')});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
+        renderJsonOut(r.data);
+      }
+
+      async function openAuditDecisionSummary(taskId) {
+        const tid = _normalizeAuditTaskId(taskId);
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_decision', task_id: String(taskId || '')});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact/decision_summary?max_chars=30000`);
+        renderJsonOut(r.data);
+      }
+
+      async function openAuditArtifactLinks(taskId) {
+        const tid = _normalizeAuditTaskId(taskId);
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_links', task_id: String(taskId || '')});
+          return;
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact-links`);
+        renderJsonOut(r.data);
+      }
+
+      async function copyAuditResultDirPath(taskId) {
+        const tid = _normalizeAuditTaskId(taskId);
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_copy', task_id: String(taskId || '')});
+          return;
+        }
+        const linksResp = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact-links`);
+        const payload = linksResp.data && typeof linksResp.data === 'object' ? linksResp.data : {};
+        const resultMeta = payload.result_dir && typeof payload.result_dir === 'object' ? payload.result_dir : {};
+        const pathText = String(resultMeta.path || '').trim();
+        if (!pathText) {
+          renderJsonOut({status: 'fail', error: 'result_dir_missing', task_id: tid, links: payload});
+          return;
+        }
+        try {
+          if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(pathText);
+            renderJsonOut({status: 'pass', action: 'copy_audit_result_dir', task_id: tid, path: pathText});
+            return;
+          }
+        } catch (e) {}
+        triggerTextDownload(`result_dir_${tid}.txt`, `${pathText}\n`, 'text/plain;charset=utf-8');
+        renderJsonOut({status: 'pass', action: 'copy_audit_result_dir_download_fallback', task_id: tid, path: pathText});
+      }
+
+      function _renderAuditRowLinks(row, container) {
+        const taskId = _normalizeAuditTaskId(row.task_id);
+        const runLabel = _normalizeAuditText(row.run_label, 180);
+        const resultDir = _normalizeAuditText(row.result_dir, 400);
+        const decisionPath = _normalizeAuditText(row.decision_summary_path, 400);
+        if (!taskId && !runLabel && !resultDir && !decisionPath) {
+          return;
+        }
+        const links = document.createElement('div');
+        links.className = 'ca-row-links';
+        if (taskId) {
+          const chip = document.createElement('span');
+          chip.textContent = `task=${taskId}`;
+          links.appendChild(chip);
+        }
+        if (runLabel) {
+          const chip = document.createElement('span');
+          chip.textContent = `run=${runLabel}`;
+          links.appendChild(chip);
+        }
+        if (resultDir) {
+          const chip = document.createElement('span');
+          chip.textContent = `result_dir`;
+          links.appendChild(chip);
+        }
+        if (decisionPath) {
+          const chip = document.createElement('span');
+          chip.textContent = `decision_summary`;
+          links.appendChild(chip);
+        }
+        container.appendChild(links);
+      }
+
+      function _renderAuditRowActions(row, container) {
+        const taskId = _normalizeAuditTaskId(row.task_id);
+        if (!taskId) {
+          return;
+        }
+        const actions = document.createElement('div');
+        actions.className = 'ca-row-actions';
+
+        const summaryBtn = document.createElement('button');
+        summaryBtn.type = 'button';
+        summaryBtn.textContent = 'Summary';
+        summaryBtn.addEventListener('click', () => { void openAuditTaskSummary(taskId); });
+        actions.appendChild(summaryBtn);
+
+        const decisionBtn = document.createElement('button');
+        decisionBtn.type = 'button';
+        decisionBtn.textContent = 'Decision';
+        decisionBtn.addEventListener('click', () => { void openAuditDecisionSummary(taskId); });
+        actions.appendChild(decisionBtn);
+
+        const linksBtn = document.createElement('button');
+        linksBtn.type = 'button';
+        linksBtn.textContent = 'Paths';
+        linksBtn.addEventListener('click', () => { void openAuditArtifactLinks(taskId); });
+        actions.appendChild(linksBtn);
+
+        const copyResultBtn = document.createElement('button');
+        copyResultBtn.type = 'button';
+        copyResultBtn.textContent = 'Copy ResultDir';
+        copyResultBtn.addEventListener('click', () => { void copyAuditResultDirPath(taskId); });
+        actions.appendChild(copyResultBtn);
+
+        container.appendChild(actions);
       }
 
       function renderControlCenterAudit() {
@@ -2232,10 +2443,18 @@ HTML = """
           const operation = String(row.operation || '').trim();
           const detail = String(row.detail || '').trim();
           const li = document.createElement('li');
+          const wrap = document.createElement('div');
+          wrap.className = 'ca-row';
+          const lineEle = document.createElement('div');
+          lineEle.className = 'ca-row-line';
           let line = `${at || '-'} | ${stage || '-'} | ${status || '-'}`;
           if (operation) line += ` | op=${operation}`;
           if (detail) line += ` | ${detail}`;
-          li.textContent = line;
+          lineEle.textContent = line;
+          wrap.appendChild(lineEle);
+          _renderAuditRowLinks(row, wrap);
+          _renderAuditRowActions(row, wrap);
+          li.appendChild(wrap);
           listEle.appendChild(li);
         }
       }
@@ -2254,8 +2473,12 @@ HTML = """
           const status = String((row && row.status) || '').trim() || '-';
           const operation = String((row && row.operation) || '').trim();
           const detail = String((row && row.detail) || '').trim();
+          const taskId = _normalizeAuditTaskId(row && row.task_id);
+          const runLabel = _normalizeAuditText(row && row.run_label, 180);
           let line = `${at} | ${stage} | ${status}`;
           if (operation) line += ` | op=${operation}`;
+          if (taskId) line += ` | task=${taskId}`;
+          if (runLabel) line += ` | run=${runLabel}`;
           if (detail) line += ` | ${detail}`;
           return line;
         });
@@ -3350,7 +3573,29 @@ HTML = """
         steps.textContent = `steps: reused=[${reusedText}] rerun=[${rerunText}]`;
       }
 
-      function renderEvents(events) {
+      function _eventAuditArtifactContext(eventRow, payload) {
+        const e = eventRow && typeof eventRow === 'object' ? eventRow : {};
+        const p = payload && typeof payload === 'object' ? payload : {};
+        const project = p.project && typeof p.project === 'object'
+          ? p.project
+          : (state.project && typeof state.project === 'object' ? state.project : {});
+        const lastRuntime = project.last_runtime && typeof project.last_runtime === 'object' ? project.last_runtime : {};
+        const runResult = p.run_result && typeof p.run_result === 'object' ? p.run_result : {};
+        const stepResult = p.step_result && typeof p.step_result === 'object' ? p.step_result : {};
+        const resumeResult = p.resume_result && typeof p.resume_result === 'object' ? p.resume_result : {};
+        const taskId = _normalizeAuditTaskId(e.task_id || project.current_task_id || runResult.task_id || stepResult.task_id || resumeResult.task_id);
+        return _mergeAuditArtifactContext(
+          {task_id: taskId},
+          lastRuntime,
+          runResult,
+          stepResult,
+          resumeResult,
+          e,
+          p,
+        );
+      }
+
+      function renderEvents(events, payload) {
         const arr = Array.isArray(events) ? events : [];
         if (arr.length < 1) {
           document.getElementById('event_out').textContent = '(no events)';
@@ -3358,11 +3603,13 @@ HTML = """
         }
         for (const e of arr) {
           if (!e || typeof e !== 'object') continue;
+          const artifactCtx = _eventAuditArtifactContext(e, payload);
           appendControlCenterAudit({
             stage: String(e.stage || '').trim() || 'event',
             status: String(e.status || '').trim() || 'unknown',
             operation: String(e.operation || '').trim(),
             detail: String(e.reason || e.failure_kind || e.resume_failure_kind || '').trim(),
+            artifact_context: artifactCtx,
           });
         }
         const lines = [];
@@ -3375,12 +3622,15 @@ HTML = """
           const failureKind = String(e.failure_kind || e.resume_failure_kind || '').trim();
           const failedStep = String(e.failed_step || e.resume_failed_step || '').trim();
           const detail = String(e.failure_detail || e.resume_failure_detail || '').trim();
+          const artifactCtx = _eventAuditArtifactContext(e, payload);
           const resumeVisibilityLine = formatResumeVisibilityLine(e.resume_visibility);
           let line = `${stage}: ${status}`;
           if (op) line += ` | op=${op}`;
           if (reason) line += ` | reason=${reason}`;
           if (failureKind) line += ` | failure=${failureKind}`;
           if (failedStep) line += ` | failed_step=${failedStep}`;
+          if (artifactCtx.task_id) line += ` | task=${artifactCtx.task_id}`;
+          if (artifactCtx.run_label) line += ` | run=${artifactCtx.run_label}`;
           if (detail) line += ` | detail=${detail.slice(0, 220)}`;
           if (resumeVisibilityLine) line += ` | ${resumeVisibilityLine}`;
           lines.push(line);
@@ -6971,7 +7221,7 @@ HTML = """
           capturePromptHistory(pid, message);
         }
         renderJsonOut(r.data);
-        renderEvents(r.data && r.data.events ? r.data.events : []);
+        renderEvents(r.data && r.data.events ? r.data.events : [], r.data);
         const pending = (r.data && r.data.pending_input)
           ? r.data.pending_input
           : ((r.data && r.data.project && r.data.project.pending_input) ? r.data.project.pending_input : null);
@@ -7083,7 +7333,7 @@ HTML = """
             });
           }
         }
-        renderEvents(baseEvents);
+        renderEvents(baseEvents, data);
         const pending = data.pending_input
           ? data.pending_input
           : ((data.project && data.project.pending_input) ? data.project.pending_input : null);
@@ -7466,7 +7716,7 @@ HTML = """
         });
         renderJsonOut(r.data);
         const status = String((r.data && r.data.status) || 'unknown');
-        renderEvents([{stage: 'resume', status: status}]);
+        renderEvents([{stage: 'resume', status: status}], r.data);
         await loadRunRuntime();
       }
 
@@ -7521,7 +7771,7 @@ HTML = """
         const status = String((r.data && r.data.status) || 'unknown');
         const op = String((r.data && r.data.retry_operation) || '');
         const stage = dryRun ? 'preview_retry_failed_step' : 'retry_failed_step';
-        renderEvents([{stage: stage, status: status, operation: op || undefined}]);
+        renderEvents([{stage: stage, status: status, operation: op || undefined}], r.data);
         if (!dryRun) {
           await loadRunRuntime();
         }
@@ -7883,6 +8133,82 @@ def _task_artifact_paths(task_id: str) -> Dict[str, Path]:
     for name, rel in ARTIFACT_NAME_TO_FILE.items():
         out[name] = _task_artifact_path(task_id, rel)
     return out
+
+
+def _path_meta(path: Optional[Path]) -> Dict[str, Any]:
+    if not isinstance(path, Path):
+        return {"path": "", "exists": False, "is_file": False, "is_dir": False, "repo_rel": ""}
+    p = path.resolve()
+    exists = p.exists()
+    repo_rel = ""
+    if _path_within(REPO_ROOT, p):
+        try:
+            repo_rel = str(p.relative_to(REPO_ROOT.resolve()))
+        except Exception:
+            repo_rel = ""
+    return {
+        "path": str(p),
+        "exists": exists,
+        "is_file": bool(exists and p.is_file()),
+        "is_dir": bool(exists and p.is_dir()),
+        "repo_rel": repo_rel,
+    }
+
+
+def _guess_task_run_label(task_id: str, *, result_dir: Optional[Path], logging_dir: Optional[Path], decision: Any, trace: Any) -> str:
+    for src in (trace, decision):
+        if isinstance(src, dict):
+            run_label = str(src.get("run_label") or "").strip()
+            if run_label:
+                return run_label
+    for path in (result_dir, logging_dir):
+        if isinstance(path, Path):
+            name = str(path.name or "").strip()
+            if name.startswith(f"{task_id}-"):
+                return name
+    if isinstance(decision, dict):
+        artifacts = decision.get("artifacts") if isinstance(decision.get("artifacts"), dict) else {}
+        for key in ("result_dir", "logging_dir", "report"):
+            raw = artifacts.get(key)
+            if not raw:
+                continue
+            try:
+                candidate_name = Path(str(raw)).name
+            except Exception:
+                candidate_name = ""
+            if candidate_name and candidate_name.startswith(f"{task_id}-"):
+                return candidate_name
+    return ""
+
+
+def _task_artifact_links_payload(task_id: str) -> Dict[str, Any]:
+    tid = str(task_id or "").strip()
+    run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    by_name = _task_artifact_paths(tid)
+    result_dir = _latest_prefixed_dir((REPO_ROOT / "result").resolve(), f"{tid}-")
+    logging_dir = _latest_prefixed_dir((REPO_ROOT / "logging").resolve(), f"{tid}-")
+    rank_dir = _latest_prefixed_dir((REPO_ROOT / "runs").resolve(), f"agent_rank_{tid}_")
+    decision = _load_json_if_exists(by_name["decision_summary"])
+    trace = _load_json_if_exists(by_name["experiment_trace"])
+    run_label = _guess_task_run_label(tid, result_dir=result_dir, logging_dir=logging_dir, decision=decision, trace=trace)
+    status = "pass" if run_dir.exists() else "missing"
+    return {
+        "status": status,
+        "task_id": tid,
+        "run_label": run_label,
+        "run_dir": _path_meta(run_dir),
+        "result_dir": _path_meta(result_dir),
+        "logging_dir": _path_meta(logging_dir),
+        "rank_dir": _path_meta(rank_dir),
+        "decision_summary_path": _path_meta(by_name["decision_summary"]),
+        "execution_path": _path_meta(by_name["execution"]),
+        "task_state_path": _path_meta(by_name["task_state"]),
+        "web_evidence_path": _path_meta(by_name["web_evidence"]),
+        "experiment_trace_path": _path_meta(by_name["experiment_trace"]),
+        "summary_api": f"/api/task/{tid}/summary",
+        "decision_summary_api": f"/api/task/{tid}/artifact/decision_summary",
+        "bundle_api": f"/api/task/{tid}/bundle",
+    }
 
 
 def _path_within(parent: Path, child: Path) -> bool:
@@ -13211,6 +13537,16 @@ def api_task_summary(task_id: str):
             ),
         }
     )
+
+
+@app.get("/api/task/<task_id>/artifact-links")
+def api_task_artifact_links(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    return jsonify(_task_artifact_links_payload(tid))
 
 
 @app.get("/api/task/<task_id>/release-context")

@@ -9983,6 +9983,13 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("applyControlCenterAuditFilter(", html)
         self.assertIn("applyControlCenterAuditSort(", html)
         self.assertIn("applyControlCenterAuditQuery(", html)
+        self.assertIn("openAuditTaskSummary(", html)
+        self.assertIn("openAuditDecisionSummary(", html)
+        self.assertIn("openAuditArtifactLinks(", html)
+        self.assertIn("copyAuditResultDirPath(", html)
+        self.assertIn("control_center_audit_copy_btn", html)
+        self.assertIn("control_center_audit_export_btn", html)
+        self.assertIn("/api/task/${encodeURIComponent(tid)}/artifact-links", html)
         self.assertIn("classifyControlCenterAuditStatus(", html)
         self.assertIn("syncNoviceGuidanceAction(", html)
         self.assertIn("prefersGuidedRecovery(", html)
@@ -12722,6 +12729,55 @@ class UiPrototypeTests(unittest.TestCase):
         ui_app_mod = self._load_ui_module()
         client = ui_app_mod.app.test_client()
         resp = client.get("/api/task/bad..id/summary")
+        self.assertEqual(resp.status_code, 400)
+        payload = resp.get_json()
+        self.assertEqual(payload.get("status"), "fail")
+        self.assertEqual(payload.get("error"), "invalid task_id")
+
+    def test_ui_task_artifact_links_endpoint_returns_paths(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_artifact_links_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            result_dir = root / "result" / f"{task_id}-20260517-101010"
+            logging_dir = root / "logging" / f"{task_id}-20260517-101010"
+            result_dir.mkdir(parents=True, exist_ok=True)
+            logging_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "decision_summary.json").write_text(
+                json.dumps({"status": "success"}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "execution.json").write_text(
+                json.dumps({"status": "success", "records": []}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+            (run_dir / "artifacts" / "experiment_trace.json").write_text(
+                json.dumps({"task_id": task_id, "run_label": f"{task_id}-20260517-101010"}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/artifact-links")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("task_id"), task_id)
+            self.assertEqual(payload.get("run_label"), f"{task_id}-20260517-101010")
+            result_meta = payload.get("result_dir") if isinstance(payload.get("result_dir"), dict) else {}
+            self.assertEqual(result_meta.get("exists"), True)
+            self.assertTrue(str(result_meta.get("path") or "").endswith(f"{task_id}-20260517-101010"))
+            decision_meta = payload.get("decision_summary_path") if isinstance(payload.get("decision_summary_path"), dict) else {}
+            self.assertEqual(decision_meta.get("exists"), True)
+            self.assertEqual(str(payload.get("summary_api") or ""), f"/api/task/{task_id}/summary")
+            self.assertEqual(str(payload.get("decision_summary_api") or ""), f"/api/task/{task_id}/artifact/decision_summary")
+
+    def test_ui_task_artifact_links_rejects_invalid_task_id(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/api/task/bad..id/artifact-links")
         self.assertEqual(resp.status_code, 400)
         payload = resp.get_json()
         self.assertEqual(payload.get("status"), "fail")

@@ -2384,6 +2384,11 @@ HTML = """
           if (failureDetail) failLine += ` detail=${failureDetail.slice(0, 220)}`;
           lines.push(failLine);
         }
+        const rel = (s.release_context && typeof s.release_context === 'object') ? s.release_context : {};
+        const relOverall = String(rel.release_overall || '-');
+        const relGate = String(rel.archive_release_gate_status || '-');
+        const relBase = String(rel.base_task_id || '-');
+        lines.push(`release: overall=${relOverall} gate=${relGate} base=${relBase}`);
         document.getElementById('event_out').textContent = lines.join('\n');
       }
 
@@ -2452,9 +2457,17 @@ HTML = """
         const failedStep = String(fail.latest_failed_step || '').trim();
         const totalMs = Number(t.total_duration_ms || 0);
         const durationText = formatRuntimeDurationMs(totalMs);
+        const relFromSummary = (s.release_context && typeof s.release_context === 'object') ? s.release_context : {};
+        const relFromTimeline = (t.release_context && typeof t.release_context === 'object') ? t.release_context : {};
+        const rel = Object.keys(relFromTimeline).length > 0 ? relFromTimeline : relFromSummary;
+        const relGate = String(rel.archive_release_gate_status || '').trim();
+        const relOverall = String(rel.release_overall || '').trim();
         let text = `task=${task} | status=${runStatus || '-'} | records=${records} | failed=${failedN} | elapsed=${durationText}`;
         if (failureKind || failedStep) {
           text += ` | failure=${failureKind || '-'} step=${failedStep || '-'}`;
+        }
+        if (relOverall || relGate) {
+          text += ` | release=${relOverall || '-'} gate=${relGate || '-'}`;
         }
         textEle.textContent = text;
         setRuntimeElapsedHud(totalMs);
@@ -6056,9 +6069,94 @@ def _task_updated_epoch_ms(run_dir: Path) -> int:
     return int(latest * 1000)
 
 
+def _infer_base_task_id(task_id: str) -> str:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return ""
+    return re.sub(r"_r\d+$", "", tid)
+
+
+def _as_int_or(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _release_context_for_task(task_id: str, run_dir: Path) -> Dict[str, Any]:
+    tid = str(task_id or "").strip()
+    base_task_id = _infer_base_task_id(tid)
+
+    release_evidence_path = (run_dir / "release_evidence.json").resolve()
+    release_evidence = _load_json_if_exists(release_evidence_path)
+    release_checks = release_evidence.get("checks") if isinstance(release_evidence, dict) and isinstance(release_evidence.get("checks"), dict) else {}
+    baseline_from_evidence = (
+        release_evidence.get("baseline_context")
+        if isinstance(release_evidence, dict) and isinstance(release_evidence.get("baseline_context"), dict)
+        else {}
+    )
+
+    if not base_task_id:
+        base_task_id = str(baseline_from_evidence.get("base_task_id") or "").strip()
+    baseline_summary_path = (REPO_ROOT / "runs" / "agent" / base_task_id / "baseline_summary.json").resolve() if base_task_id else Path("")
+    archive_manifest_path = (REPO_ROOT / "runs" / "archive" / base_task_id / "archive_manifest.json").resolve() if base_task_id else Path("")
+    baseline_summary = _load_json_if_exists(baseline_summary_path) if base_task_id else None
+    archive_manifest = _load_json_if_exists(archive_manifest_path) if base_task_id else None
+    gate = (
+        archive_manifest.get("release_gate_summary")
+        if isinstance(archive_manifest, dict) and isinstance(archive_manifest.get("release_gate_summary"), dict)
+        else {}
+    )
+
+    gate_failures_preview: List[str] = []
+    raw_gate_failures = gate.get("failures")
+    if isinstance(raw_gate_failures, list):
+        gate_failures_preview = [str(x) for x in raw_gate_failures[:5]]
+
+    if not gate_failures_preview:
+        raw_from_ev = baseline_from_evidence.get("archive_release_gate_failures_preview")
+        if isinstance(raw_from_ev, list):
+            gate_failures_preview = [str(x) for x in raw_from_ev[:5]]
+
+    return {
+        "base_task_id": base_task_id,
+        "release_evidence_path": str(release_evidence_path),
+        "release_evidence_exists": bool(isinstance(release_evidence, dict)),
+        "release_overall": str(release_evidence.get("overall") or "") if isinstance(release_evidence, dict) else "",
+        "release_checks": {
+            "generate_adapter_expected": bool(release_checks.get("generate_adapter_expected")),
+            "score_adapter_expected": bool(release_checks.get("score_adapter_expected")),
+            "score_used_fallback_false": bool(release_checks.get("score_used_fallback_false")),
+            "guardrails_strict_status_pass": bool(release_checks.get("guardrails_strict_status_pass")),
+            "evaluation_failure_diag_zero": bool(release_checks.get("evaluation_failure_diag_zero")),
+            "guardrails_failure_diag_zero": bool(release_checks.get("guardrails_failure_diag_zero")),
+        },
+        "baseline_summary_path": str(baseline_summary_path) if base_task_id else "",
+        "baseline_status": str((baseline_summary or {}).get("status") or baseline_from_evidence.get("baseline_status") or "missing"),
+        "baseline_run_count": _as_int_or((baseline_summary or {}).get("run_count", baseline_from_evidence.get("baseline_run_count", -1)), -1),
+        "archive_manifest_path": str(archive_manifest_path) if base_task_id else "",
+        "archive_manifest_status": str((archive_manifest or {}).get("status") or baseline_from_evidence.get("archive_manifest_status") or "missing"),
+        "archive_release_gate_status": str(gate.get("status") or baseline_from_evidence.get("archive_release_gate_status") or "missing"),
+        "archive_release_gate_checked_runs": _as_int_or(
+            gate.get("checked_runs", baseline_from_evidence.get("archive_release_gate_checked_runs", -1)),
+            -1,
+        ),
+        "archive_release_gate_pass_count": _as_int_or(
+            gate.get("pass_count", baseline_from_evidence.get("archive_release_gate_pass_count", -1)),
+            -1,
+        ),
+        "archive_release_gate_fail_count": _as_int_or(
+            gate.get("fail_count", baseline_from_evidence.get("archive_release_gate_fail_count", -1)),
+            -1,
+        ),
+        "archive_release_gate_failures_preview": gate_failures_preview,
+    }
+
+
 def _task_list_item(task_id: str, run_dir: Path) -> Dict[str, Any]:
     execution = _load_json_if_exists(run_dir / "execution.json")
     task_state = _load_json_if_exists(run_dir / "task_state.json")
+    release_context = _release_context_for_task(task_id, run_dir)
     records = execution.get("records", []) if isinstance(execution, dict) and isinstance(execution.get("records"), list) else []
     failed_n = 0
     for rec in records:
@@ -6075,6 +6173,9 @@ def _task_list_item(task_id: str, run_dir: Path) -> Dict[str, Any]:
         "record_count": len(records),
         "failed_step_count": failed_n,
         "task_state_status": str(task_state.get("status") or "") if isinstance(task_state, dict) else "",
+        "release_overall": str(release_context.get("release_overall") or ""),
+        "release_gate_status": str(release_context.get("archive_release_gate_status") or ""),
+        "release_base_task_id": str(release_context.get("base_task_id") or ""),
     }
 
 
@@ -9999,6 +10100,7 @@ def api_task_summary(task_id: str):
     files = {k: {"path": str(v), "exists": v.exists()} for k, v in artifacts.items()}
     execution = _load_json_if_exists(artifacts["execution_path"])
     failure_diag = _execution_failure_diagnostics(execution)
+    release_context = _release_context_for_task(tid, run_dir)
     task_state = _load_json_if_exists(artifacts["task_state_path"])
     decision = _load_json_if_exists(artifacts["decision_summary_path"])
     evaluation_report = _load_json_if_exists(artifacts["evaluation_report_path"])
@@ -10021,6 +10123,7 @@ def api_task_summary(task_id: str):
                 "latest_failure_kind": str(failure_diag.get("latest_failure_kind") or ""),
             },
             "failure_diagnostics": failure_diag,
+            "release_context": release_context,
             "task_state": task_state if isinstance(task_state, dict) else {},
             "decision_summary": decision if isinstance(decision, dict) else {},
             "evaluation_report_preview": (
@@ -10130,6 +10233,7 @@ def api_task_timeline(task_id: str):
     if sort not in {"original", "duration_desc", "duration_asc", "name_asc"}:
         return jsonify({"status": "fail", "error": "invalid sort"}), 400
     run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    release_context = _release_context_for_task(tid, run_dir)
     if not run_dir.exists():
         return jsonify({"status": "missing", "task_id": tid, "error": "run_dir_missing"}), 200
     execution_path = _task_artifact_path(tid, "execution.json")
@@ -10179,6 +10283,7 @@ def api_task_timeline(task_id: str):
             "started_at": execution.get("started_at") if isinstance(execution, dict) else "",
             "ended_at": execution.get("ended_at") if isinstance(execution, dict) else "",
             "total_duration_ms": total_ms,
+            "release_context": release_context,
             "summary": {
                 "total_steps_before_filter": len(events),
                 "total_steps": len(sorted_events),

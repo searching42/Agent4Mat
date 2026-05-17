@@ -11020,6 +11020,20 @@ class UiPrototypeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (run_b / "task_state.json").write_text(json.dumps({"status": "FAILED"}, ensure_ascii=False) + "\n", encoding="utf-8")
+            (run_b / "release_evidence.json").write_text(
+                json.dumps(
+                    {
+                        "overall": "fail",
+                        "baseline_context": {
+                            "base_task_id": "ui_task_b",
+                            "archive_release_gate_status": "fail",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             os.utime(run_a, (1700000000, 1700000000))
             os.utime(run_b, (1800000000, 1800000000))
             with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
@@ -11033,6 +11047,9 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(len(tasks), 1)
             self.assertEqual(tasks[0].get("task_id"), "ui_task_b")
             self.assertEqual(tasks[0].get("execution_status"), "failed")
+            self.assertEqual(tasks[0].get("release_overall"), "fail")
+            self.assertEqual(tasks[0].get("release_gate_status"), "fail")
+            self.assertEqual(tasks[0].get("release_base_task_id"), "ui_task_b")
 
     def test_ui_tasks_endpoint_rejects_invalid_prefix(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -11665,6 +11682,7 @@ class UiPrototypeTests(unittest.TestCase):
             task_id = "ui_summary_case"
             run_dir = root / "runs" / "agent" / task_id
             (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+            (root / "runs" / "archive" / task_id).mkdir(parents=True, exist_ok=True)
             (run_dir / "execution.json").write_text(
                 json.dumps({"status": "success", "records": [{"name": "search_dataset"}]}, ensure_ascii=False) + "\n",
                 encoding="utf-8",
@@ -11701,6 +11719,45 @@ class UiPrototypeTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            (run_dir / "release_evidence.json").write_text(
+                json.dumps(
+                    {
+                        "overall": "pass",
+                        "checks": {
+                            "generate_adapter_expected": True,
+                            "score_adapter_expected": True,
+                        },
+                        "baseline_context": {
+                            "base_task_id": task_id,
+                            "baseline_status": "missing",
+                            "archive_release_gate_status": "missing",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "baseline_summary.json").write_text(
+                json.dumps({"status": "pass", "run_count": 3}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (root / "runs" / "archive" / task_id / "archive_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "archived",
+                        "release_gate_summary": {
+                            "status": "pass",
+                            "checked_runs": 3,
+                            "pass_count": 3,
+                            "fail_count": 0,
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
                 client = ui_app_mod.app.test_client()
                 resp = client.get(f"/api/task/{task_id}/summary")
@@ -11715,6 +11772,14 @@ class UiPrototypeTests(unittest.TestCase):
             trace_preview = payload.get("experiment_trace_preview") if isinstance(payload.get("experiment_trace_preview"), dict) else {}
             self.assertEqual(trace_preview.get("execution_mode"), "full_pipeline")
             self.assertEqual(trace_preview.get("run_label"), "ui_summary_case-20260514-000001")
+            release_ctx = payload.get("release_context") if isinstance(payload.get("release_context"), dict) else {}
+            self.assertEqual(release_ctx.get("release_overall"), "pass")
+            self.assertEqual(release_ctx.get("base_task_id"), task_id)
+            self.assertEqual(release_ctx.get("baseline_status"), "pass")
+            self.assertEqual(release_ctx.get("baseline_run_count"), 3)
+            self.assertEqual(release_ctx.get("archive_manifest_status"), "archived")
+            self.assertEqual(release_ctx.get("archive_release_gate_status"), "pass")
+            self.assertEqual(release_ctx.get("archive_release_gate_checked_runs"), 3)
 
     def test_ui_task_summary_includes_failure_diagnostics(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -11922,6 +11987,20 @@ class UiPrototypeTests(unittest.TestCase):
                 ],
             }
             (run_dir / "execution.json").write_text(json.dumps(execution_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            (run_dir / "release_evidence.json").write_text(
+                json.dumps(
+                    {
+                        "overall": "pass",
+                        "baseline_context": {
+                            "base_task_id": task_id,
+                            "archive_release_gate_status": "pass",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
                 client = ui_app_mod.app.test_client()
                 resp = client.get(f"/api/task/{task_id}/timeline")
@@ -11938,6 +12017,9 @@ class UiPrototypeTests(unittest.TestCase):
             lines = payload.get("timeline_lines") if isinstance(payload.get("timeline_lines"), list) else []
             self.assertEqual(len(lines), 2)
             self.assertIn("[PASS]", lines[0])
+            release_ctx = payload.get("release_context") if isinstance(payload.get("release_context"), dict) else {}
+            self.assertEqual(release_ctx.get("release_overall"), "pass")
+            self.assertEqual(release_ctx.get("archive_release_gate_status"), "pass")
 
     def test_ui_task_timeline_filters_and_sorts(self) -> None:
         ui_app_mod = self._load_ui_module()

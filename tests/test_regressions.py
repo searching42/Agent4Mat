@@ -9399,6 +9399,20 @@ class UiPrototypeTests(unittest.TestCase):
                     + "\n",
                     encoding="utf-8",
                 )
+                (run_dir / "release_evidence.json").write_text(
+                    json.dumps(
+                        {
+                            "overall": "fail",
+                            "baseline_context": {
+                                "base_task_id": "ui_proj_health",
+                                "archive_release_gate_status": "fail",
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
                 project_path = root / "runs" / "ui_sessions" / "projects" / "ui_proj_health.json"
                 project_payload = json.loads(project_path.read_text(encoding="utf-8"))
                 project_payload["current_task_id"] = run_task_id
@@ -9420,6 +9434,12 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertIn("timeout", str(health.get("latest_failed_error") or ""))
                 self.assertEqual(str(health.get("latest_failure_kind") or ""), "timeout")
                 self.assertEqual(int(health.get("recent_duration_ms") or 0), 0)
+                self.assertEqual(str(row.get("release_overall") or ""), "fail")
+                self.assertEqual(str(row.get("release_gate_status") or ""), "fail")
+                self.assertEqual(str(row.get("release_base_task_id") or ""), "ui_proj_health_t1")
+                release_ctx = row.get("release_context") if isinstance(row.get("release_context"), dict) else {}
+                self.assertEqual(str(release_ctx.get("base_task_id") or ""), "ui_proj_health_t1")
+                self.assertEqual(str(release_ctx.get("release_gate_status") or ""), "fail")
 
     def test_ui_html_contains_project_runtime_health_field(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -9539,6 +9559,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("simple_retry_failed_btn", html)
         self.assertIn("simple_resume_btn", html)
         self.assertIn("timeline_groups_drawer", html)
+        self.assertIn("session_filter_release_gate", html)
+        self.assertIn("quickFilterByReleaseGate(", html)
         self.assertIn("task_compare_drawer", html)
         self.assertIn("memory_explorer_drawer", html)
         self.assertIn("memory_explorer_status", html)

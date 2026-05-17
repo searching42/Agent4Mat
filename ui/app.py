@@ -894,6 +894,13 @@ HTML = """
               <option value=\"success\">health: success</option>
               <option value=\"none\">health: none</option>
             </select>
+            <select id=\"session_filter_release_gate\">
+              <option value=\"all\">release gate: all</option>
+              <option value=\"fail\">release gate: fail</option>
+              <option value=\"pass\">release gate: pass</option>
+              <option value=\"missing\">release gate: missing</option>
+              <option value=\"other\">release gate: other</option>
+            </select>
             <select id=\"session_sort_mode\">
               <option value=\"updated_desc\">sort: updated desc</option>
               <option value=\"failed_desc\">sort: failed desc</option>
@@ -907,6 +914,9 @@ HTML = """
             <button type=\"button\" onclick=\"quickFilterByHealth('failed')\">Failed Count</button>
             <button type=\"button\" onclick=\"quickFilterByHealth('success')\">Success Count</button>
             <button type=\"button\" onclick=\"quickFilterByHealth('none')\">None Count</button>
+            <button type=\"button\" onclick=\"quickFilterByReleaseGate('fail')\">Gate Fail</button>
+            <button type=\"button\" onclick=\"quickFilterByReleaseGate('pass')\">Gate Pass</button>
+            <button type=\"button\" onclick=\"quickFilterByReleaseGate('missing')\">Gate Missing</button>
             <button type=\"button\" onclick=\"quickSortPriority()\">Priority First</button>
             <button type=\"button\" onclick=\"openTopPrioritySession()\">Open Top Priority</button>
             <button type=\"button\" onclick=\"openNextFailedSession()\">Open Next Failed</button>
@@ -1371,6 +1381,7 @@ HTML = """
         sessionBoard: {
           filterText: '',
           health: 'all',
+          releaseGate: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -1574,6 +1585,7 @@ HTML = """
         const fallback = {
           filterText: '',
           health: 'all',
+          releaseGate: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -1589,6 +1601,9 @@ HTML = """
           if (!parsed || typeof parsed !== 'object') return fallback;
           const filterText = String(parsed.filterText || '').trim().toLowerCase();
           const health = String(parsed.health || 'all').trim().toLowerCase();
+          const releaseGateRaw = String(parsed.releaseGate || 'all').trim().toLowerCase();
+          const releaseGateAllow = new Set(['all', 'pass', 'fail', 'missing', 'other']);
+          const releaseGate = releaseGateAllow.has(releaseGateRaw) ? releaseGateRaw : 'all';
           const sort = String(parsed.sort || 'updated_desc').trim().toLowerCase();
           const autoRefreshEnabled = Boolean(parsed.autoRefreshEnabled);
           const refreshSecondsRaw = Number(parsed.refreshSeconds || 30);
@@ -1602,7 +1617,7 @@ HTML = """
             .map((x) => String(x || '').trim())
             .filter((x) => Boolean(x))
             .slice(0, 200);
-          return {filterText, health, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, groupedView, batchLimit, pinnedProjectIds};
+          return {filterText, health, releaseGate, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, groupedView, batchLimit, pinnedProjectIds};
         } catch (e) {
           return fallback;
         }
@@ -1612,6 +1627,7 @@ HTML = """
         const payload = {
           filterText: String((v && v.filterText) || '').trim().toLowerCase(),
           health: String((v && v.health) || 'all').trim().toLowerCase(),
+          releaseGate: String((v && v.releaseGate) || 'all').trim().toLowerCase(),
           sort: String((v && v.sort) || 'updated_desc').trim().toLowerCase(),
           autoRefreshEnabled: Boolean(v && v.autoRefreshEnabled),
           refreshSeconds: Number.isFinite(Number(v && v.refreshSeconds)) ? Math.max(10, Math.min(120, Math.floor(Number(v.refreshSeconds)))) : 30,
@@ -1720,12 +1736,14 @@ HTML = """
         const payload = v && typeof v === 'object' ? v : loadSessionBoardState();
         const filterEle = document.getElementById('session_filter_text');
         const healthEle = document.getElementById('session_filter_health');
+        const gateEle = document.getElementById('session_filter_release_gate');
         const sortEle = document.getElementById('session_sort_mode');
         const autoEle = document.getElementById('session_auto_refresh');
         const secEle = document.getElementById('session_refresh_seconds');
         const batchLimitEle = document.getElementById('session_batch_limit');
         if (filterEle) filterEle.value = String(payload.filterText || '');
         if (healthEle) healthEle.value = String(payload.health || 'all');
+        if (gateEle) gateEle.value = String(payload.releaseGate || 'all');
         if (sortEle) sortEle.value = String(payload.sort || 'updated_desc');
         if (autoEle) autoEle.checked = Boolean(payload.autoRefreshEnabled);
         if (secEle) secEle.value = String(payload.refreshSeconds || 30);
@@ -3466,6 +3484,8 @@ HTML = """
       function readSessionBoardControls() {
         const filterText = String((document.getElementById('session_filter_text').value || '')).trim().toLowerCase();
         const health = String(document.getElementById('session_filter_health').value || 'all').trim().toLowerCase();
+        const releaseGateRaw = String(document.getElementById('session_filter_release_gate').value || 'all').trim().toLowerCase();
+        const releaseGate = (new Set(['all', 'pass', 'fail', 'missing', 'other'])).has(releaseGateRaw) ? releaseGateRaw : 'all';
         const sort = String(document.getElementById('session_sort_mode').value || 'updated_desc').trim().toLowerCase();
         const autoRefreshEnabled = Boolean(document.getElementById('session_auto_refresh').checked);
         const refreshSecondsRaw = Number(document.getElementById('session_refresh_seconds').value || 30);
@@ -3477,7 +3497,7 @@ HTML = """
         const pinnedProjectIds = Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
           ? state.sessionBoard.pinnedProjectIds.slice()
           : [];
-        return {filterText, health, sort, autoRefreshEnabled, refreshSeconds, batchLimit, pinnedOnly, groupedView, pinnedProjectIds};
+        return {filterText, health, releaseGate, sort, autoRefreshEnabled, refreshSeconds, batchLimit, pinnedOnly, groupedView, pinnedProjectIds};
       }
 
       function applySessionBoardControls() {
@@ -3506,6 +3526,17 @@ HTML = """
         applySessionBoardControls();
       }
 
+      function quickFilterByReleaseGate(gateStatus) {
+        const value = String(gateStatus || 'all').trim().toLowerCase();
+        const allow = new Set(['all', 'pass', 'fail', 'missing', 'other']);
+        const next = allow.has(value) ? value : 'all';
+        const gateEle = document.getElementById('session_filter_release_gate');
+        if (gateEle) {
+          gateEle.value = next;
+        }
+        applySessionBoardControls();
+      }
+
       function quickSortPriority() {
         const sortEle = document.getElementById('session_sort_mode');
         if (sortEle) {
@@ -3518,6 +3549,7 @@ HTML = """
         applySessionBoardStateToControls({
           filterText: '',
           health: 'all',
+          releaseGate: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -3642,6 +3674,12 @@ HTML = """
             return true;
           });
         }
+        if (controls.releaseGate && controls.releaseGate !== 'all') {
+          rows = rows.filter((row) => {
+            const gate = String((row && row.release_gate_status) || 'missing').trim().toLowerCase() || 'missing';
+            return gate === controls.releaseGate;
+          });
+        }
         if (controls.sort === 'failed_desc') {
           rows.sort((a, b) => Number((b && b.runtime_health && b.runtime_health.failed_steps) || 0) - Number((a && a.runtime_health && a.runtime_health.failed_steps) || 0));
         } else if (controls.sort === 'success_ratio_asc') {
@@ -3687,11 +3725,14 @@ HTML = """
       function summarizeBatchRow(row) {
         if (!row || typeof row !== 'object') return {};
         const runtime = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
+        const releaseCtx = (row.release_context && typeof row.release_context === 'object') ? row.release_context : {};
         return {
           project_id: String(row.project_id || '').trim(),
           task_id: String(row.current_task_id || '').trim(),
           title: String(row.title || '').trim(),
           health: String(runtime.status || 'none'),
+          release_gate_status: String(row.release_gate_status || releaseCtx.release_gate_status || 'missing').trim().toLowerCase() || 'missing',
+          release_overall: String(row.release_overall || releaseCtx.release_overall || '').trim(),
           latest_failed_step: String(runtime.latest_failed_step || '').trim(),
           updated_at: String(row.updated_at || '').trim(),
         };
@@ -4158,6 +4199,10 @@ HTML = """
         const healthObj = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
         const healthStatus = String(healthObj.status || 'none').toLowerCase();
         const health = formatRuntimeHealth(healthObj || {});
+        const releaseCtx = (row.release_context && typeof row.release_context === 'object') ? row.release_context : {};
+        const releaseOverall = String((row.release_overall || releaseCtx.release_overall || '')).trim();
+        const releaseGate = String((row.release_gate_status || releaseCtx.release_gate_status || 'missing')).trim().toLowerCase() || 'missing';
+        const releaseBaseTask = String((row.release_base_task_id || releaseCtx.base_task_id || '')).trim();
         const updatedAt = String(row.updated_at || '-');
         const title = String(row.title || pid);
 
@@ -4179,8 +4224,12 @@ HTML = """
 
         const meta = document.createElement('div');
         meta.className = 'project-session-meta';
-        meta.textContent = `task=${taskId || '-'} | health=${health} | updated=${updatedAt}`;
+        meta.textContent = `task=${taskId || '-'} | health=${health} | release=${releaseOverall || '-'} gate=${releaseGate || '-'} | updated=${updatedAt}`;
         card.appendChild(meta);
+        const releaseLine = document.createElement('div');
+        releaseLine.className = 'project-session-runtime';
+        releaseLine.textContent = `release_base_task=${releaseBaseTask || '-'} | gate_status=${releaseGate || '-'} | release_overall=${releaseOverall || '-'}`;
+        card.appendChild(releaseLine);
         const statusBadge = document.createElement('div');
         statusBadge.className = `project-session-status${healthStatus === 'failed' ? ' fail' : (healthStatus === 'success' ? ' pass' : '')}`;
         statusBadge.textContent = `status=${healthStatus || 'none'}`;
@@ -4429,6 +4478,10 @@ HTML = """
           let failedN = 0;
           let successN = 0;
           let noneN = 0;
+          let gatePassN = 0;
+          let gateFailN = 0;
+          let gateMissingN = 0;
+          let gateOtherN = 0;
           let ratioSum = 0.0;
           let ratioCnt = 0;
           let pinnedN = 0;
@@ -4441,6 +4494,11 @@ HTML = """
             if (st === 'failed') failedN += 1;
             else if (st === 'success') successN += 1;
             else noneN += 1;
+            const gate = String(row.release_gate_status || 'missing').trim().toLowerCase() || 'missing';
+            if (gate === 'pass') gatePassN += 1;
+            else if (gate === 'fail') gateFailN += 1;
+            else if (gate === 'missing') gateMissingN += 1;
+            else gateOtherN += 1;
             const ratio = Number(rh.success_ratio || 0);
             if (Number.isFinite(ratio)) {
               ratioSum += ratio;
@@ -4450,13 +4508,19 @@ HTML = """
           const avgRatio = ratioCnt > 0 ? Math.round((ratioSum / ratioCnt) * 100) : 0;
           const mode = Boolean(controls.groupedView) ? 'grouped' : 'flat';
           const batchLimit = readSessionBatchLimit();
-          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | avg_success_ratio=${avgRatio}% | mode=${mode} | batch_limit=${batchLimit}`;
+          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | gate(pass/fail/missing/other)=${gatePassN}/${gateFailN}/${gateMissingN}/${gateOtherN} | avg_success_ratio=${avgRatio}% | mode=${mode} | batch_limit=${batchLimit}`;
           const failedBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('failed')\\\"]\");
           const successBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('success')\\\"]\");
           const noneBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('none')\\\"]\");
+          const gateFailBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReleaseGate('fail')\\\"]\");
+          const gatePassBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReleaseGate('pass')\\\"]\");
+          const gateMissingBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReleaseGate('missing')\\\"]\");
           if (failedBtn) failedBtn.textContent = `Failed Count (${failedN})`;
           if (successBtn) successBtn.textContent = `Success Count (${successN})`;
           if (noneBtn) noneBtn.textContent = `None Count (${noneN})`;
+          if (gateFailBtn) gateFailBtn.textContent = `Gate Fail (${gateFailN})`;
+          if (gatePassBtn) gatePassBtn.textContent = `Gate Pass (${gatePassN})`;
+          if (gateMissingBtn) gateMissingBtn.textContent = `Gate Missing (${gateMissingN})`;
         }
 
         if (rows.length < 1) {
@@ -6975,6 +7039,7 @@ def _project_summary(project: Dict[str, Any]) -> Dict[str, Any]:
     pid = str(project.get("project_id") or "")
     messages = project.get("messages")
     attachments = project.get("attachments")
+    release_context = _project_release_context(project)
     return {
         "project_id": pid,
         "title": str(project.get("title") or ""),
@@ -6993,6 +7058,37 @@ def _project_summary(project: Dict[str, Any]) -> Dict[str, Any]:
         "attachment_count": len(attachments) if isinstance(attachments, list) else 0,
         "project_path": str(_project_file_path(pid)) if pid else "",
         "runtime_health": _project_runtime_health(project),
+        "release_context": release_context,
+        "release_overall": str(release_context.get("release_overall") or ""),
+        "release_gate_status": str(release_context.get("release_gate_status") or "missing"),
+        "release_base_task_id": str(release_context.get("base_task_id") or ""),
+    }
+
+
+def _project_release_context(project: Dict[str, Any]) -> Dict[str, Any]:
+    task_id = str(project.get("current_task_id") or "").strip()
+    if not _is_safe_task_id(task_id):
+        return {
+            "task_id": "",
+            "base_task_id": "",
+            "release_overall": "",
+            "release_gate_status": "missing",
+            "baseline_status": "missing",
+            "archive_manifest_status": "missing",
+            "archive_release_gate_failures_preview": [],
+        }
+    run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
+    release_ctx = _release_context_for_task(task_id, run_dir)
+    failures_raw = release_ctx.get("archive_release_gate_failures_preview")
+    failures = [str(x) for x in failures_raw[:3]] if isinstance(failures_raw, list) else []
+    return {
+        "task_id": task_id,
+        "base_task_id": str(release_ctx.get("base_task_id") or ""),
+        "release_overall": str(release_ctx.get("release_overall") or ""),
+        "release_gate_status": str(release_ctx.get("archive_release_gate_status") or "missing"),
+        "baseline_status": str(release_ctx.get("baseline_status") or "missing"),
+        "archive_manifest_status": str(release_ctx.get("archive_manifest_status") or "missing"),
+        "archive_release_gate_failures_preview": failures,
     }
 
 

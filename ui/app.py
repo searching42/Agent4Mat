@@ -666,6 +666,58 @@ HTML = """
         color: #3b4455;
         font-size: 0.84rem;
       }
+      .pending-state-card {
+        margin: 6px 0 8px 0;
+        border: 1px solid #d6e3fb;
+        border-radius: 9px;
+        padding: 8px;
+        background: #f4f8ff;
+      }
+      .pending-state-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .pending-state-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid #c8d8f6;
+        background: #eaf2ff;
+        color: #284a86;
+        font-size: 0.72rem;
+        font-weight: 700;
+      }
+      .pending-state-badge.need {
+        border-color: #c8d8f6;
+        background: #eaf2ff;
+        color: #284a86;
+      }
+      .pending-state-badge.wait {
+        border-color: #b8e5ce;
+        background: #ecfbf3;
+        color: #12603d;
+      }
+      .pending-state-stage {
+        font-size: 0.74rem;
+        color: #51617b;
+      }
+      .pending-state-text {
+        margin-top: 6px;
+        font-size: 0.78rem;
+        color: #334155;
+        line-height: 1.4;
+      }
+      .pending-state-actions {
+        margin-top: 6px;
+      }
+      .pending-state-actions button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
       .pending-hints {
         margin-top: 8px;
         border: 1px solid #d7e3f7;
@@ -1224,6 +1276,17 @@ HTML = """
 
           <div class=\"tool-box\" id=\"pending_input_box\" style=\"display:none;\">
             <h3>Need Input</h3>
+            <div class=\"pending-state-card\" id=\"pending_state_card\" style=\"display:none;\">
+              <div class=\"pending-state-head\">
+                <span class=\"pending-state-badge need\" id=\"pending_state_badge\">NEED_INFO</span>
+                <span class=\"pending-state-stage\" id=\"pending_state_stage\">stage: -</span>
+              </div>
+              <div class=\"pending-state-text\" id=\"pending_state_text\">-</div>
+              <div class=\"btn-row pending-state-actions\" id=\"pending_state_actions\">
+                <button id=\"pending_state_continue_btn\" class=\"primary\" onclick=\"pendingStateContinue()\">Continue</button>
+                <button id=\"pending_state_focus_btn\" onclick=\"pendingStateFocusInput()\">Focus Input</button>
+              </div>
+            </div>
             <div class=\"muted\" id=\"pending_stage_text\">stage: -</div>
             <ul class=\"pending-q\" id=\"pending_questions\"></ul>
             <div class=\"pending-hints\" id=\"pending_hints_box\" style=\"display:none;\">
@@ -1245,10 +1308,11 @@ HTML = """
               <button id=\"pending_auto_patch_btn\" onclick=\"pendingAutoFillAndPatch()\">Fill + Send Patch</button>
               <button id=\"pending_auto_resume_btn\" onclick=\"pendingAutoFillAndResume()\">Fill + Resume</button>
             </div>
-            <div class=\"btn-row\">
+            <div class=\"btn-row\" id=\"pending_form_actions\">
               <button class=\"primary\" onclick=\"sendPendingForm(false)\">Send Form Patch</button>
               <button onclick=\"sendPendingForm(true)\">Send + Run</button>
               <button onclick=\"sendPendingResume()\">Resume With Patch</button>
+              <button onclick=\"sendPendingContinue()\">Continue Without Patch</button>
               <button onclick=\"clearPendingInput()\">Hide</button>
             </div>
           </div>
@@ -1890,6 +1954,18 @@ HTML = """
         state.pendingInput = null;
         state.pendingHintRun = null;
         document.getElementById('pending_input_box').style.display = 'none';
+        document.getElementById('pending_state_card').style.display = 'none';
+        document.getElementById('pending_state_badge').textContent = 'NEED_INFO';
+        document.getElementById('pending_state_badge').className = 'pending-state-badge need';
+        document.getElementById('pending_state_stage').textContent = 'stage: -';
+        document.getElementById('pending_state_text').textContent = '-';
+        const pendingContinueBtn = document.getElementById('pending_state_continue_btn');
+        if (pendingContinueBtn) {
+          pendingContinueBtn.disabled = false;
+          pendingContinueBtn.textContent = 'Continue';
+          pendingContinueBtn.removeAttribute('title');
+        }
+        document.getElementById('pending_form_actions').style.display = 'flex';
         document.getElementById('pending_stage_text').textContent = 'stage: -';
         document.getElementById('pending_questions').innerHTML = '';
         document.getElementById('pending_hints_box').style.display = 'none';
@@ -1966,6 +2042,68 @@ HTML = """
           if (f) out.add(f);
         }
         return out;
+      }
+
+      function pendingWorkflowState(pending) {
+        const stage = String((pending && pending.stage) || '').trim();
+        const missing = pendingMissingFieldsSet(pending);
+        if (missing.size > 0) {
+          const preview = Array.from(missing).slice(0, 4).join(', ');
+          return {
+            code: 'NEED_INFO',
+            tone: 'need',
+            text: `需要补充字段后才能继续: ${preview || '-'}`,
+            stage: stage || '-',
+            canContinue: Object.keys(collectPendingPatch() || {}).length > 0 || (missing.has('candidate_data') && Boolean(pendingAutoCandidateSeed())),
+          };
+        }
+        return {
+          code: 'WAITING_APPROVAL',
+          tone: 'wait',
+          text: '信息已齐全，可直接继续执行后续流程。',
+          stage: stage || '-',
+          canContinue: true,
+        };
+      }
+
+      function renderPendingStateCard(pending) {
+        const card = document.getElementById('pending_state_card');
+        const badge = document.getElementById('pending_state_badge');
+        const stageEle = document.getElementById('pending_state_stage');
+        const textEle = document.getElementById('pending_state_text');
+        const continueBtn = document.getElementById('pending_state_continue_btn');
+        const focusBtn = document.getElementById('pending_state_focus_btn');
+        const formActions = document.getElementById('pending_form_actions');
+        if (!card || !badge || !stageEle || !textEle || !continueBtn || !focusBtn || !formActions) return;
+        const wf = pendingWorkflowState(pending);
+        card.style.display = 'block';
+        badge.textContent = String(wf.code || '-');
+        badge.className = `pending-state-badge ${String(wf.tone || 'need')}`;
+        stageEle.textContent = `stage: ${String(wf.stage || '-')}`;
+        textEle.textContent = String(wf.text || '-');
+        continueBtn.disabled = !Boolean(wf.canContinue);
+        continueBtn.textContent = wf.code === 'WAITING_APPROVAL' ? 'Continue Run' : 'Continue With Input';
+        if (!wf.canContinue) {
+          continueBtn.title = '请先填写缺失字段，或提供 candidate_data 自动填充来源。';
+        } else {
+          continueBtn.removeAttribute('title');
+        }
+        focusBtn.style.display = wf.code === 'NEED_INFO' ? 'inline-flex' : 'none';
+        formActions.style.display = wf.code === 'NEED_INFO' ? 'flex' : 'none';
+      }
+
+      function pendingStateFocusInput() {
+        const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+        const missing = pendingMissingFieldsSet(pending);
+        for (const field of missing) {
+          const ele = document.getElementById(`pending_field_${String(field || '').trim()}`);
+          if (ele) {
+            ele.focus();
+            return;
+          }
+        }
+        const msgEle = document.getElementById('message_input');
+        if (msgEle) msgEle.focus();
       }
 
       function pendingTaskIdGuess() {
@@ -2370,11 +2508,15 @@ HTML = """
           input.type = meta.type || 'text';
           input.placeholder = meta.placeholder || '';
           input.value = pendingFieldDefault(f);
+          input.addEventListener('input', () => {
+            renderPendingStateCard(state.pendingInput || pending);
+          });
           row.appendChild(label);
           row.appendChild(input);
           fieldsWrap.appendChild(row);
         }
         renderPendingAutoActions(pending);
+        renderPendingStateCard(pending);
       }
 
       async function pendingAutoFillCandidateData() {
@@ -5698,11 +5840,26 @@ HTML = """
           options: collectOptions(),
           memory_notes: collectMemoryNotes(),
         });
-        renderJsonOut(r.data);
-        const baseEvents = Array.isArray(r.data && r.data.events) ? r.data.events.slice() : [];
-        const failureKind = String((r.data && r.data.resume_failure_kind) || '').trim();
-        const failureDetail = String((r.data && r.data.resume_failure_detail) || '').trim();
-        const failedStep = String((r.data && r.data.resume_failed_step) || '').trim();
+        return await postProcessPendingResult(r.data);
+      }
+
+      async function sendPendingContinue() {
+        const pid = selectedProjectId();
+        const r = await apiPost('/api/chat/pending-continue', {
+          project_id: pid,
+          options: collectOptions(),
+          memory_notes: collectMemoryNotes(),
+        });
+        return await postProcessPendingResult(r.data);
+      }
+
+      async function postProcessPendingResult(payload) {
+        const data = (payload && typeof payload === 'object') ? payload : {};
+        renderJsonOut(data);
+        const baseEvents = Array.isArray(data.events) ? data.events.slice() : [];
+        const failureKind = String(data.resume_failure_kind || '').trim();
+        const failureDetail = String(data.resume_failure_detail || '').trim();
+        const failedStep = String(data.resume_failed_step || '').trim();
         if (failureKind || failureDetail || failedStep) {
           let attached = false;
           for (const evt of baseEvents) {
@@ -5716,7 +5873,7 @@ HTML = """
           if (!attached) {
             baseEvents.push({
               stage: 'resume',
-              status: String((r.data && r.data.status) || 'unknown'),
+              status: String(data.status || 'unknown'),
               failure_kind: failureKind,
               failure_detail: failureDetail,
               failed_step: failedStep,
@@ -5724,15 +5881,15 @@ HTML = """
           }
         }
         renderEvents(baseEvents);
-        const pending = (r.data && r.data.pending_input)
-          ? r.data.pending_input
-          : ((r.data && r.data.project && r.data.project.pending_input) ? r.data.project.pending_input : null);
+        const pending = data.pending_input
+          ? data.pending_input
+          : ((data.project && data.project.pending_input) ? data.project.pending_input : null);
         renderPendingInput(pending);
-        if (r.data && r.data.project) {
-          state.project = r.data.project;
-          applyProjectStateToUi(r.data.project);
+        if (data.project) {
+          state.project = data.project;
+          applyProjectStateToUi(data.project);
         }
-        const msgs = Array.isArray(r.data.messages) ? r.data.messages : [];
+        const msgs = Array.isArray(data.messages) ? data.messages : [];
         if (msgs.length > 0) {
           renderChat(msgs);
         } else {
@@ -5740,7 +5897,30 @@ HTML = """
         }
         setMessageInput('', {persist: false});
         await loadRunRuntime();
-        return r.data;
+        return data;
+      }
+
+      async function pendingStateContinue() {
+        const pending = state.pendingInput && typeof state.pendingInput === 'object' ? state.pendingInput : {};
+        const wf = pendingWorkflowState(pending);
+        if (String(wf.code || '') === 'WAITING_APPROVAL') {
+          return await sendPendingContinue();
+        }
+        const patch = collectPendingPatch();
+        if (patch && Object.keys(patch).length > 0) {
+          return await sendPendingResume();
+        }
+        const missing = pendingMissingFieldsSet(pending);
+        if (missing.has('candidate_data') && Boolean(pendingAutoCandidateSeed())) {
+          return await pendingAutoFillAndResume();
+        }
+        renderJsonOut({
+          status: 'fail',
+          error: 'pending_continue_requires_input',
+          message: '请先填写缺失字段，或配置 candidate_data 自动填充来源。',
+        });
+        setQuickCandidateStatus('pending continue blocked: missing input', 'fail');
+        return {status: 'fail', error: 'pending_continue_requires_input'};
       }
 
       async function previewArtifact() {
@@ -9590,8 +9770,11 @@ def _pending_input_payload(
 ) -> Dict[str, Any]:
     missing = [str(x) for x in (missing_fields if isinstance(missing_fields, list) else []) if str(x).strip()]
     qs = [str(x) for x in (questions if isinstance(questions, list) else []) if str(x).strip()]
+    stage_text = str(stage or "").strip()
+    workflow_state = "NEED_INFO" if missing else ("WAITING_APPROVAL" if stage_text in {"intake", "approve", "resume"} else "PENDING")
     out: Dict[str, Any] = {
-        "stage": str(stage or ""),
+        "stage": stage_text,
+        "workflow_state": workflow_state,
         "missing_fields": missing,
         "questions": qs,
         "task_draft_path": str(task_draft_path or ""),
@@ -10933,6 +11116,57 @@ def api_chat_pending_submit():
         project=project,
         patch=patch,
         source_message=json.dumps(patch, ensure_ascii=False),
+    )
+    events_for_meta = out.get("events") if isinstance(out.get("events"), list) else []
+    if events_for_meta:
+        _append_message(
+            project,
+            role="system",
+            kind="event_trace",
+            content="Execution timeline updated.",
+            meta={"events": events_for_meta},
+        )
+        project = _save_project_state(project)
+        out["project"] = _project_summary(project)
+        out["messages"] = _recent_messages(project)
+    return jsonify(out)
+
+
+@app.post("/api/chat/pending-continue")
+def api_chat_pending_continue():
+    body = request.get_json(silent=True) or {}
+    project_id = str(body.get("project_id") or "").strip()
+    options = body.get("options")
+    memory_notes_provided = "memory_notes" in body
+    memory_notes = body.get("memory_notes")
+
+    if not project_id:
+        return jsonify({"status": "fail", "error": "missing project_id"}), 400
+    if not _is_safe_project_id(project_id):
+        return jsonify({"status": "fail", "error": "invalid project_id"}), 400
+
+    project = _load_project_state(project_id)
+    if not isinstance(project, dict):
+        return jsonify({"status": "fail", "error": "project_not_found"}), 404
+    if isinstance(options, dict):
+        merged_options = dict(project.get("options") or {})
+        merged_options.update(options)
+        project["options"] = merged_options
+    _apply_project_memory_update(project, memory_notes, provided=memory_notes_provided)
+    if _project_is_read_only(project):
+        return jsonify(
+            {
+                "status": "fail",
+                "error": "project_read_only",
+                "project": _project_summary(project),
+                "messages": _recent_messages(project),
+            }
+        ), 409
+
+    out = _chat_resume_from_pending(
+        project=project,
+        patch={},
+        source_message="[pending-continue]",
     )
     events_for_meta = out.get("events") if isinstance(out.get("events"), list) else []
     if events_for_meta:

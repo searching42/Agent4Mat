@@ -9859,6 +9859,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("onBatchCompareFilterChanged()", html)
         self.assertIn("clearBatchCompareFilter()", html)
         self.assertIn("readBatchReplayOptions()", html)
+        self.assertIn("pendingStateContinue()", html)
+        self.assertIn("sendPendingContinue()", html)
+        self.assertIn("renderPendingStateCard(", html)
         self.assertIn("renderBatchHistoryMetrics(", html)
         self.assertIn("renderBatchCompareSummary(", html)
         self.assertIn("renderBatchCompareDetails(", html)
@@ -9909,6 +9912,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("session_auto_refresh", html)
         self.assertIn("session_refresh_seconds", html)
         self.assertIn("onSessionAutoRefreshChanged()", html)
+        self.assertIn("pending_state_card", html)
+        self.assertIn("pending_state_badge", html)
+        self.assertIn("pending_state_continue_btn", html)
+        self.assertIn("/api/chat/pending-continue", html)
         self.assertIn("SESSION_BOARD_KEY", html)
         self.assertIn("loadSessionBoardState()", html)
         self.assertIn("saveSessionBoardState(", html)
@@ -10825,6 +10832,76 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(str(draft_saved.get("candidate_data") or ""), "/tmp/candidates.csv")
                 missing_saved = draft_saved.get("missing_fields") if isinstance(draft_saved.get("missing_fields"), list) else []
                 self.assertNotIn("candidate_data", missing_saved)
+
+    def test_ui_chat_pending_continue_without_patch_success(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_pending_continue", "title": "pending continue"})
+                project = ui_app_mod._load_project_state("ui_chat_pending_continue")
+                self.assertIsInstance(project, dict)
+                project["current_task_id"] = "ui_chat_pending_continue_task"
+                draft_path = root / "runs" / "agent" / "ui_chat_pending_continue_task" / "task.draft.json"
+                draft_path.parent.mkdir(parents=True, exist_ok=True)
+                draft_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": "ui_chat_pending_continue_task",
+                            "request_text": "设计470nm附近且高PLQY分子",
+                            "status": "draft",
+                            "property": "plqy",
+                            "range": "470+-12nm",
+                            "n_structures": 80,
+                            "missing_fields": [],
+                            "questions": [],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                project["pending_input"] = {
+                    "stage": "approve",
+                    "workflow_state": "WAITING_APPROVAL",
+                    "missing_fields": [],
+                    "questions": [],
+                    "task_draft_path": str(draft_path),
+                }
+                ui_app_mod._save_project_state(project)
+
+                fake_resume = {
+                    "task_id": "ui_chat_pending_continue_task",
+                    "status": "success",
+                    "run_label": "ui_chat_pending_continue_task-20260517-120000",
+                    "result_dir": str(root / "result" / "ui_chat_pending_continue_task-20260517-120000"),
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-resume"],
+                    returncode=0,
+                    stdout=json.dumps(fake_resume, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+                    resp = client.post(
+                        "/api/chat/pending-continue",
+                        json={
+                            "project_id": "ui_chat_pending_continue",
+                            "options": {"planner_provider": "rule_based_v1", "catalog_path": "configs/models/catalog.json"},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                events = payload.get("events") if isinstance(payload.get("events"), list) else []
+                self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("status") == "success" for e in events))
+                project_out = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                self.assertEqual(project_out.get("current_task_id"), "ui_chat_pending_continue_task")
+                self.assertEqual(project_out.get("pending_input"), {})
+                cmd = mocked.call_args.args[0]
+                self.assertIn("agent-resume", cmd)
+                self.assertNotIn("--candidate-data", cmd)
 
     def test_ui_chat_pending_submit_resume_need_user_input(self) -> None:
         ui_app_mod = self._load_ui_module()

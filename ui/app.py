@@ -985,6 +985,13 @@ HTML = """
               <option value=\"partial\">status: partial</option>
               <option value=\"fail\">status: fail</option>
             </select>
+            <select id=\"batch_history_release_gate_filter\" onchange=\"resetBatchHistoryOffsetAndReload()\">
+              <option value=\"all\" selected>gate: all</option>
+              <option value=\"pass\">gate: pass</option>
+              <option value=\"fail\">gate: fail</option>
+              <option value=\"missing\">gate: missing</option>
+              <option value=\"other\">gate: other</option>
+            </select>
             <select id=\"batch_history_page_size\" onchange=\"resetBatchHistoryOffsetAndReload()\">
               <option value=\"10\">page size: 10</option>
               <option value=\"20\" selected>page size: 20</option>
@@ -3822,11 +3829,12 @@ HTML = """
       function readBatchHistoryControls() {
         const action = String((document.getElementById('batch_history_action_filter').value || '')).trim();
         const status = String((document.getElementById('batch_history_status_filter').value || '')).trim().toLowerCase();
+        const releaseGateStatus = String((document.getElementById('batch_history_release_gate_filter').value || 'all')).trim().toLowerCase() || 'all';
         const limitRaw = Number(document.getElementById('batch_history_page_size').value || 20);
         const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.floor(limitRaw))) : 20;
         const offsetRaw = Number(document.getElementById('batch_history_offset').value || 0);
         const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
-        return {action, status, limit, offset};
+        return {action, status, releaseGateStatus, limit, offset};
       }
 
       function setBatchHistoryOffset(offset) {
@@ -3922,12 +3930,21 @@ HTML = """
         qs.set('offset', String(c.offset));
         if (c.action) qs.set('action', c.action);
         if (c.status) qs.set('status', c.status);
+        if (c.releaseGateStatus && c.releaseGateStatus !== 'all') qs.set('release_gate_status', c.releaseGateStatus);
         const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports?${qs.toString()}`);
         const items = Array.isArray(r.data && r.data.exports) ? r.data.exports : [];
         const total = Number((r.data && r.data.total_count) || items.length);
         const hasMore = Boolean(r.data && r.data.has_more);
         state.batchHistory = items;
-        state.batchHistoryMeta = {offset: c.offset, limit: c.limit, total: total, has_more: hasMore, action: c.action, status: c.status};
+        state.batchHistoryMeta = {
+          offset: c.offset,
+          limit: c.limit,
+          total: total,
+          has_more: hasMore,
+          action: c.action,
+          status: c.status,
+          release_gate_status: c.releaseGateStatus,
+        };
         const head = document.getElementById('project_batch_history_summary');
         const box = document.getElementById('project_batch_history');
         const exportIdEle = document.getElementById('batch_export_id');
@@ -7406,6 +7423,7 @@ def _list_batch_export_entries(
     offset: int = 0,
     action_filter: str = "",
     status_filter: str = "",
+    release_gate_status_filter: str = "",
 ) -> Tuple[List[Dict[str, Any]], int]:
     root = _ui_batch_exports_root(project_id)
     rows: List[Dict[str, Any]] = []
@@ -7433,6 +7451,7 @@ def _list_batch_export_entries(
                     summary.get("release_gate_stats"),
                     fallback_rows=[],
                 ),
+                "release_gate_status": _release_gate_status_from_stats(summary.get("release_gate_stats")),
                 "replay_metrics": replay_metrics,
                 "replay_options": {
                     "dry_run": bool(replay_options.get("dry_run")),
@@ -7450,6 +7469,9 @@ def _list_batch_export_entries(
         rows = [row for row in rows if str(row.get("action") or "") == act]
     if st:
         rows = [row for row in rows if str(row.get("status") or "").lower() == st]
+    gate = str(release_gate_status_filter or "").strip().lower()
+    if gate and gate != "all":
+        rows = [row for row in rows if str(row.get("release_gate_status") or "other").strip().lower() == gate]
     total = len(rows)
     safe_limit = max(1, min(limit, 100))
     safe_offset = max(0, offset)
@@ -7505,6 +7527,14 @@ def _normalize_release_gate_stats(value: Any, *, fallback_rows: List[Any]) -> Di
     for key in ("pass", "fail", "missing", "other"):
         out[key] = max(0, _as_int(value.get(key), fallback.get(key, 0)))
     return out
+
+
+def _release_gate_status_from_stats(stats: Any) -> str:
+    normalized = _normalize_release_gate_stats(stats, fallback_rows=[])
+    nonzero = [key for key in ("pass", "fail", "missing", "other") if int(normalized.get(key) or 0) > 0]
+    if len(nonzero) != 1:
+        return "other"
+    return nonzero[0]
 
 
 def _batch_export_summary(payload: Dict[str, Any], *, export_id: str, project_id: str) -> Dict[str, Any]:
@@ -9738,16 +9768,20 @@ def api_project_batch_exports(project_id: str):
     offset = max(0, min(offset, 200000))
     action_filter = str(request.args.get("action") or "").strip()
     status_filter = str(request.args.get("status") or "").strip().lower()
+    release_gate_status_filter = str(request.args.get("release_gate_status") or "all").strip().lower() or "all"
     if action_filter and not _safe_filter_token(action_filter):
         return jsonify({"status": "fail", "error": "invalid action filter"}), 400
     if status_filter and status_filter not in {"pass", "partial", "fail"}:
         return jsonify({"status": "fail", "error": "invalid status filter"}), 400
+    if release_gate_status_filter not in {"all", "pass", "fail", "missing", "other"}:
+        return jsonify({"status": "fail", "error": "invalid release_gate_status"}), 400
     exports, total_count = _list_batch_export_entries(
         pid,
         limit=limit,
         offset=offset,
         action_filter=action_filter,
         status_filter=status_filter,
+        release_gate_status_filter=release_gate_status_filter,
     )
     return jsonify(
         {
@@ -9757,6 +9791,7 @@ def api_project_batch_exports(project_id: str):
             "offset": offset,
             "action_filter": action_filter,
             "status_filter": status_filter,
+            "release_gate_status_filter": release_gate_status_filter,
             "count": len(exports),
             "total_count": total_count,
             "has_more": (offset + len(exports)) < total_count,

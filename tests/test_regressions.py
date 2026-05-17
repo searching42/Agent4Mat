@@ -9674,6 +9674,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("batch_replay_max_concurrency", html)
         self.assertIn("batch_history_action_filter", html)
         self.assertIn("batch_history_status_filter", html)
+        self.assertIn("batch_history_release_gate_filter", html)
         self.assertIn("batch_history_page_size", html)
         self.assertIn("batch_history_offset", html)
         self.assertIn("session_batch_limit", html)
@@ -10208,11 +10209,27 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(int(release_gate_stats.get("pass") or 0), 1)
                 self.assertEqual(int(release_gate_stats.get("fail") or 0), 1)
                 self.assertEqual(int(release_gate_stats.get("missing") or 0), 0)
+                self.assertEqual(str(exports[0].get("release_gate_status") or ""), "other")
                 export_id = str(exports[0].get("export_id") or "")
                 self.assertTrue(export_id)
                 other_export_id = str(exports[1].get("export_id") or "") if len(exports) > 1 else ""
                 self.assertTrue(other_export_id)
                 self.assertNotEqual(export_id, other_export_id)
+
+                gate_filter_resp = client.get("/api/projects/ui_proj_batch/batch-exports?release_gate_status=other")
+                self.assertEqual(gate_filter_resp.status_code, 200)
+                gate_filter_payload = gate_filter_resp.get_json()
+                self.assertEqual(gate_filter_payload.get("status"), "pass")
+                self.assertEqual(str(gate_filter_payload.get("release_gate_status_filter") or ""), "other")
+                gate_exports = gate_filter_payload.get("exports") if isinstance(gate_filter_payload.get("exports"), list) else []
+                self.assertEqual(len(gate_exports), 1)
+                self.assertEqual(str(gate_exports[0].get("release_gate_status") or ""), "other")
+
+                gate_invalid_resp = client.get("/api/projects/ui_proj_batch/batch-exports?release_gate_status=weird")
+                self.assertEqual(gate_invalid_resp.status_code, 400)
+                gate_invalid_payload = gate_invalid_resp.get_json()
+                self.assertEqual(gate_invalid_payload.get("status"), "fail")
+                self.assertEqual(gate_invalid_payload.get("error"), "invalid release_gate_status")
 
                 compare_resp = client.get(
                     f"/api/projects/ui_proj_batch/batch-exports/compare?primary_export_id={export_id}&other_export_id={other_export_id}"

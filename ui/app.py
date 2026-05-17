@@ -505,6 +505,33 @@ HTML = """
         padding: 5px 8px;
         font-size: 0.72rem;
       }
+      .control-center-audit {
+        border: 1px solid #d7e2f3;
+        border-radius: 10px;
+        background: #ffffff;
+        padding: 8px 10px;
+      }
+      .control-center-audit .ca-head {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #5d6b80;
+        margin-bottom: 4px;
+      }
+      .control-center-audit .ca-list {
+        margin: 0;
+        padding-left: 16px;
+        color: #334155;
+        font-size: 0.74rem;
+        line-height: 1.35;
+      }
+      .control-center-audit .ca-list li {
+        margin: 2px 0;
+      }
+      .control-center-audit .ca-empty {
+        font-size: 0.74rem;
+        color: #6b7280;
+      }
       .control-center-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1483,6 +1510,11 @@ HTML = """
               <button type=\"button\" id=\"control_center_mode_btn\" onclick=\"toggleControlCenterMode()\">Switch To Expert</button>
               <div class=\"muted\">mode: <span id=\"control_center_mode_state\">novice</span></div>
             </div>
+            <div class=\"control-center-audit\">
+              <div class=\"ca-head\">Action Audit</div>
+              <div class=\"ca-empty\" id=\"control_center_audit_empty\">(no actions yet)</div>
+              <ul class=\"ca-list\" id=\"control_center_audit_list\" hidden></ul>
+            </div>
             <div class=\"agent-guidance-card\" id=\"agent_guidance_card\">
               <div class=\"ag-head\">Agent Guidance</div>
               <div class=\"ag-text\" id=\"agent_guidance_text\">guidance: waiting for first task</div>
@@ -1788,6 +1820,7 @@ HTML = """
         project: null,
         pendingInput: null,
         pendingHintRun: null,
+        controlCenterAudit: [],
         promptHistory: [],
         projects: [],
         memoryExplorer: null,
@@ -1818,6 +1851,7 @@ HTML = """
       };
 
       const PROMPT_HISTORY_LIMIT = 8;
+      const CONTROL_CENTER_AUDIT_LIMIT = 12;
       const SESSION_BOARD_KEY = 'agent4mat.ui.session_board.v1';
       const UI_PREFS_KEY = 'agent4mat.ui.prefs.v1';
 
@@ -1971,6 +2005,65 @@ HTML = """
 
       function renderJsonOut(payload) {
         document.getElementById('out').textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function _auditNowIso() {
+        try {
+          return new Date().toISOString();
+        } catch (e) {
+          return '';
+        }
+      }
+
+      function appendControlCenterAudit(entry) {
+        const row = entry && typeof entry === 'object' ? entry : {};
+        const stage = String(row.stage || '').trim() || 'action';
+        const status = String(row.status || '').trim() || 'unknown';
+        const operation = String(row.operation || '').trim();
+        const detail = String(row.detail || row.reason || '').trim();
+        const at = String(row.at || _auditNowIso()).trim();
+        state.controlCenterAudit = Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit : [];
+        state.controlCenterAudit.push({
+          at: at,
+          stage: stage,
+          status: status,
+          operation: operation,
+          detail: detail,
+        });
+        if (state.controlCenterAudit.length > CONTROL_CENTER_AUDIT_LIMIT) {
+          state.controlCenterAudit = state.controlCenterAudit.slice(-CONTROL_CENTER_AUDIT_LIMIT);
+        }
+        renderControlCenterAudit();
+      }
+
+      function renderControlCenterAudit() {
+        const emptyEle = document.getElementById('control_center_audit_empty');
+        const listEle = document.getElementById('control_center_audit_list');
+        if (!emptyEle || !listEle) return;
+        const rows = Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit.slice().reverse() : [];
+        if (rows.length < 1) {
+          emptyEle.hidden = false;
+          listEle.hidden = true;
+          listEle.innerHTML = '';
+          return;
+        }
+        emptyEle.hidden = true;
+        listEle.hidden = false;
+        listEle.innerHTML = '';
+        for (const row of rows) {
+          if (!row || typeof row !== 'object') continue;
+          const at = String(row.at || '').trim();
+          const stage = String(row.stage || '').trim();
+          const status = String(row.status || '').trim();
+          const operation = String(row.operation || '').trim();
+          const detail = String(row.detail || '').trim();
+          const li = document.createElement('li');
+          let line = `${at || '-'} | ${stage || '-'} | ${status || '-'}`;
+          if (operation) line += ` | op=${operation}`;
+          if (detail) line += ` | ${detail}`;
+          li.textContent = line;
+          listEle.appendChild(li);
+        }
       }
 
       function currentProjectKey() {
@@ -2996,6 +3089,15 @@ HTML = """
           document.getElementById('event_out').textContent = '(no events)';
           return;
         }
+        for (const e of arr) {
+          if (!e || typeof e !== 'object') continue;
+          appendControlCenterAudit({
+            stage: String(e.stage || '').trim() || 'event',
+            status: String(e.status || '').trim() || 'unknown',
+            operation: String(e.operation || '').trim(),
+            detail: String(e.reason || e.failure_kind || e.resume_failure_kind || '').trim(),
+          });
+        }
         const lines = [];
         for (const e of arr) {
           if (!e || typeof e !== 'object') continue;
@@ -3345,6 +3447,7 @@ HTML = """
       async function applyAgentGuidanceAction() {
         const btn = document.getElementById('agent_guidance_action_btn');
         const action = String((btn && btn.dataset && btn.dataset.action) || '').trim() || 'open_summary';
+        appendControlCenterAudit({stage: 'agent_guidance_action', status: 'running', operation: action});
         if (action === 'guided_recovery') {
           await runGuidedRecovery(false);
           return;
@@ -3416,16 +3519,19 @@ HTML = """
         const tid = taskId();
         if (!tid || tid === '-') {
           renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          appendControlCenterAudit({stage: 'guided_recovery', status: 'fail', operation: previewOnly ? 'preview' : 'apply', detail: 'no current_task_id'});
           return;
         }
         const safe = String(previewOnly ? 'preview' : 'apply');
         renderEvents([{stage: 'guided_recovery', status: 'running', operation: safe}]);
         if (previewOnly) {
           await previewRetryFailedStep();
+          appendControlCenterAudit({stage: 'guided_recovery', status: 'pass', operation: 'preview'});
           return;
         }
         await previewRetryFailedStep();
         await retryFailedStep();
+        appendControlCenterAudit({stage: 'guided_recovery', status: 'pass', operation: 'apply'});
       }
 
       async function applyQualitySuggestion() {
@@ -7242,6 +7348,7 @@ HTML = """
         renderBatchCompareChangedPaths(state.latestBatchCompare);
         setBatchCompareDetailsVisible(Boolean(state.batchCompareDetailsOpen));
         renderFailedReplayQueue(state.failedReplayQueue);
+        renderControlCenterAudit();
         refreshWorkspaceHud();
       }
 

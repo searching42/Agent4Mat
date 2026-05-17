@@ -557,6 +557,7 @@ def _run_check_compare_ui_controls(client: Any) -> Dict[str, Any]:
         "readiness_fail_first",
         "projectReadinessStatus(",
         "batch_history_readiness_filter",
+        "batch_replay_readiness_only",
         "normalizeReadinessStats(",
         "aggregateReadinessStats(",
         "project_batch_compare_details",

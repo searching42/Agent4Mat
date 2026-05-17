@@ -978,6 +978,7 @@ HTML = """
           <div class=\"project-batch-history-controls\">
             <label><input id=\"batch_replay_dry_run\" type=\"checkbox\" /> replay dry-run</label>
             <label><input id=\"batch_replay_failed_only\" type=\"checkbox\" /> replay failed-only</label>
+            <label><input id=\"batch_replay_readiness_only\" type=\"checkbox\" /> replay readiness-only (fail/warn)</label>
             <select id=\"batch_replay_retry_max\">
               <option value=\"0\" selected>retry max: 0</option>
               <option value=\"1\">retry max: 1</option>
@@ -2958,11 +2959,14 @@ HTML = """
         const maxConcurrency = Number.isFinite(concurrencyRaw) ? Math.max(1, Math.min(8, Math.floor(concurrencyRaw))) : 2;
         const dryRun = Boolean(opts.dry_run);
         const failedOnly = Boolean(opts.failed_only);
+        const readinessOnly = Boolean(opts.readiness_only);
 
         const dryEle = document.getElementById('batch_replay_dry_run');
         if (dryEle) dryEle.checked = dryRun;
         const failedEle = document.getElementById('batch_replay_failed_only');
         if (failedEle) failedEle.checked = failedOnly;
+        const readinessEle = document.getElementById('batch_replay_readiness_only');
+        if (readinessEle) readinessEle.checked = readinessOnly;
         const retryEle = document.getElementById('batch_replay_retry_max');
         if (retryEle) retryEle.value = String(retryMax);
         const backoffEle = document.getElementById('batch_replay_retry_backoff_ms');
@@ -2974,12 +2978,12 @@ HTML = """
       function replayPresetOptions(mode) {
         const m = String(mode || '').trim().toLowerCase();
         if (m === 'fast') {
-          return {dry_run: false, failed_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 6};
+          return {dry_run: false, failed_only: false, readiness_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 6};
         }
         if (m === 'dryrun') {
-          return {dry_run: true, failed_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 1};
+          return {dry_run: true, failed_only: false, readiness_only: false, retry_max: 0, retry_backoff_ms: 0, max_concurrency: 1};
         }
-        return {dry_run: false, failed_only: false, retry_max: 2, retry_backoff_ms: 200, max_concurrency: 2};
+        return {dry_run: false, failed_only: false, readiness_only: true, retry_max: 2, retry_backoff_ms: 200, max_concurrency: 2};
       }
 
       function applyReplayPreset(mode) {
@@ -4173,6 +4177,7 @@ HTML = """
       function readBatchReplayOptions(forceFailedOnly) {
         const dryRun = Boolean(document.getElementById('batch_replay_dry_run').checked);
         const failedOnlyRaw = Boolean(document.getElementById('batch_replay_failed_only').checked);
+        const readinessOnlyRaw = Boolean(document.getElementById('batch_replay_readiness_only').checked);
         const retryMaxRaw = Number(document.getElementById('batch_replay_retry_max').value || 0);
         const retryMax = Number.isFinite(retryMaxRaw) ? Math.max(0, Math.min(3, Math.floor(retryMaxRaw))) : 0;
         const backoffRaw = Number(document.getElementById('batch_replay_retry_backoff_ms').value || 150);
@@ -4182,6 +4187,7 @@ HTML = """
         return {
           dry_run: dryRun,
           failed_only: Boolean(forceFailedOnly) ? true : failedOnlyRaw,
+          readiness_only: readinessOnlyRaw,
           retry_max: retryMax,
           retry_backoff_ms: retryBackoffMs,
           max_concurrency: maxConcurrency,
@@ -8429,6 +8435,7 @@ def _normalize_batch_replay_options(raw: Any) -> Dict[str, Any]:
     return {
         "dry_run": bool(body.get("dry_run")),
         "failed_only": bool(body.get("failed_only")),
+        "readiness_only": bool(body.get("readiness_only")),
         "retry_max": retry_max,
         "retry_backoff_ms": retry_backoff_ms,
         "max_concurrency": max_concurrency,
@@ -8489,6 +8496,17 @@ def _filter_failed_only_replay_rows(
     if not picked and action == "batch_retry_failed":
         picked = [row for row in rows if isinstance(row, dict) and str(row.get("latest_failed_step") or row.get("failed_tool_name") or "").strip()]
     return picked, len(failed_task_ids)
+
+
+def _filter_readiness_only_replay_rows(*, rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    picked: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        readiness = _readiness_status_from_row(row)
+        if readiness in {"fail", "warn"}:
+            picked.append(row)
+    return picked, len(picked)
 
 
 def _batch_item_failure_reason(item: Dict[str, Any]) -> str:
@@ -8782,6 +8800,9 @@ def _replay_batch_export_payload(
         return {"status": "fail", "error": "unsupported_batch_export_action", "action": action}
 
     failed_source_count = 0
+    readiness_source_count = 0
+    if bool(options.get("readiness_only")):
+        replay_rows, readiness_source_count = _filter_readiness_only_replay_rows(rows=replay_rows)
     if bool(options.get("failed_only")):
         replay_rows, failed_source_count = _filter_failed_only_replay_rows(action=action, rows=replay_rows, source_batch=source_batch)
 
@@ -8830,7 +8851,9 @@ def _replay_batch_export_payload(
     replay_metrics["base_rows_count"] = len(base_rows)
     replay_metrics["effective_rows_count"] = len(replay_rows)
     replay_metrics["failed_source_count"] = int(failed_source_count)
+    replay_metrics["readiness_source_count"] = int(readiness_source_count)
     replay_metrics["failed_only"] = bool(options.get("failed_only"))
+    replay_metrics["readiness_only"] = bool(options.get("readiness_only"))
     top_status = "pass" if int(replay_metrics.get("fail_count") or 0) < 1 else "partial"
     out = {
         "status": top_status,

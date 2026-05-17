@@ -525,10 +525,19 @@ HTML = """
         margin-bottom: 6px;
       }
       .control-center-audit .ca-controls select,
+      .control-center-audit .ca-controls input,
       .control-center-audit .ca-controls button {
         margin-top: 0;
         font-size: 0.72rem;
         padding: 5px 7px;
+      }
+      .control-center-audit .ca-controls input {
+        min-width: 140px;
+      }
+      .control-center-audit .ca-meta {
+        font-size: 0.72rem;
+        color: #5d6b80;
+        margin-bottom: 4px;
       }
       .control-center-audit .ca-list {
         margin: 0;
@@ -1533,9 +1542,16 @@ HTML = """
                   <option value=\"fail\">fail</option>
                   <option value=\"other\">other</option>
                 </select>
+                <select id=\"control_center_audit_sort\" onchange=\"onControlCenterAuditSortChanged()\">
+                  <option value=\"desc\" selected>newest</option>
+                  <option value=\"asc\">oldest</option>
+                </select>
+                <input type=\"text\" id=\"control_center_audit_query\" placeholder=\"search stage/detail\" oninput=\"onControlCenterAuditQueryChanged()\" />
+                <button type=\"button\" id=\"control_center_audit_copy_btn\" onclick=\"copyControlCenterAudit()\">Copy Audit</button>
                 <button type=\"button\" id=\"control_center_audit_export_btn\" onclick=\"exportControlCenterAudit()\">Export Audit</button>
                 <button type=\"button\" id=\"control_center_audit_clear_btn\" onclick=\"clearControlCenterAudit()\">Clear Audit</button>
               </div>
+              <div class=\"ca-meta\" id=\"control_center_audit_meta\">showing 0/0</div>
               <div class=\"ca-empty\" id=\"control_center_audit_empty\">(no actions yet)</div>
               <ul class=\"ca-list\" id=\"control_center_audit_list\" hidden></ul>
             </div>
@@ -1848,7 +1864,14 @@ HTML = """
         promptHistory: [],
         projects: [],
         memoryExplorer: null,
-        ui: {focusMode: false, outputViewMode: 'simple', controlCenterMode: 'novice', controlCenterAuditFilter: 'all'},
+        ui: {
+          focusMode: false,
+          outputViewMode: 'simple',
+          controlCenterMode: 'novice',
+          controlCenterAuditFilter: 'all',
+          controlCenterAuditSort: 'desc',
+          controlCenterAuditQuery: '',
+        },
         batchHistory: [],
         batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
         latestBatchCompare: null,
@@ -2082,6 +2105,20 @@ HTML = """
         return normalizeControlCenterAuditFilter(ele ? ele.value : 'all');
       }
 
+      function normalizeControlCenterAuditSort(raw) {
+        return String(raw || '').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+      }
+
+      function readControlCenterAuditSort() {
+        const ele = document.getElementById('control_center_audit_sort');
+        return normalizeControlCenterAuditSort(ele ? ele.value : 'desc');
+      }
+
+      function readControlCenterAuditQuery() {
+        const ele = document.getElementById('control_center_audit_query');
+        return String(ele ? ele.value : '').trim();
+      }
+
       function applyControlCenterAuditFilter(filter, opts) {
         const next = normalizeControlCenterAuditFilter(filter);
         const ele = document.getElementById('control_center_audit_filter');
@@ -2095,29 +2132,88 @@ HTML = """
         }
       }
 
+      function applyControlCenterAuditSort(sort, opts) {
+        const next = normalizeControlCenterAuditSort(sort);
+        const ele = document.getElementById('control_center_audit_sort');
+        if (ele) {
+          ele.value = next;
+        }
+        state.ui = state.ui && typeof state.ui === 'object' ? state.ui : {};
+        state.ui.controlCenterAuditSort = next;
+        if (!opts || opts.persist !== false) {
+          saveUiPrefs(state.ui);
+        }
+      }
+
+      function applyControlCenterAuditQuery(query, opts) {
+        const next = String(query || '').trim().slice(0, 120);
+        const ele = document.getElementById('control_center_audit_query');
+        if (ele && ele.value !== next) {
+          ele.value = next;
+        }
+        state.ui = state.ui && typeof state.ui === 'object' ? state.ui : {};
+        state.ui.controlCenterAuditQuery = next;
+        if (!opts || opts.persist !== false) {
+          saveUiPrefs(state.ui);
+        }
+      }
+
       function onControlCenterAuditFilterChanged() {
         applyControlCenterAuditFilter(readControlCenterAuditFilter());
         renderControlCenterAudit();
       }
 
+      function onControlCenterAuditSortChanged() {
+        applyControlCenterAuditSort(readControlCenterAuditSort());
+        renderControlCenterAudit();
+      }
+
+      function onControlCenterAuditQueryChanged() {
+        applyControlCenterAuditQuery(readControlCenterAuditQuery());
+        renderControlCenterAudit();
+      }
+
       function _filteredControlCenterAuditRows() {
-        const rows = Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit.slice() : [];
+        let rows = Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit.slice() : [];
         const filter = readControlCenterAuditFilter();
-        if (filter === 'all') {
-          return rows;
+        const query = readControlCenterAuditQuery().toLowerCase();
+        const sort = readControlCenterAuditSort();
+        if (filter !== 'all') {
+          rows = rows.filter((row) => {
+            if (!row || typeof row !== 'object') return false;
+            return classifyControlCenterAuditStatus(row.status) === filter;
+          });
         }
-        return rows.filter((row) => {
-          if (!row || typeof row !== 'object') return false;
-          return classifyControlCenterAuditStatus(row.status) === filter;
+        if (query) {
+          rows = rows.filter((row) => {
+            if (!row || typeof row !== 'object') return false;
+            const merged = `${row.stage || ''} ${row.status || ''} ${row.operation || ''} ${row.detail || ''}`.toLowerCase();
+            return merged.includes(query);
+          });
+        }
+        rows.sort((a, b) => {
+          const aAt = String((a && a.at) || '');
+          const bAt = String((b && b.at) || '');
+          if (aAt === bAt) return 0;
+          return aAt < bAt ? -1 : 1;
         });
+        if (sort === 'desc') {
+          rows.reverse();
+        }
+        return rows;
       }
 
       function renderControlCenterAudit() {
         const emptyEle = document.getElementById('control_center_audit_empty');
         const listEle = document.getElementById('control_center_audit_list');
-        if (!emptyEle || !listEle) return;
-        const rows = _filteredControlCenterAuditRows().slice().reverse();
+        const metaEle = document.getElementById('control_center_audit_meta');
+        if (!emptyEle || !listEle || !metaEle) return;
+        const rows = _filteredControlCenterAuditRows();
+        const totalRows = Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit.length : 0;
         const filter = readControlCenterAuditFilter();
+        const sort = readControlCenterAuditSort();
+        const query = readControlCenterAuditQuery();
+        metaEle.textContent = `showing ${rows.length}/${totalRows} | filter=${filter} | sort=${sort}${query ? ` | query=${query}` : ''}`;
         if (rows.length < 1) {
           emptyEle.textContent = filter === 'all' ? '(no actions yet)' : `(no actions for filter=${filter})`;
           emptyEle.hidden = false;
@@ -2150,20 +2246,61 @@ HTML = """
         renderJsonOut({status: 'pass', action: 'clear_control_center_audit', count: 0});
       }
 
+      function copyControlCenterAudit() {
+        const rows = _filteredControlCenterAuditRows();
+        const lines = rows.map((row) => {
+          const at = String((row && row.at) || '').trim() || '-';
+          const stage = String((row && row.stage) || '').trim() || '-';
+          const status = String((row && row.status) || '').trim() || '-';
+          const operation = String((row && row.operation) || '').trim();
+          const detail = String((row && row.detail) || '').trim();
+          let line = `${at} | ${stage} | ${status}`;
+          if (operation) line += ` | op=${operation}`;
+          if (detail) line += ` | ${detail}`;
+          return line;
+        });
+        const text = lines.length > 0 ? `${lines.join('\n')}\n` : '';
+        const stamp = nowIso().replace(/[-:]/g, '').replace(/[.].*$/, '').replace('T', '_').replace('Z', '');
+        const done = (mode) => {
+          appendControlCenterAudit({
+            stage: 'control_center_audit_copy',
+            status: 'pass',
+            operation: mode,
+            detail: `rows=${rows.length}`,
+          });
+          renderJsonOut({status: 'pass', action: 'copy_control_center_audit', mode: mode, rows: rows.length});
+        };
+        try {
+          if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            navigator.clipboard.writeText(text).then(() => done('clipboard')).catch(() => {
+              triggerTextDownload(`control_center_audit_copy_${stamp || 'latest'}.txt`, text, 'text/plain;charset=utf-8');
+              done('download_fallback');
+            });
+            return;
+          }
+        } catch (e) {}
+        triggerTextDownload(`control_center_audit_copy_${stamp || 'latest'}.txt`, text, 'text/plain;charset=utf-8');
+        done('download_fallback');
+      }
+
       function exportControlCenterAudit() {
         const filter = readControlCenterAuditFilter();
+        const sort = readControlCenterAuditSort();
+        const query = readControlCenterAuditQuery();
         const rows = _filteredControlCenterAuditRows();
         const payload = {
           exported_at: nowIso(),
           filter: filter,
+          sort: sort,
+          query: query,
           total_count: Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit.length : 0,
           filtered_count: rows.length,
           rows: rows,
         };
         const stamp = nowIso().replace(/[-:]/g, '').replace(/[.].*$/, '').replace('T', '_').replace('Z', '');
-        const filename = `control_center_audit_${filter}_${stamp || 'latest'}.json`;
+        const filename = `control_center_audit_${filter}_${sort}_${stamp || 'latest'}.json`;
         triggerTextDownload(filename, `${JSON.stringify(payload, null, 2)}\n`, 'application/json;charset=utf-8');
-        appendControlCenterAudit({stage: 'control_center_audit_export', status: 'pass', operation: filter, detail: `rows=${rows.length}`});
+        appendControlCenterAudit({stage: 'control_center_audit_export', status: 'pass', operation: `${filter}/${sort}`, detail: `rows=${rows.length}`});
       }
 
       function currentProjectKey() {
@@ -2276,7 +2413,14 @@ HTML = """
       }
 
       function loadUiPrefs() {
-        const fallback = {focusMode: false, outputViewMode: 'simple', controlCenterMode: 'novice', controlCenterAuditFilter: 'all'};
+        const fallback = {
+          focusMode: false,
+          outputViewMode: 'simple',
+          controlCenterMode: 'novice',
+          controlCenterAuditFilter: 'all',
+          controlCenterAuditSort: 'desc',
+          controlCenterAuditQuery: '',
+        };
         try {
           const raw = localStorage.getItem(UI_PREFS_KEY);
           if (!raw) return fallback;
@@ -2294,11 +2438,16 @@ HTML = """
             auditFilterRaw === 'running' ||
             auditFilterRaw === 'other'
           ) ? auditFilterRaw : 'all';
+          const ccSortRaw = String(parsed.controlCenterAuditSort || 'desc').trim().toLowerCase();
+          const controlCenterAuditSort = ccSortRaw === 'asc' ? 'asc' : 'desc';
+          const controlCenterAuditQuery = String(parsed.controlCenterAuditQuery || '').trim().slice(0, 120);
           return {
             focusMode: Boolean(parsed.focusMode),
             outputViewMode: outputViewMode,
             controlCenterMode: controlCenterMode,
             controlCenterAuditFilter: controlCenterAuditFilter,
+            controlCenterAuditSort: controlCenterAuditSort,
+            controlCenterAuditQuery: controlCenterAuditQuery,
           };
         } catch (e) {
           return fallback;
@@ -2317,6 +2466,8 @@ HTML = """
             String(v && v.controlCenterAuditFilter).trim().toLowerCase() === 'running' ||
             String(v && v.controlCenterAuditFilter).trim().toLowerCase() === 'other'
           ) ? String(v && v.controlCenterAuditFilter).trim().toLowerCase() : 'all',
+          controlCenterAuditSort: String(v && v.controlCenterAuditSort).trim().toLowerCase() === 'asc' ? 'asc' : 'desc',
+          controlCenterAuditQuery: String((v && v.controlCenterAuditQuery) || '').trim().slice(0, 120),
         };
         try {
           localStorage.setItem(UI_PREFS_KEY, JSON.stringify(payload));
@@ -7437,6 +7588,8 @@ HTML = """
         applyOutputViewMode(String(uiPrefs.outputViewMode || 'simple'));
         applyControlCenterMode(String(uiPrefs.controlCenterMode || 'novice'));
         applyControlCenterAuditFilter(String(uiPrefs.controlCenterAuditFilter || 'all'), {persist: false});
+        applyControlCenterAuditSort(String(uiPrefs.controlCenterAuditSort || 'desc'), {persist: false});
+        applyControlCenterAuditQuery(String(uiPrefs.controlCenterAuditQuery || ''), {persist: false});
         setQuickCandidateStatus('quick path: idle');
         refreshCloneTargetSuggestion();
         bindComposerShortcuts();

@@ -518,6 +518,18 @@ HTML = """
         color: #5d6b80;
         margin-bottom: 4px;
       }
+      .control-center-audit .ca-controls {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 6px;
+      }
+      .control-center-audit .ca-controls select,
+      .control-center-audit .ca-controls button {
+        margin-top: 0;
+        font-size: 0.72rem;
+        padding: 5px 7px;
+      }
       .control-center-audit .ca-list {
         margin: 0;
         padding-left: 16px;
@@ -1512,6 +1524,18 @@ HTML = """
             </div>
             <div class=\"control-center-audit\">
               <div class=\"ca-head\">Action Audit</div>
+              <div class=\"ca-controls\">
+                <select id=\"control_center_audit_filter\" onchange=\"onControlCenterAuditFilterChanged()\">
+                  <option value=\"all\" selected>all</option>
+                  <option value=\"running\">running</option>
+                  <option value=\"pass\">pass</option>
+                  <option value=\"warn\">warn</option>
+                  <option value=\"fail\">fail</option>
+                  <option value=\"other\">other</option>
+                </select>
+                <button type=\"button\" id=\"control_center_audit_export_btn\" onclick=\"exportControlCenterAudit()\">Export Audit</button>
+                <button type=\"button\" id=\"control_center_audit_clear_btn\" onclick=\"clearControlCenterAudit()\">Clear Audit</button>
+              </div>
               <div class=\"ca-empty\" id=\"control_center_audit_empty\">(no actions yet)</div>
               <ul class=\"ca-list\" id=\"control_center_audit_list\" hidden></ul>
             </div>
@@ -1824,7 +1848,7 @@ HTML = """
         promptHistory: [],
         projects: [],
         memoryExplorer: null,
-        ui: {focusMode: false, outputViewMode: 'simple', controlCenterMode: 'novice'},
+        ui: {focusMode: false, outputViewMode: 'simple', controlCenterMode: 'novice', controlCenterAuditFilter: 'all'},
         batchHistory: [],
         batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
         latestBatchCompare: null,
@@ -2036,12 +2060,66 @@ HTML = """
         renderControlCenterAudit();
       }
 
+      function normalizeControlCenterAuditFilter(raw) {
+        const v = String(raw || '').trim().toLowerCase();
+        if (v === 'pass' || v === 'warn' || v === 'fail' || v === 'running' || v === 'other') {
+          return v;
+        }
+        return 'all';
+      }
+
+      function classifyControlCenterAuditStatus(raw) {
+        const s = String(raw || '').trim().toLowerCase();
+        if (s === 'running') return 'running';
+        if (s === 'pass' || s === 'success') return 'pass';
+        if (s === 'warn' || s === 'warning' || s === 'need_user_input') return 'warn';
+        if (s === 'fail' || s === 'failed' || s === 'error') return 'fail';
+        return 'other';
+      }
+
+      function readControlCenterAuditFilter() {
+        const ele = document.getElementById('control_center_audit_filter');
+        return normalizeControlCenterAuditFilter(ele ? ele.value : 'all');
+      }
+
+      function applyControlCenterAuditFilter(filter, opts) {
+        const next = normalizeControlCenterAuditFilter(filter);
+        const ele = document.getElementById('control_center_audit_filter');
+        if (ele) {
+          ele.value = next;
+        }
+        state.ui = state.ui && typeof state.ui === 'object' ? state.ui : {};
+        state.ui.controlCenterAuditFilter = next;
+        if (!opts || opts.persist !== false) {
+          saveUiPrefs(state.ui);
+        }
+      }
+
+      function onControlCenterAuditFilterChanged() {
+        applyControlCenterAuditFilter(readControlCenterAuditFilter());
+        renderControlCenterAudit();
+      }
+
+      function _filteredControlCenterAuditRows() {
+        const rows = Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit.slice() : [];
+        const filter = readControlCenterAuditFilter();
+        if (filter === 'all') {
+          return rows;
+        }
+        return rows.filter((row) => {
+          if (!row || typeof row !== 'object') return false;
+          return classifyControlCenterAuditStatus(row.status) === filter;
+        });
+      }
+
       function renderControlCenterAudit() {
         const emptyEle = document.getElementById('control_center_audit_empty');
         const listEle = document.getElementById('control_center_audit_list');
         if (!emptyEle || !listEle) return;
-        const rows = Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit.slice().reverse() : [];
+        const rows = _filteredControlCenterAuditRows().slice().reverse();
+        const filter = readControlCenterAuditFilter();
         if (rows.length < 1) {
+          emptyEle.textContent = filter === 'all' ? '(no actions yet)' : `(no actions for filter=${filter})`;
           emptyEle.hidden = false;
           listEle.hidden = true;
           listEle.innerHTML = '';
@@ -2064,6 +2142,28 @@ HTML = """
           li.textContent = line;
           listEle.appendChild(li);
         }
+      }
+
+      function clearControlCenterAudit() {
+        state.controlCenterAudit = [];
+        renderControlCenterAudit();
+        renderJsonOut({status: 'pass', action: 'clear_control_center_audit', count: 0});
+      }
+
+      function exportControlCenterAudit() {
+        const filter = readControlCenterAuditFilter();
+        const rows = _filteredControlCenterAuditRows();
+        const payload = {
+          exported_at: nowIso(),
+          filter: filter,
+          total_count: Array.isArray(state.controlCenterAudit) ? state.controlCenterAudit.length : 0,
+          filtered_count: rows.length,
+          rows: rows,
+        };
+        const stamp = nowIso().replace(/[-:]/g, '').replace(/[.].*$/, '').replace('T', '_').replace('Z', '');
+        const filename = `control_center_audit_${filter}_${stamp || 'latest'}.json`;
+        triggerTextDownload(filename, `${JSON.stringify(payload, null, 2)}\n`, 'application/json;charset=utf-8');
+        appendControlCenterAudit({stage: 'control_center_audit_export', status: 'pass', operation: filter, detail: `rows=${rows.length}`});
       }
 
       function currentProjectKey() {
@@ -2176,7 +2276,7 @@ HTML = """
       }
 
       function loadUiPrefs() {
-        const fallback = {focusMode: false, outputViewMode: 'simple', controlCenterMode: 'novice'};
+        const fallback = {focusMode: false, outputViewMode: 'simple', controlCenterMode: 'novice', controlCenterAuditFilter: 'all'};
         try {
           const raw = localStorage.getItem(UI_PREFS_KEY);
           if (!raw) return fallback;
@@ -2186,10 +2286,19 @@ HTML = """
           const outputViewMode = outputViewModeRaw === 'advanced' ? 'advanced' : 'simple';
           const ccModeRaw = String(parsed.controlCenterMode || 'novice').trim().toLowerCase();
           const controlCenterMode = ccModeRaw === 'expert' ? 'expert' : 'novice';
+          const auditFilterRaw = String(parsed.controlCenterAuditFilter || 'all').trim().toLowerCase();
+          const controlCenterAuditFilter = (
+            auditFilterRaw === 'pass' ||
+            auditFilterRaw === 'warn' ||
+            auditFilterRaw === 'fail' ||
+            auditFilterRaw === 'running' ||
+            auditFilterRaw === 'other'
+          ) ? auditFilterRaw : 'all';
           return {
             focusMode: Boolean(parsed.focusMode),
             outputViewMode: outputViewMode,
             controlCenterMode: controlCenterMode,
+            controlCenterAuditFilter: controlCenterAuditFilter,
           };
         } catch (e) {
           return fallback;
@@ -2201,6 +2310,13 @@ HTML = """
           focusMode: Boolean(v && v.focusMode),
           outputViewMode: String(v && v.outputViewMode).trim().toLowerCase() === 'advanced' ? 'advanced' : 'simple',
           controlCenterMode: String(v && v.controlCenterMode).trim().toLowerCase() === 'expert' ? 'expert' : 'novice',
+          controlCenterAuditFilter: (
+            String(v && v.controlCenterAuditFilter).trim().toLowerCase() === 'pass' ||
+            String(v && v.controlCenterAuditFilter).trim().toLowerCase() === 'warn' ||
+            String(v && v.controlCenterAuditFilter).trim().toLowerCase() === 'fail' ||
+            String(v && v.controlCenterAuditFilter).trim().toLowerCase() === 'running' ||
+            String(v && v.controlCenterAuditFilter).trim().toLowerCase() === 'other'
+          ) ? String(v && v.controlCenterAuditFilter).trim().toLowerCase() : 'all',
         };
         try {
           localStorage.setItem(UI_PREFS_KEY, JSON.stringify(payload));
@@ -7320,6 +7436,7 @@ HTML = """
         applyFocusMode(Boolean(uiPrefs.focusMode));
         applyOutputViewMode(String(uiPrefs.outputViewMode || 'simple'));
         applyControlCenterMode(String(uiPrefs.controlCenterMode || 'novice'));
+        applyControlCenterAuditFilter(String(uiPrefs.controlCenterAuditFilter || 'all'), {persist: false});
         setQuickCandidateStatus('quick path: idle');
         refreshCloneTargetSuggestion();
         bindComposerShortcuts();

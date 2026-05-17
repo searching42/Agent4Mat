@@ -35,6 +35,9 @@ PROJECTS_DIR_REL = Path("runs/ui_sessions/projects")
 UPLOADS_DIR_REL = Path("runs/ui_sessions/uploads")
 BATCH_EXPORTS_DIR_REL = Path("runs/ui_sessions/exports")
 SNAPSHOTS_DIR_REL = Path("runs/ui_sessions/snapshots")
+UI_STABILITY_SMOKE_JSON_REL = Path("runs/ci/ui_stability_smoke.json")
+UI_RELEASE_READINESS_JSON_REL = Path("runs/ci/ui_release_readiness.json")
+UI_RELEASE_READINESS_MD_REL = Path("runs/ci/ui_release_readiness.md")
 MAX_PROJECT_HISTORY = 400
 MAX_MEMORY_NOTES_CHARS = 8000
 STEP_OPERATIONS = (
@@ -1154,6 +1157,15 @@ HTML = """
           <div class=\"release-text\" id=\"release_context_text\">release: waiting for first task</div>
           <div class=\"release-failures\" id=\"release_context_failures\"></div>
         </div>
+        <div class=\"release-context-card\" id=\"ui_release_readiness_card\">
+          <div class=\"release-head\">UI Release Readiness</div>
+          <div class=\"release-text\" id=\"ui_release_readiness_text\">ui_release_ready: loading...</div>
+          <div class=\"release-failures\" id=\"ui_release_readiness_issues\"></div>
+          <div class=\"status-actions\" style=\"margin-top: 8px;\">
+            <button type=\"button\" onclick=\"loadUiReleaseReadiness(true)\">Load Gate</button>
+            <button type=\"button\" onclick=\"refreshUiReleaseReadiness(true)\">Run Gate</button>
+          </div>
+        </div>
         <div class=\"chat-log\" id=\"chat_log\"></div>
         <div class=\"chat-input\">
           <label>Chat with agent</label>
@@ -1412,6 +1424,7 @@ HTML = """
           batchLimit: 5,
         },
         sessionAutoRefreshTimer: null,
+        releaseReadiness: null,
       };
 
       const PROMPT_HISTORY_LIMIT = 8;
@@ -2576,6 +2589,60 @@ HTML = """
         } else {
           failEle.textContent = '';
         }
+      }
+
+      function renderUiReleaseReadiness(payload) {
+        const textEle = document.getElementById('ui_release_readiness_text');
+        const issuesEle = document.getElementById('ui_release_readiness_issues');
+        if (!textEle || !issuesEle) return;
+        const obj = payload && typeof payload === 'object' ? payload : {};
+        const report = (obj.report && typeof obj.report === 'object') ? obj.report : {};
+        state.releaseReadiness = report && Object.keys(report).length > 0 ? report : null;
+        const status = String((report && report.status) || obj.status || 'missing').trim() || 'missing';
+        const checkCount = Number((report && report.check_count) || 0);
+        const warnCount = Number((report && report.warning_count) || 0);
+        const failCount = Number((report && report.failure_count) || 0);
+        const generated = String((report && report.generated_at) || '').trim();
+        const generatedText = generated ? generated.replace('T', ' ').replace('+00:00', 'Z') : '-';
+        const updatedAt = String(obj.updated_at || '').trim();
+        textEle.textContent = `ui_release_ready=${status} | checks=${checkCount} warn=${warnCount} fail=${failCount} | generated=${generatedText} | file_updated=${updatedAt || '-'}`;
+
+        const failures = Array.isArray(report && report.failures) ? report.failures : [];
+        const warnings = Array.isArray(report && report.warnings) ? report.warnings : [];
+        const items = [];
+        for (const row of failures.slice(0, 2)) {
+          if (!row || typeof row !== 'object') continue;
+          items.push(`FAIL ${String(row.name || '-')}: ${String(row.message || '')}`);
+        }
+        for (const row of warnings.slice(0, 2)) {
+          if (!row || typeof row !== 'object') continue;
+          items.push(`WARN ${String(row.name || '-')}: ${String(row.message || '')}`);
+        }
+        issuesEle.textContent = items.length > 0 ? items.join(' | ') : '';
+      }
+
+      async function loadUiReleaseReadiness(showOutput) {
+        const r = await apiGet('/api/release/readiness');
+        if (showOutput) {
+          renderJsonOut(r.data);
+        }
+        renderUiReleaseReadiness(r.data || {});
+        return r.data;
+      }
+
+      async function refreshUiReleaseReadiness(showOutput) {
+        const r = await apiPost('/api/release/readiness/refresh', {
+          run_stability_smoke: true,
+          max_age_hours: 72,
+          require_freeze_report: false,
+        });
+        if (showOutput) {
+          renderJsonOut(r.data);
+        }
+        renderUiReleaseReadiness(r.data || {});
+        const status = String((r.data && r.data.status) || 'unknown');
+        renderEvents([{stage: 'ui_release_readiness_refresh', status: status}]);
+        return r.data;
       }
 
       function renderRuntimeProgress(summary) {
@@ -5994,6 +6061,7 @@ HTML = """
         renderPromptHistory(currentProjectKey());
         await loadProjectSnapshots({silent: true});
         await loadRunRuntime();
+        await loadUiReleaseReadiness(false);
         renderBatchCompareSummary(state.latestBatchCompare || {status: 'idle'});
         renderBatchCompareDetails(state.latestBatchCompare);
         renderBatchCompareChangedPaths(state.latestBatchCompare);
@@ -6478,6 +6546,113 @@ def _load_json_if_exists(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _trim_text(value: Any, *, max_chars: int = 12000) -> str:
+    text = str(value or "")
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...[truncated]"
+
+
+def _ui_release_readiness_json_path() -> Path:
+    return (REPO_ROOT / UI_RELEASE_READINESS_JSON_REL).resolve()
+
+
+def _ui_release_readiness_md_path() -> Path:
+    return (REPO_ROOT / UI_RELEASE_READINESS_MD_REL).resolve()
+
+
+def _ui_stability_smoke_json_path() -> Path:
+    return (REPO_ROOT / UI_STABILITY_SMOKE_JSON_REL).resolve()
+
+
+def _ui_release_readiness_snapshot() -> Dict[str, Any]:
+    report_path = _ui_release_readiness_json_path()
+    md_path = _ui_release_readiness_md_path()
+    payload = _load_json_if_exists(report_path)
+    md_preview = ""
+    if md_path.exists():
+        try:
+            md_preview = str(md_path.read_text(encoding="utf-8")[:2000])
+        except Exception:
+            md_preview = ""
+    status = "missing"
+    if isinstance(payload, dict):
+        status = str(payload.get("status") or "").strip() or "unknown"
+    return {
+        "status": status,
+        "report_path": str(report_path),
+        "report_exists": bool(isinstance(payload, dict)),
+        "report": payload if isinstance(payload, dict) else {},
+        "markdown_path": str(md_path),
+        "markdown_exists": md_path.exists(),
+        "markdown_preview": md_preview,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _run_ui_release_readiness_refresh(*, run_stability_smoke: bool, max_age_hours: int, require_freeze_report: bool) -> Dict[str, Any]:
+    commands: List[Dict[str, Any]] = []
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    overall_rc = 0
+
+    if run_stability_smoke:
+        cmd_stability = ["make", "ui-stability-smoke", f"WORKSPACE_ROOT={str(REPO_ROOT)}"]
+        cp = subprocess.run(cmd_stability, cwd=REPO_ROOT, capture_output=True, text=True, check=False, env=env)
+        commands.append(
+            {
+                "name": "ui-stability-smoke",
+                "command": cmd_stability,
+                "returncode": cp.returncode,
+                "stdout": _trim_text(cp.stdout),
+                "stderr": _trim_text(cp.stderr),
+            }
+        )
+        if cp.returncode != 0:
+            overall_rc = cp.returncode
+
+    cmd_ready = [
+        os.environ.get("PYTHON", "python3"),
+        "scripts/check_ui_release_readiness.py",
+        "--workspace-root",
+        str(REPO_ROOT),
+        "--max-age-hours",
+        str(max(0, int(max_age_hours))),
+        "--out-json",
+        str(UI_RELEASE_READINESS_JSON_REL),
+        "--out-md",
+        str(UI_RELEASE_READINESS_MD_REL),
+    ]
+    if require_freeze_report:
+        cmd_ready.append("--require-freeze-report")
+    cp_ready = subprocess.run(cmd_ready, cwd=REPO_ROOT, capture_output=True, text=True, check=False, env=env)
+    commands.append(
+        {
+            "name": "check_ui_release_readiness",
+            "command": cmd_ready,
+            "returncode": cp_ready.returncode,
+            "stdout": _trim_text(cp_ready.stdout),
+            "stderr": _trim_text(cp_ready.stderr),
+        }
+    )
+    if cp_ready.returncode != 0 and overall_rc == 0:
+        overall_rc = cp_ready.returncode
+
+    snapshot = _ui_release_readiness_snapshot()
+    report = snapshot.get("report") if isinstance(snapshot.get("report"), dict) else {}
+    report_status = str(report.get("status") or snapshot.get("status") or "unknown")
+    status = "pass" if overall_rc == 0 and report_status == "pass" else "fail"
+    return {
+        "status": status,
+        "run_stability_smoke": bool(run_stability_smoke),
+        "max_age_hours": int(max(0, int(max_age_hours))),
+        "require_freeze_report": bool(require_freeze_report),
+        "returncode": overall_rc,
+        "commands": commands,
+        **snapshot,
+    }
 
 
 def _tool_name_to_retry_operation(tool_name: str) -> Optional[str]:
@@ -9765,6 +9940,27 @@ def index() -> str:
 @app.get("/api/health")
 def api_health():
     return jsonify({"status": "pass", "repo_root": str(REPO_ROOT)})
+
+
+@app.get("/api/release/readiness")
+def api_release_readiness():
+    snapshot = _ui_release_readiness_snapshot()
+    http_status = 200 if bool(snapshot.get("report_exists")) else 404
+    return jsonify(snapshot), http_status
+
+
+@app.post("/api/release/readiness/refresh")
+def api_release_readiness_refresh():
+    body = request.get_json(silent=True) or {}
+    run_stability = bool(body.get("run_stability_smoke", True))
+    max_age_hours = _as_int(body.get("max_age_hours"), 72)
+    require_freeze = bool(body.get("require_freeze_report", False))
+    result = _run_ui_release_readiness_refresh(
+        run_stability_smoke=run_stability,
+        max_age_hours=max_age_hours,
+        require_freeze_report=require_freeze,
+    )
+    return jsonify(result)
 
 
 @app.get("/api/projects")

@@ -9200,6 +9200,92 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertEqual(payload.get("status"), "pass")
         self.assertTrue(str(payload.get("repo_root") or ""))
 
+    def test_ui_release_readiness_endpoint_missing_and_present(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                missing_resp = client.get("/api/release/readiness")
+                self.assertEqual(missing_resp.status_code, 404)
+                missing_payload = missing_resp.get_json()
+                self.assertEqual(str(missing_payload.get("status") or ""), "missing")
+                self.assertEqual(bool(missing_payload.get("report_exists")), False)
+
+                ci_dir = root / "runs" / "ci"
+                ci_dir.mkdir(parents=True, exist_ok=True)
+                (ci_dir / "ui_release_readiness.json").write_text(
+                    json.dumps(
+                        {
+                            "status": "pass",
+                            "generated_at": "2026-05-17T12:00:00+08:00",
+                            "check_count": 6,
+                            "warning_count": 0,
+                            "failure_count": 0,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                (ci_dir / "ui_release_readiness.md").write_text("# UI Release Readiness\n\n- status: pass\n", encoding="utf-8")
+                ready_resp = client.get("/api/release/readiness")
+                self.assertEqual(ready_resp.status_code, 200)
+                ready_payload = ready_resp.get_json()
+                self.assertEqual(str(ready_payload.get("status") or ""), "pass")
+                self.assertEqual(bool(ready_payload.get("report_exists")), True)
+                report = ready_payload.get("report") if isinstance(ready_payload.get("report"), dict) else {}
+                self.assertEqual(str(report.get("status") or ""), "pass")
+                self.assertEqual(bool(ready_payload.get("markdown_exists")), True)
+
+    def test_ui_release_readiness_refresh_endpoint_runs_gate_commands(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                ci_dir = root / "runs" / "ci"
+                ci_dir.mkdir(parents=True, exist_ok=True)
+                (ci_dir / "ui_release_readiness.json").write_text(
+                    json.dumps(
+                        {
+                            "status": "pass",
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                            "check_count": 6,
+                            "warning_count": 0,
+                            "failure_count": 0,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                (ci_dir / "ui_release_readiness.md").write_text("# ready\n", encoding="utf-8")
+                cps = [
+                    subprocess.CompletedProcess(args=["make", "ui-stability-smoke"], returncode=0, stdout="ok", stderr=""),
+                    subprocess.CompletedProcess(args=["python3", "scripts/check_ui_release_readiness.py"], returncode=0, stdout="{}", stderr=""),
+                ]
+                with mock.patch("ui.app.subprocess.run", side_effect=cps) as mocked:
+                    resp = client.post(
+                        "/api/release/readiness/refresh",
+                        json={"run_stability_smoke": True, "max_age_hours": 48, "require_freeze_report": False},
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(str(payload.get("status") or ""), "pass")
+                self.assertEqual(int(payload.get("returncode", -1)), 0)
+                commands = payload.get("commands") if isinstance(payload.get("commands"), list) else []
+                self.assertEqual(len(commands), 2)
+                self.assertEqual(str(commands[0].get("name") or ""), "ui-stability-smoke")
+                self.assertEqual(str(commands[1].get("name") or ""), "check_ui_release_readiness")
+                first_cmd = mocked.call_args_list[0].args[0]
+                second_cmd = mocked.call_args_list[1].args[0]
+                self.assertEqual(first_cmd[0], "make")
+                self.assertIn("ui-stability-smoke", first_cmd)
+                self.assertTrue(any("check_ui_release_readiness.py" in str(item) for item in second_cmd))
+                self.assertEqual(mocked.call_count, 2)
+
     def test_ui_projects_create_history_and_upload_ref(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -9632,6 +9718,12 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("release_context_text", html)
         self.assertIn("release_context_failures", html)
         self.assertIn("renderReleaseContextCard(", html)
+        self.assertIn("ui_release_readiness_card", html)
+        self.assertIn("ui_release_readiness_text", html)
+        self.assertIn("ui_release_readiness_issues", html)
+        self.assertIn("loadUiReleaseReadiness(", html)
+        self.assertIn("refreshUiReleaseReadiness(", html)
+        self.assertIn("/api/release/readiness", html)
         self.assertIn("chat_summary_btn", html)
         self.assertIn("chat_timeline_btn", html)
         self.assertIn("chat_memory_btn", html)

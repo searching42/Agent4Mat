@@ -904,11 +904,18 @@ HTML = """
               <option value=\"missing\">release gate: missing</option>
               <option value=\"other\">release gate: other</option>
             </select>
+            <select id=\"session_filter_readiness\">
+              <option value=\"all\">readiness: all</option>
+              <option value=\"fail\">readiness: fail</option>
+              <option value=\"warn\">readiness: warn</option>
+              <option value=\"pass\">readiness: pass</option>
+            </select>
             <select id=\"session_sort_mode\">
               <option value=\"updated_desc\">sort: updated desc</option>
               <option value=\"failed_desc\">sort: failed desc</option>
               <option value=\"success_ratio_asc\">sort: success ratio asc</option>
               <option value=\"priority_desc\">sort: priority desc</option>
+              <option value=\"readiness_fail_first\">sort: readiness fail first</option>
             </select>
             <button type=\"button\" onclick=\"applySessionBoardControls()\">Apply</button>
           </div>
@@ -920,6 +927,9 @@ HTML = """
             <button type=\"button\" onclick=\"quickFilterByReleaseGate('fail')\">Gate Fail</button>
             <button type=\"button\" onclick=\"quickFilterByReleaseGate('pass')\">Gate Pass</button>
             <button type=\"button\" onclick=\"quickFilterByReleaseGate('missing')\">Gate Missing</button>
+            <button type=\"button\" onclick=\"quickFilterByReadiness('fail')\">Readiness Fail</button>
+            <button type=\"button\" onclick=\"quickFilterByReadiness('warn')\">Readiness Warn</button>
+            <button type=\"button\" onclick=\"quickFilterByReadiness('pass')\">Readiness Pass</button>
             <button type=\"button\" onclick=\"quickSortPriority()\">Priority First</button>
             <button type=\"button\" onclick=\"openTopPrioritySession()\">Open Top Priority</button>
             <button type=\"button\" onclick=\"openNextFailedSession()\">Open Next Failed</button>
@@ -1415,6 +1425,7 @@ HTML = """
           filterText: '',
           health: 'all',
           releaseGate: 'all',
+          readiness: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -1620,6 +1631,7 @@ HTML = """
           filterText: '',
           health: 'all',
           releaseGate: 'all',
+          readiness: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -1638,6 +1650,9 @@ HTML = """
           const releaseGateRaw = String(parsed.releaseGate || 'all').trim().toLowerCase();
           const releaseGateAllow = new Set(['all', 'pass', 'fail', 'missing', 'other']);
           const releaseGate = releaseGateAllow.has(releaseGateRaw) ? releaseGateRaw : 'all';
+          const readinessRaw = String(parsed.readiness || 'all').trim().toLowerCase();
+          const readinessAllow = new Set(['all', 'pass', 'warn', 'fail']);
+          const readiness = readinessAllow.has(readinessRaw) ? readinessRaw : 'all';
           const sort = String(parsed.sort || 'updated_desc').trim().toLowerCase();
           const autoRefreshEnabled = Boolean(parsed.autoRefreshEnabled);
           const refreshSecondsRaw = Number(parsed.refreshSeconds || 30);
@@ -1651,7 +1666,7 @@ HTML = """
             .map((x) => String(x || '').trim())
             .filter((x) => Boolean(x))
             .slice(0, 200);
-          return {filterText, health, releaseGate, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, groupedView, batchLimit, pinnedProjectIds};
+          return {filterText, health, releaseGate, readiness, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, groupedView, batchLimit, pinnedProjectIds};
         } catch (e) {
           return fallback;
         }
@@ -1662,6 +1677,7 @@ HTML = """
           filterText: String((v && v.filterText) || '').trim().toLowerCase(),
           health: String((v && v.health) || 'all').trim().toLowerCase(),
           releaseGate: String((v && v.releaseGate) || 'all').trim().toLowerCase(),
+          readiness: String((v && v.readiness) || 'all').trim().toLowerCase(),
           sort: String((v && v.sort) || 'updated_desc').trim().toLowerCase(),
           autoRefreshEnabled: Boolean(v && v.autoRefreshEnabled),
           refreshSeconds: Number.isFinite(Number(v && v.refreshSeconds)) ? Math.max(10, Math.min(120, Math.floor(Number(v.refreshSeconds)))) : 30,
@@ -1771,6 +1787,7 @@ HTML = """
         const filterEle = document.getElementById('session_filter_text');
         const healthEle = document.getElementById('session_filter_health');
         const gateEle = document.getElementById('session_filter_release_gate');
+        const readinessEle = document.getElementById('session_filter_readiness');
         const sortEle = document.getElementById('session_sort_mode');
         const autoEle = document.getElementById('session_auto_refresh');
         const secEle = document.getElementById('session_refresh_seconds');
@@ -1778,6 +1795,7 @@ HTML = """
         if (filterEle) filterEle.value = String(payload.filterText || '');
         if (healthEle) healthEle.value = String(payload.health || 'all');
         if (gateEle) gateEle.value = String(payload.releaseGate || 'all');
+        if (readinessEle) readinessEle.value = String(payload.readiness || 'all');
         if (sortEle) sortEle.value = String(payload.sort || 'updated_desc');
         if (autoEle) autoEle.checked = Boolean(payload.autoRefreshEnabled);
         if (secEle) secEle.value = String(payload.refreshSeconds || 30);
@@ -3577,6 +3595,8 @@ HTML = """
         const health = String(document.getElementById('session_filter_health').value || 'all').trim().toLowerCase();
         const releaseGateRaw = String(document.getElementById('session_filter_release_gate').value || 'all').trim().toLowerCase();
         const releaseGate = (new Set(['all', 'pass', 'fail', 'missing', 'other'])).has(releaseGateRaw) ? releaseGateRaw : 'all';
+        const readinessRaw = String(document.getElementById('session_filter_readiness').value || 'all').trim().toLowerCase();
+        const readiness = (new Set(['all', 'pass', 'warn', 'fail'])).has(readinessRaw) ? readinessRaw : 'all';
         const sort = String(document.getElementById('session_sort_mode').value || 'updated_desc').trim().toLowerCase();
         const autoRefreshEnabled = Boolean(document.getElementById('session_auto_refresh').checked);
         const refreshSecondsRaw = Number(document.getElementById('session_refresh_seconds').value || 30);
@@ -3588,7 +3608,7 @@ HTML = """
         const pinnedProjectIds = Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
           ? state.sessionBoard.pinnedProjectIds.slice()
           : [];
-        return {filterText, health, releaseGate, sort, autoRefreshEnabled, refreshSeconds, batchLimit, pinnedOnly, groupedView, pinnedProjectIds};
+        return {filterText, health, releaseGate, readiness, sort, autoRefreshEnabled, refreshSeconds, batchLimit, pinnedOnly, groupedView, pinnedProjectIds};
       }
 
       function applySessionBoardControls() {
@@ -3628,6 +3648,17 @@ HTML = """
         applySessionBoardControls();
       }
 
+      function quickFilterByReadiness(readinessStatus) {
+        const value = String(readinessStatus || 'all').trim().toLowerCase();
+        const allow = new Set(['all', 'pass', 'warn', 'fail']);
+        const next = allow.has(value) ? value : 'all';
+        const ele = document.getElementById('session_filter_readiness');
+        if (ele) {
+          ele.value = next;
+        }
+        applySessionBoardControls();
+      }
+
       function quickSortPriority() {
         const sortEle = document.getElementById('session_sort_mode');
         if (sortEle) {
@@ -3641,6 +3672,7 @@ HTML = """
           filterText: '',
           health: 'all',
           releaseGate: 'all',
+          readiness: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -3722,12 +3754,24 @@ HTML = """
         return 'none';
       }
 
+      function projectReadinessStatus(row) {
+        const health = projectHealthStatus(row);
+        const releaseCtx = (row && row.release_context && typeof row.release_context === 'object') ? row.release_context : {};
+        const gateRaw = String((row && row.release_gate_status) || releaseCtx.release_gate_status || 'missing').trim().toLowerCase();
+        const gate = gateRaw || 'missing';
+        if (health === 'failed' || gate === 'fail') return 'fail';
+        if (health === 'success' && gate === 'pass') return 'pass';
+        return 'warn';
+      }
+
       function scoreProjectPriority(row) {
         const rh = (row && row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
         const failed = Number(rh.failed_steps || 0);
         const dur = Number(rh.recent_duration_ms || 0);
         const ratio = Number(rh.success_ratio || 0);
-        return (failed * 1000) + (dur / 1000) - (ratio * 100);
+        const readiness = projectReadinessStatus(row);
+        const readinessBoost = readiness === 'fail' ? 2000 : (readiness === 'warn' ? 700 : 0);
+        return readinessBoost + (failed * 1000) + (dur / 1000) - (ratio * 100);
       }
 
       function computeSessionBoardRows(projects) {
@@ -3771,6 +3815,9 @@ HTML = """
             return gate === controls.releaseGate;
           });
         }
+        if (controls.readiness && controls.readiness !== 'all') {
+          rows = rows.filter((row) => projectReadinessStatus(row) === controls.readiness);
+        }
         if (controls.sort === 'failed_desc') {
           rows.sort((a, b) => Number((b && b.runtime_health && b.runtime_health.failed_steps) || 0) - Number((a && a.runtime_health && a.runtime_health.failed_steps) || 0));
         } else if (controls.sort === 'success_ratio_asc') {
@@ -3785,6 +3832,19 @@ HTML = """
           });
         } else if (controls.sort === 'priority_desc') {
           rows.sort((a, b) => scoreProjectPriority(b) - scoreProjectPriority(a));
+        } else if (controls.sort === 'readiness_fail_first') {
+          const readinessScore = (row) => {
+            const status = projectReadinessStatus(row);
+            if (status === 'fail') return 3;
+            if (status === 'warn') return 2;
+            if (status === 'pass') return 1;
+            return 0;
+          };
+          rows.sort((a, b) => {
+            const rs = readinessScore(b) - readinessScore(a);
+            if (rs !== 0) return rs;
+            return scoreProjectPriority(b) - scoreProjectPriority(a);
+          });
         } else {
           rows.sort((a, b) => String((b && b.updated_at) || '').localeCompare(String((a && a.updated_at) || '')));
         }
@@ -3822,6 +3882,7 @@ HTML = """
           task_id: String(row.current_task_id || '').trim(),
           title: String(row.title || '').trim(),
           health: String(runtime.status || 'none'),
+          readiness_status: projectReadinessStatus(row),
           release_gate_status: String(row.release_gate_status || releaseCtx.release_gate_status || 'missing').trim().toLowerCase() || 'missing',
           release_overall: String(row.release_overall || releaseCtx.release_overall || '').trim(),
           latest_failed_step: String(runtime.latest_failed_step || '').trim(),
@@ -4645,6 +4706,7 @@ HTML = """
         const healthObj = (row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
         const healthStatus = String(healthObj.status || 'none').toLowerCase();
         const health = formatRuntimeHealth(healthObj || {});
+        const readinessStatus = projectReadinessStatus(row);
         const releaseCtx = (row.release_context && typeof row.release_context === 'object') ? row.release_context : {};
         const releaseOverall = String((row.release_overall || releaseCtx.release_overall || '')).trim();
         const releaseGate = String((row.release_gate_status || releaseCtx.release_gate_status || 'missing')).trim().toLowerCase() || 'missing';
@@ -4670,7 +4732,7 @@ HTML = """
 
         const meta = document.createElement('div');
         meta.className = 'project-session-meta';
-        meta.textContent = `task=${taskId || '-'} | health=${health} | release=${releaseOverall || '-'} gate=${releaseGate || '-'} | updated=${updatedAt}`;
+        meta.textContent = `task=${taskId || '-'} | health=${health} | readiness=${readinessStatus} | release=${releaseOverall || '-'} gate=${releaseGate || '-'} | updated=${updatedAt}`;
         card.appendChild(meta);
         const releaseLine = document.createElement('div');
         releaseLine.className = 'project-session-runtime';
@@ -4680,6 +4742,10 @@ HTML = """
         statusBadge.className = `project-session-status${healthStatus === 'failed' ? ' fail' : (healthStatus === 'success' ? ' pass' : '')}`;
         statusBadge.textContent = `status=${healthStatus || 'none'}`;
         card.appendChild(statusBadge);
+        const readinessBadge = document.createElement('div');
+        readinessBadge.className = `project-session-status${readinessStatus === 'fail' ? ' fail' : (readinessStatus === 'pass' ? ' pass' : '')}`;
+        readinessBadge.textContent = `readiness=${readinessStatus}`;
+        card.appendChild(readinessBadge);
         const failed = document.createElement('div');
         failed.className = 'project-session-failed';
         failed.textContent = latestFailedStep ? `latest_failed_step=${latestFailedStep}` : 'latest_failed_step=-';
@@ -4934,6 +5000,9 @@ HTML = """
           let gateFailN = 0;
           let gateMissingN = 0;
           let gateOtherN = 0;
+          let readinessPassN = 0;
+          let readinessWarnN = 0;
+          let readinessFailN = 0;
           let ratioSum = 0.0;
           let ratioCnt = 0;
           let pinnedN = 0;
@@ -4951,6 +5020,10 @@ HTML = """
             else if (gate === 'fail') gateFailN += 1;
             else if (gate === 'missing') gateMissingN += 1;
             else gateOtherN += 1;
+            const readiness = projectReadinessStatus(row);
+            if (readiness === 'pass') readinessPassN += 1;
+            else if (readiness === 'fail') readinessFailN += 1;
+            else readinessWarnN += 1;
             const ratio = Number(rh.success_ratio || 0);
             if (Number.isFinite(ratio)) {
               ratioSum += ratio;
@@ -4960,19 +5033,25 @@ HTML = """
           const avgRatio = ratioCnt > 0 ? Math.round((ratioSum / ratioCnt) * 100) : 0;
           const mode = Boolean(controls.groupedView) ? 'grouped' : 'flat';
           const batchLimit = readSessionBatchLimit();
-          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | gate(pass/fail/missing/other)=${gatePassN}/${gateFailN}/${gateMissingN}/${gateOtherN} | avg_success_ratio=${avgRatio}% | mode=${mode} | batch_limit=${batchLimit}`;
+          summaryEle.textContent = `summary: total=${total} | pinned=${pinnedN} | failed=${failedN} | success=${successN} | none=${noneN} | readiness(pass/warn/fail)=${readinessPassN}/${readinessWarnN}/${readinessFailN} | gate(pass/fail/missing/other)=${gatePassN}/${gateFailN}/${gateMissingN}/${gateOtherN} | avg_success_ratio=${avgRatio}% | mode=${mode} | batch_limit=${batchLimit}`;
           const failedBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('failed')\\\"]\");
           const successBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('success')\\\"]\");
           const noneBtn = document.querySelector(\"button[onclick=\\\"quickFilterByHealth('none')\\\"]\");
           const gateFailBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReleaseGate('fail')\\\"]\");
           const gatePassBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReleaseGate('pass')\\\"]\");
           const gateMissingBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReleaseGate('missing')\\\"]\");
+          const readinessFailBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReadiness('fail')\\\"]\");
+          const readinessWarnBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReadiness('warn')\\\"]\");
+          const readinessPassBtn = document.querySelector(\"button[onclick=\\\"quickFilterByReadiness('pass')\\\"]\");
           if (failedBtn) failedBtn.textContent = `Failed Count (${failedN})`;
           if (successBtn) successBtn.textContent = `Success Count (${successN})`;
           if (noneBtn) noneBtn.textContent = `None Count (${noneN})`;
           if (gateFailBtn) gateFailBtn.textContent = `Gate Fail (${gateFailN})`;
           if (gatePassBtn) gatePassBtn.textContent = `Gate Pass (${gatePassN})`;
           if (gateMissingBtn) gateMissingBtn.textContent = `Gate Missing (${gateMissingN})`;
+          if (readinessFailBtn) readinessFailBtn.textContent = `Readiness Fail (${readinessFailN})`;
+          if (readinessWarnBtn) readinessWarnBtn.textContent = `Readiness Warn (${readinessWarnN})`;
+          if (readinessPassBtn) readinessPassBtn.textContent = `Readiness Pass (${readinessPassN})`;
         }
 
         if (rows.length < 1) {
@@ -5024,14 +5103,7 @@ HTML = """
           renderJsonOut({status: 'fail', error: 'no project available in current filters'});
           return;
         }
-        const scoreRow = (row) => {
-          const rh = (row && row.runtime_health && typeof row.runtime_health === 'object') ? row.runtime_health : {};
-          const failed = Number(rh.failed_steps || 0);
-          const dur = Number(rh.recent_duration_ms || 0);
-          const ratio = Number(rh.success_ratio || 0);
-          return (failed * 1000) + (dur / 1000) - (ratio * 100);
-        };
-        rows.sort((a, b) => scoreRow(b) - scoreRow(a));
+        rows.sort((a, b) => scoreProjectPriority(b) - scoreProjectPriority(a));
         const top = rows.find((r) => r && typeof r === 'object' && String(r.project_id || '').trim());
         if (!top) {
           renderJsonOut({status: 'fail', error: 'no valid project'});

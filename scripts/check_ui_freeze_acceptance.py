@@ -550,6 +550,12 @@ def _run_check_compare_ui_controls(client: Any) -> Dict[str, Any]:
     required_tokens = [
         "batch_compare_toggle_btn",
         "batch_compare_path_filter",
+        "session_filter_readiness",
+        "quickFilterByReadiness('fail')",
+        "quickFilterByReadiness('warn')",
+        "quickFilterByReadiness('pass')",
+        "readiness_fail_first",
+        "projectReadinessStatus(",
         "project_batch_compare_details",
         "project_batch_compare_paths",
         "project_batch_compare_selected_diff",

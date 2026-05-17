@@ -9512,6 +9512,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("renderSummaryEventLines(", html)
         self.assertIn("chat_status_ribbon", html)
         self.assertIn("chat_status_text", html)
+        self.assertIn("release_context_card", html)
+        self.assertIn("release_context_text", html)
+        self.assertIn("release_context_failures", html)
+        self.assertIn("renderReleaseContextCard(", html)
         self.assertIn("chat_summary_btn", html)
         self.assertIn("chat_timeline_btn", html)
         self.assertIn("chat_memory_btn", html)
@@ -11059,6 +11063,57 @@ class UiPrototypeTests(unittest.TestCase):
         payload = resp.get_json()
         self.assertEqual(payload.get("status"), "fail")
         self.assertEqual(payload.get("error"), "invalid prefix")
+        resp2 = client.get("/api/tasks?release_gate_status=weird")
+        self.assertEqual(resp2.status_code, 400)
+        payload2 = resp2.get_json()
+        self.assertEqual(payload2.get("status"), "fail")
+        self.assertEqual(payload2.get("error"), "invalid release_gate_status")
+
+    def test_ui_tasks_endpoint_filters_by_release_gate_status(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            base = root / "runs" / "agent"
+            run_pass = base / "ui_gate_pass"
+            run_fail = base / "ui_gate_fail"
+            run_missing = base / "ui_gate_missing"
+            for run in [run_pass, run_fail, run_missing]:
+                run.mkdir(parents=True, exist_ok=True)
+                (run / "execution.json").write_text(
+                    json.dumps({"status": "success", "records": [{"status": "success"}]}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                (run / "task_state.json").write_text(
+                    json.dumps({"status": "SUCCESS"}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+            (run_pass / "release_evidence.json").write_text(
+                json.dumps(
+                    {"overall": "pass", "baseline_context": {"base_task_id": "ui_gate_pass", "archive_release_gate_status": "pass"}},
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_fail / "release_evidence.json").write_text(
+                json.dumps(
+                    {"overall": "fail", "baseline_context": {"base_task_id": "ui_gate_fail", "archive_release_gate_status": "fail"}},
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get("/api/tasks?release_gate_status=fail")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("release_gate_status"), "fail")
+            tasks = payload.get("tasks") if isinstance(payload.get("tasks"), list) else []
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0].get("task_id"), "ui_gate_fail")
+            self.assertEqual(tasks[0].get("release_gate_status"), "fail")
 
     def test_ui_experiments_endpoint_filters_records(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -11864,6 +11919,69 @@ class UiPrototypeTests(unittest.TestCase):
         payload = resp.get_json()
         self.assertEqual(payload.get("status"), "fail")
         self.assertEqual(payload.get("error"), "invalid task_id")
+
+    def test_ui_task_release_context_endpoint_reads_baseline_archive(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_release_ctx_r2"
+            base_task_id = "ui_release_ctx"
+            run_dir = root / "runs" / "agent" / task_id
+            base_dir = root / "runs" / "agent" / base_task_id
+            archive_dir = root / "runs" / "archive" / base_task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            base_dir.mkdir(parents=True, exist_ok=True)
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "release_evidence.json").write_text(
+                json.dumps(
+                    {
+                        "overall": "fail",
+                        "checks": {"score_adapter_expected": False},
+                        "baseline_context": {"base_task_id": base_task_id, "archive_release_gate_status": "fail"},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (base_dir / "baseline_summary.json").write_text(
+                json.dumps({"status": "pass", "run_count": 4}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (archive_dir / "archive_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "archived",
+                        "release_gate_summary": {
+                            "status": "fail",
+                            "checked_runs": 4,
+                            "pass_count": 3,
+                            "fail_count": 1,
+                            "failures": ["r2: fallback_used"],
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/release-context")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            rel = payload.get("release_context") if isinstance(payload.get("release_context"), dict) else {}
+            self.assertEqual(rel.get("base_task_id"), base_task_id)
+            self.assertEqual(rel.get("release_overall"), "fail")
+            self.assertEqual(rel.get("baseline_status"), "pass")
+            self.assertEqual(rel.get("baseline_run_count"), 4)
+            self.assertEqual(rel.get("archive_manifest_status"), "archived")
+            self.assertEqual(rel.get("archive_release_gate_status"), "fail")
+            self.assertEqual(rel.get("archive_release_gate_checked_runs"), 4)
+            self.assertEqual(rel.get("archive_release_gate_fail_count"), 1)
+            failures = rel.get("archive_release_gate_failures_preview") if isinstance(rel.get("archive_release_gate_failures_preview"), list) else []
+            self.assertEqual(failures, ["r2: fallback_used"])
 
     def test_ui_task_bundle_download_includes_run_and_output_dirs(self) -> None:
         ui_app_mod = self._load_ui_module()

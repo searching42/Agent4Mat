@@ -450,6 +450,31 @@ HTML = """
         opacity: 0.54;
         cursor: not-allowed;
       }
+      .release-context-card {
+        border: 1px solid #d7e2f3;
+        border-radius: 10px;
+        background: #f8fbff;
+        padding: 8px 10px;
+      }
+      .release-context-card .release-head {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #5d6b80;
+        margin-bottom: 4px;
+      }
+      .release-context-card .release-text {
+        font-size: 0.78rem;
+        color: #334155;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .release-context-card .release-failures {
+        margin-top: 4px;
+        font-size: 0.72rem;
+        color: #7a3f00;
+      }
       .chat-log {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -1096,6 +1121,11 @@ HTML = """
             <button id=\"chat_resume_btn\" onclick=\"retryCurrentTask()\">Resume</button>
             <button id=\"chat_bundle_btn\" onclick=\"downloadTaskBundle()\">Bundle</button>
           </div>
+        </div>
+        <div class=\"release-context-card\" id=\"release_context_card\">
+          <div class=\"release-head\">Release Gate Context</div>
+          <div class=\"release-text\" id=\"release_context_text\">release: waiting for first task</div>
+          <div class=\"release-failures\" id=\"release_context_failures\"></div>
         </div>
         <div class=\"chat-log\" id=\"chat_log\"></div>
         <div class=\"chat-input\">
@@ -2477,6 +2507,36 @@ HTML = """
           failedN: failedN,
           failureKind: failureKind,
         });
+      }
+
+      function renderReleaseContextCard(summaryPayload, timelinePayload) {
+        const textEle = document.getElementById('release_context_text');
+        const failEle = document.getElementById('release_context_failures');
+        if (!textEle || !failEle) return;
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const relFromSummary = (s.release_context && typeof s.release_context === 'object') ? s.release_context : {};
+        const relFromTimeline = (t.release_context && typeof t.release_context === 'object') ? t.release_context : {};
+        const rel = Object.keys(relFromTimeline).length > 0 ? relFromTimeline : relFromSummary;
+        if (!rel || typeof rel !== 'object' || Object.keys(rel).length < 1) {
+          textEle.textContent = 'release: -';
+          failEle.textContent = '';
+          return;
+        }
+        const overall = String(rel.release_overall || '-');
+        const gate = String(rel.archive_release_gate_status || '-');
+        const base = String(rel.base_task_id || '-');
+        const checked = Number(rel.archive_release_gate_checked_runs || -1);
+        const passN = Number(rel.archive_release_gate_pass_count || -1);
+        const failN = Number(rel.archive_release_gate_fail_count || -1);
+        const counts = (checked >= 0 && passN >= 0 && failN >= 0) ? `${checked}/${passN}/${failN}` : '-';
+        textEle.textContent = `release=${overall} | gate=${gate} | base=${base} | checked/pass/fail=${counts}`;
+        const failures = Array.isArray(rel.archive_release_gate_failures_preview) ? rel.archive_release_gate_failures_preview : [];
+        if (failures.length > 0) {
+          failEle.textContent = `gate_failures: ${failures.slice(0, 3).join(' | ')}`;
+        } else {
+          failEle.textContent = '';
+        }
       }
 
       function renderRuntimeProgress(summary) {
@@ -4613,6 +4673,7 @@ HTML = """
         renderJsonOut(r.data);
         renderSummaryEventLines(r.data);
         renderMemoryExplorerFromSummary(r.data);
+        renderReleaseContextCard(r.data, {});
       }
 
       async function validateProjectTask(projectId, taskId) {
@@ -5412,6 +5473,7 @@ HTML = """
           renderTimelineGroups(null);
           renderMemoryExplorerFromPreview(null, 'runtime');
           renderChatStatusRibbon({}, {});
+          renderReleaseContextCard({}, {});
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -5437,6 +5499,7 @@ HTML = """
         renderTimelineGroups(tl);
         renderMemoryExplorerFromSummary(s);
         renderChatStatusRibbon(s, tl);
+        renderReleaseContextCard(s, tl);
       }
 
       async function boot() {
@@ -9827,8 +9890,11 @@ def api_tasks():
     limit = _as_int(request.args.get("limit"), 50)
     limit = max(1, min(limit, 200))
     prefix = str(request.args.get("prefix") or "").strip()
+    release_gate_status = str(request.args.get("release_gate_status") or "").strip().lower()
     if prefix and not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", prefix):
         return jsonify({"status": "fail", "error": "invalid prefix"}), 400
+    if release_gate_status and release_gate_status not in {"all", "pass", "fail", "missing", "other"}:
+        return jsonify({"status": "fail", "error": "invalid release_gate_status"}), 400
     runs_root = (REPO_ROOT / "runs" / "agent").resolve()
     if not runs_root.exists():
         return jsonify({"status": "pass", "tasks": [], "count": 0, "runs_root": str(runs_root)})
@@ -9842,7 +9908,11 @@ def api_tasks():
             continue
         if prefix and not tid.startswith(prefix):
             continue
-        items.append(_task_list_item(tid, child))
+        item = _task_list_item(tid, child)
+        gate = str(item.get("release_gate_status") or "missing").strip().lower() or "missing"
+        if release_gate_status and release_gate_status != "all" and gate != release_gate_status:
+            continue
+        items.append(item)
     items.sort(key=lambda it: int(it.get("updated_epoch_ms") or 0), reverse=True)
     limited = items[:limit]
     return jsonify(
@@ -9853,6 +9923,7 @@ def api_tasks():
             "count_before_limit": len(items),
             "limit": limit,
             "prefix": prefix,
+            "release_gate_status": release_gate_status,
             "tasks": limited,
         }
     )
@@ -10173,6 +10244,26 @@ def api_task_summary(task_id: str):
                 if isinstance(experiment_trace, dict)
                 else {}
             ),
+        }
+    )
+
+
+@app.get("/api/task/<task_id>/release-context")
+def api_task_release_context(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    release_context = _release_context_for_task(tid, run_dir)
+    return jsonify(
+        {
+            "status": "pass" if run_dir.exists() else "missing",
+            "task_id": tid,
+            "run_dir": str(run_dir),
+            "run_dir_exists": run_dir.exists(),
+            "release_context": release_context,
         }
     )
 

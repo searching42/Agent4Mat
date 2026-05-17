@@ -949,6 +949,9 @@ HTML = """
             <button type=\"button\" onclick=\"replayFailedBatchExportById()\">Replay Failed By ID</button>
             <button type=\"button\" onclick=\"deleteBatchExportById()\">Delete Export By ID</button>
             <button type=\"button\" onclick=\"compareBatchExportsById()\">Compare Export IDs</button>
+            <button type=\"button\" id=\"batch_compare_toggle_btn\" onclick=\"toggleBatchCompareDetails()\">Show Compare Details</button>
+            <button type=\"button\" onclick=\"downloadLatestBatchCompare('json')\">Download Compare JSON</button>
+            <button type=\"button\" onclick=\"downloadLatestBatchCompare('txt')\">Download Compare TXT</button>
             <button type=\"button\" onclick=\"loadFailedReplayQueueById()\">Load Failed Queue By ID</button>
             <button type=\"button\" onclick=\"replayFailedQueueNow()\">Replay Failed Queue</button>
             <button type=\"button\" onclick=\"downloadBatchExportById('json')\">Download Export JSON</button>
@@ -1004,6 +1007,7 @@ HTML = """
           <div class=\"project-board-summary\" id=\"project_batch_history_summary\">batch_history: -</div>
           <div class=\"project-board-summary\" id=\"project_batch_history_metrics\">batch_metrics: -</div>
           <div class=\"project-board-summary\" id=\"project_batch_compare_summary\">batch_compare: -</div>
+          <pre id=\"project_batch_compare_details\" style=\"margin: 0 0 8px 0; max-height: 200px; overflow: auto;\" hidden>(none)</pre>
           <div class=\"project-board-summary\" id=\"project_failed_queue_summary\">failed_queue: -</div>
           <div id=\"project_batch_history_list\" class=\"project-batch-history-list\"><div class=\"muted\">(none)</div></div>
           <pre id=\"project_batch_history\" style=\"margin: 0 0 8px 0; max-height: 120px; overflow: auto;\">(none)</pre>
@@ -1385,6 +1389,8 @@ HTML = """
         ui: {focusMode: false, outputViewMode: 'simple'},
         batchHistory: [],
         batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
+        latestBatchCompare: null,
+        batchCompareDetailsOpen: false,
         failedReplayQueue: {source_export_id: '', action: '', rows: [], count: 0, unique_task_count: 0, failure_reasons: []},
         sessionBoard: {
           filterText: '',
@@ -4101,6 +4107,110 @@ HTML = """
         head.textContent = `batch_compare: ${primaryId || '-'} vs ${otherId || '-'} | changed=${changed} only_primary=${onlyPrimary} only_other=${onlyOther} | gate=${gatePrimary}->${gateOther} delta(pass/fail/missing/other)=${passDelta}/${failDelta}/${missingDelta}/${otherDelta}`;
       }
 
+      function batchCompareValueText(value) {
+        if (value === null || value === undefined) return 'null';
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        try {
+          return JSON.stringify(value);
+        } catch (e) {
+          return String(value);
+        }
+      }
+
+      function buildBatchCompareDetailsText(payload) {
+        const obj = (payload && typeof payload === 'object') ? payload : {};
+        const status = String(obj.status || '').trim().toLowerCase();
+        if (status !== 'pass') {
+          return '(none)';
+        }
+        const primaryId = String(obj.primary_export_id || '').trim() || '-';
+        const otherId = String(obj.other_export_id || '').trim() || '-';
+        const diff = (obj.diff && typeof obj.diff === 'object') ? obj.diff : {};
+        const gate = (obj.release_gate_diff && typeof obj.release_gate_diff === 'object') ? obj.release_gate_diff : {};
+        const gateDelta = (gate.delta && typeof gate.delta === 'object') ? gate.delta : {};
+        const lines = [];
+        lines.push(`batch_compare ${primaryId} vs ${otherId}`);
+        lines.push(`changed_count=${Number(diff.changed_count || 0)} only_in_primary=${Number(diff.only_in_primary_count || 0)} only_in_other=${Number(diff.only_in_other_count || 0)}`);
+        lines.push(`gate primary=${String(gate.primary_status || '-')}, other=${String(gate.other_status || '-')}, delta(pass/fail/missing/other)=${Number(gateDelta.pass || 0)}/${Number(gateDelta.fail || 0)}/${Number(gateDelta.missing || 0)}/${Number(gateDelta.other || 0)}`);
+        const changedRows = Array.isArray(diff.changed) ? diff.changed : [];
+        if (changedRows.length > 0) {
+          lines.push('top_changed_paths:');
+          for (let i = 0; i < Math.min(changedRows.length, 20); i += 1) {
+            const row = changedRows[i];
+            if (!row || typeof row !== 'object') continue;
+            const path = String(row.path || '-');
+            const primaryV = batchCompareValueText(row.primary);
+            const otherV = batchCompareValueText(row.other);
+            const pv = primaryV.length > 80 ? `${primaryV.slice(0, 80)}...` : primaryV;
+            const ov = otherV.length > 80 ? `${otherV.slice(0, 80)}...` : otherV;
+            lines.push(`${i + 1}. ${path} | primary=${pv} | other=${ov}`);
+          }
+        } else {
+          lines.push('top_changed_paths: (none)');
+        }
+        const compareLines = Array.isArray(obj.compare_lines) ? obj.compare_lines : [];
+        if (compareLines.length > 0) {
+          lines.push('compare_lines:');
+          for (const line of compareLines.slice(0, 12)) {
+            lines.push(`- ${String(line || '')}`);
+          }
+        }
+        return lines.join('\n');
+      }
+
+      function setBatchCompareDetailsVisible(visible) {
+        const open = Boolean(visible);
+        state.batchCompareDetailsOpen = open;
+        const box = document.getElementById('project_batch_compare_details');
+        const btn = document.getElementById('batch_compare_toggle_btn');
+        if (box) box.hidden = !open;
+        if (btn) btn.textContent = open ? 'Hide Compare Details' : 'Show Compare Details';
+      }
+
+      function renderBatchCompareDetails(payload) {
+        const box = document.getElementById('project_batch_compare_details');
+        if (!box) return;
+        box.textContent = buildBatchCompareDetailsText(payload);
+      }
+
+      function toggleBatchCompareDetails() {
+        setBatchCompareDetailsVisible(!Boolean(state.batchCompareDetailsOpen));
+      }
+
+      function safeCompareExportToken(value) {
+        return String(value || '').trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown';
+      }
+
+      function triggerTextDownload(filename, text, mimeType) {
+        const blob = new Blob([String(text || '')], {type: String(mimeType || 'text/plain;charset=utf-8')});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 500);
+      }
+
+      function downloadLatestBatchCompare(format) {
+        const payload = (state.latestBatchCompare && typeof state.latestBatchCompare === 'object') ? state.latestBatchCompare : null;
+        if (!payload || String(payload.status || '').trim().toLowerCase() !== 'pass') {
+          renderJsonOut({status: 'fail', error: 'no compare result available for export'});
+          return;
+        }
+        const primary = safeCompareExportToken(payload.primary_export_id);
+        const other = safeCompareExportToken(payload.other_export_id);
+        const fmt = String(format || 'json').trim().toLowerCase();
+        const base = `batch_compare_${primary}_vs_${other}`;
+        if (fmt === 'txt') {
+          triggerTextDownload(`${base}.txt`, buildBatchCompareDetailsText(payload), 'text/plain;charset=utf-8');
+          return;
+        }
+        triggerTextDownload(`${base}.json`, `${JSON.stringify(payload, null, 2)}\n`, 'application/json;charset=utf-8');
+      }
+
       async function loadFailedReplayQueueById() {
         const pid = selectedProjectId();
         const eid = readBatchExportId();
@@ -4148,17 +4258,28 @@ HTML = """
         const other = readBatchCompareExportId();
         if (!pid || !isSafeProjectId(pid)) {
           renderJsonOut({status: 'fail', error: 'invalid project_id'});
+          state.latestBatchCompare = null;
           renderBatchCompareSummary({status: 'fail'});
+          renderBatchCompareDetails({status: 'fail'});
           return;
         }
         if (!primary || !other) {
           renderJsonOut({status: 'fail', error: 'missing export_id for compare'});
+          state.latestBatchCompare = null;
           renderBatchCompareSummary({status: 'fail'});
+          renderBatchCompareDetails({status: 'fail'});
           return;
         }
         const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports/compare?primary_export_id=${encodeURIComponent(primary)}&other_export_id=${encodeURIComponent(other)}`);
         renderJsonOut(r.data);
+        state.latestBatchCompare = (r.data && typeof r.data === 'object' && String(r.data.status || '').trim().toLowerCase() === 'pass')
+          ? r.data
+          : null;
         renderBatchCompareSummary(r.data);
+        renderBatchCompareDetails(r.data);
+        if (state.latestBatchCompare) {
+          setBatchCompareDetailsVisible(true);
+        }
       }
 
       function downloadBatchExportById(format) {
@@ -5108,6 +5229,10 @@ HTML = """
         renderPromptHistory(pid);
         await loadProjectSnapshots({silent: true});
         await loadBatchHistory();
+        state.latestBatchCompare = null;
+        renderBatchCompareSummary({status: 'idle'});
+        renderBatchCompareDetails(null);
+        setBatchCompareDetailsVisible(false);
         renderFailedReplayQueue(state.failedReplayQueue);
         return r;
       }
@@ -5694,6 +5819,9 @@ HTML = """
         renderPromptHistory(currentProjectKey());
         await loadProjectSnapshots({silent: true});
         await loadRunRuntime();
+        renderBatchCompareSummary(state.latestBatchCompare || {status: 'idle'});
+        renderBatchCompareDetails(state.latestBatchCompare);
+        setBatchCompareDetailsVisible(Boolean(state.batchCompareDetailsOpen));
         renderFailedReplayQueue(state.failedReplayQueue);
         refreshWorkspaceHud();
       }

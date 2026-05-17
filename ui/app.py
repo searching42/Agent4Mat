@@ -1011,6 +1011,8 @@ HTML = """
           <div class=\"project-board-summary\" id=\"project_batch_history_metrics\">batch_metrics: -</div>
           <div class=\"project-board-summary\" id=\"project_batch_compare_summary\">batch_compare: -</div>
           <pre id=\"project_batch_compare_details\" style=\"margin: 0 0 8px 0; max-height: 200px; overflow: auto;\" hidden>(none)</pre>
+          <div id=\"project_batch_compare_paths\" class=\"project-batch-history-list\" hidden><div class=\"muted\">(none)</div></div>
+          <pre id=\"project_batch_compare_selected_diff\" style=\"margin: 0 0 8px 0; max-height: 220px; overflow: auto;\" hidden>(none)</pre>
           <div class=\"project-board-summary\" id=\"project_failed_queue_summary\">failed_queue: -</div>
           <div id=\"project_batch_history_list\" class=\"project-batch-history-list\"><div class=\"muted\">(none)</div></div>
           <pre id=\"project_batch_history\" style=\"margin: 0 0 8px 0; max-height: 120px; overflow: auto;\">(none)</pre>
@@ -1395,6 +1397,7 @@ HTML = """
         latestBatchCompare: null,
         batchCompareDetailsOpen: false,
         batchComparePathFilter: '',
+        batchCompareSelectedPath: '',
         failedReplayQueue: {source_export_id: '', action: '', rows: [], count: 0, unique_task_count: 0, failure_reasons: []},
         sessionBoard: {
           filterText: '',
@@ -4136,12 +4139,23 @@ HTML = """
       function onBatchCompareFilterChanged() {
         state.batchComparePathFilter = readBatchComparePathFilter();
         renderBatchCompareDetails(state.latestBatchCompare);
+        renderBatchCompareChangedPaths(state.latestBatchCompare);
       }
 
       function clearBatchCompareFilter() {
         state.batchComparePathFilter = '';
         applyBatchComparePathFilterToUi();
         renderBatchCompareDetails(state.latestBatchCompare);
+        renderBatchCompareChangedPaths(state.latestBatchCompare);
+      }
+
+      function getBatchCompareChangedRows(payload, pathFilterText) {
+        const obj = (payload && typeof payload === 'object') ? payload : {};
+        const diff = (obj.diff && typeof obj.diff === 'object') ? obj.diff : {};
+        const changedRows = Array.isArray(diff.changed) ? diff.changed : [];
+        const token = String(pathFilterText || '').trim().toLowerCase();
+        if (!token) return changedRows;
+        return changedRows.filter((row) => row && typeof row === 'object' && String(row.path || '').toLowerCase().includes(token));
       }
 
       function buildBatchCompareDetailsText(payload, pathFilterText) {
@@ -4161,9 +4175,7 @@ HTML = """
         lines.push(`changed_count=${Number(diff.changed_count || 0)} only_in_primary=${Number(diff.only_in_primary_count || 0)} only_in_other=${Number(diff.only_in_other_count || 0)}`);
         lines.push(`gate primary=${String(gate.primary_status || '-')}, other=${String(gate.other_status || '-')}, delta(pass/fail/missing/other)=${Number(gateDelta.pass || 0)}/${Number(gateDelta.fail || 0)}/${Number(gateDelta.missing || 0)}/${Number(gateDelta.other || 0)}`);
         const changedRows = Array.isArray(diff.changed) ? diff.changed : [];
-        const filteredRows = filterToken
-          ? changedRows.filter((row) => row && typeof row === 'object' && String(row.path || '').toLowerCase().includes(filterToken))
-          : changedRows;
+        const filteredRows = getBatchCompareChangedRows(obj, filterToken);
         if (filterToken) {
           lines.push(`changed_path_filter="${filterToken}" matched=${filteredRows.length}/${changedRows.length}`);
         }
@@ -4196,8 +4208,12 @@ HTML = """
         const open = Boolean(visible);
         state.batchCompareDetailsOpen = open;
         const box = document.getElementById('project_batch_compare_details');
+        const list = document.getElementById('project_batch_compare_paths');
+        const diff = document.getElementById('project_batch_compare_selected_diff');
         const btn = document.getElementById('batch_compare_toggle_btn');
         if (box) box.hidden = !open;
+        if (list) list.hidden = !open;
+        if (diff) diff.hidden = !open;
         if (btn) btn.textContent = open ? 'Hide Compare Details' : 'Show Compare Details';
       }
 
@@ -4205,6 +4221,98 @@ HTML = """
         const box = document.getElementById('project_batch_compare_details');
         if (!box) return;
         box.textContent = buildBatchCompareDetailsText(payload, state.batchComparePathFilter);
+      }
+
+      function renderBatchCompareSelectedDiff(path, primaryValue, otherValue) {
+        const box = document.getElementById('project_batch_compare_selected_diff');
+        if (!box) return;
+        const pathText = String(path || '').trim();
+        if (!pathText) {
+          box.textContent = '(none)';
+          state.batchCompareSelectedPath = '';
+          return;
+        }
+        state.batchCompareSelectedPath = pathText;
+        const primaryText = batchCompareValueText(primaryValue);
+        const otherText = batchCompareValueText(otherValue);
+        box.textContent = `path: ${pathText}\nprimary: ${primaryText}\nother: ${otherText}`;
+      }
+
+      async function copyBatchComparePath(path) {
+        const pathText = String(path || '').trim();
+        if (!pathText) {
+          renderJsonOut({status: 'fail', error: 'empty compare path'});
+          return;
+        }
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(pathText);
+            renderJsonOut({status: 'pass', action: 'copy_batch_compare_path', path: pathText});
+            return;
+          }
+        } catch (e) {
+          // fall through
+        }
+        renderJsonOut({status: 'fail', error: 'clipboard_unavailable', path: pathText});
+      }
+
+      function renderBatchCompareChangedPaths(payload) {
+        const wrap = document.getElementById('project_batch_compare_paths');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const obj = (payload && typeof payload === 'object') ? payload : {};
+        const status = String(obj.status || '').trim().toLowerCase();
+        if (status !== 'pass') {
+          const empty = document.createElement('div');
+          empty.className = 'muted';
+          empty.textContent = '(none)';
+          wrap.appendChild(empty);
+          renderBatchCompareSelectedDiff('', '', '');
+          return;
+        }
+        const rows = getBatchCompareChangedRows(obj, state.batchComparePathFilter);
+        if (rows.length < 1) {
+          const empty = document.createElement('div');
+          empty.className = 'muted';
+          empty.textContent = '(none matched)';
+          wrap.appendChild(empty);
+          renderBatchCompareSelectedDiff('', '', '');
+          return;
+        }
+        let selectedMatched = false;
+        for (let i = 0; i < Math.min(rows.length, 40); i += 1) {
+          const row = rows[i];
+          if (!row || typeof row !== 'object') continue;
+          const path = String(row.path || '').trim();
+          if (!path) continue;
+          const item = document.createElement('div');
+          item.className = 'project-batch-history-item';
+          const isSelected = state.batchCompareSelectedPath && state.batchCompareSelectedPath === path;
+          if (isSelected) selectedMatched = true;
+          const marker = isSelected ? '[selected] ' : '';
+          item.textContent = `${marker}${i + 1}. ${path}`;
+          const copyBtn = document.createElement('button');
+          copyBtn.type = 'button';
+          copyBtn.textContent = 'Copy Path';
+          copyBtn.onclick = () => { void copyBatchComparePath(path); };
+          const viewBtn = document.createElement('button');
+          viewBtn.type = 'button';
+          viewBtn.textContent = 'Preview';
+          viewBtn.onclick = () => {
+            renderBatchCompareSelectedDiff(path, row.primary, row.other);
+            renderBatchCompareChangedPaths(state.latestBatchCompare);
+          };
+          item.appendChild(document.createElement('br'));
+          item.appendChild(copyBtn);
+          item.appendChild(viewBtn);
+          wrap.appendChild(item);
+        }
+        if (!selectedMatched) {
+          const first = rows[0];
+          if (first && typeof first === 'object') {
+            renderBatchCompareSelectedDiff(String(first.path || ''), first.primary, first.other);
+          }
+        }
       }
 
       function toggleBatchCompareDetails() {
@@ -4316,15 +4424,19 @@ HTML = """
         if (!pid || !isSafeProjectId(pid)) {
           renderJsonOut({status: 'fail', error: 'invalid project_id'});
           state.latestBatchCompare = null;
+          state.batchCompareSelectedPath = '';
           renderBatchCompareSummary({status: 'fail'});
           renderBatchCompareDetails({status: 'fail'});
+          renderBatchCompareChangedPaths({status: 'fail'});
           return;
         }
         if (!primary || !other) {
           renderJsonOut({status: 'fail', error: 'missing export_id for compare'});
           state.latestBatchCompare = null;
+          state.batchCompareSelectedPath = '';
           renderBatchCompareSummary({status: 'fail'});
           renderBatchCompareDetails({status: 'fail'});
+          renderBatchCompareChangedPaths({status: 'fail'});
           return;
         }
         const r = await apiGet(`/api/projects/${encodeURIComponent(pid)}/batch-exports/compare?primary_export_id=${encodeURIComponent(primary)}&other_export_id=${encodeURIComponent(other)}`);
@@ -4332,8 +4444,10 @@ HTML = """
         state.latestBatchCompare = (r.data && typeof r.data === 'object' && String(r.data.status || '').trim().toLowerCase() === 'pass')
           ? r.data
           : null;
+        state.batchCompareSelectedPath = '';
         renderBatchCompareSummary(r.data);
         renderBatchCompareDetails(r.data);
+        renderBatchCompareChangedPaths(r.data);
         if (state.latestBatchCompare) {
           setBatchCompareDetailsVisible(true);
         }
@@ -5287,8 +5401,10 @@ HTML = """
         await loadProjectSnapshots({silent: true});
         await loadBatchHistory();
         state.latestBatchCompare = null;
+        state.batchCompareSelectedPath = '';
         renderBatchCompareSummary({status: 'idle'});
         renderBatchCompareDetails(null);
+        renderBatchCompareChangedPaths(null);
         setBatchCompareDetailsVisible(false);
         applyBatchComparePathFilterToUi();
         renderFailedReplayQueue(state.failedReplayQueue);
@@ -5880,6 +5996,7 @@ HTML = """
         await loadRunRuntime();
         renderBatchCompareSummary(state.latestBatchCompare || {status: 'idle'});
         renderBatchCompareDetails(state.latestBatchCompare);
+        renderBatchCompareChangedPaths(state.latestBatchCompare);
         setBatchCompareDetailsVisible(Boolean(state.batchCompareDetailsOpen));
         renderFailedReplayQueue(state.failedReplayQueue);
         refreshWorkspaceHud();

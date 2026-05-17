@@ -10039,6 +10039,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("applyControlCenterAuditQuery(", html)
         self.assertIn("openAuditTaskSummary(", html)
         self.assertIn("activateAuditTask(", html)
+        self.assertIn("ensureAuditTaskActive(", html)
+        self.assertIn("activeAuditTaskId()", html)
         self.assertIn("openAuditDecisionSummary(", html)
         self.assertIn("openAuditArtifactLinks(", html)
         self.assertIn("copyAuditResultDirPath(", html)

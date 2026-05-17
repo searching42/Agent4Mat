@@ -2316,8 +2316,28 @@ HTML = """
         return {ok: true, task_id: tid, data: data};
       }
 
+      function activeAuditTaskId() {
+        return _normalizeAuditTaskId(taskId());
+      }
+
+      async function ensureAuditTaskActive(taskId, opts) {
+        const tid = _normalizeAuditTaskId(taskId);
+        if (!tid) {
+          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_action', task_id: String(taskId || '')});
+          return {ok: false, task_id: ''};
+        }
+        const current = activeAuditTaskId();
+        const force = Boolean(opts && opts.force);
+        if (!force && current === tid) {
+          return {ok: true, task_id: tid, switched: false};
+        }
+        const switched = await activateAuditTask(tid, {verbose: Boolean(opts && opts.verboseActivate)});
+        if (!switched.ok) return switched;
+        return {ok: true, task_id: tid, switched: true, data: switched.data};
+      }
+
       async function openAuditTaskSummary(taskId) {
-        const switched = await activateAuditTask(taskId, {verbose: false});
+        const switched = await ensureAuditTaskActive(taskId, {verboseActivate: false});
         if (!switched.ok) return;
         const tid = switched.task_id;
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/summary`);
@@ -2329,31 +2349,27 @@ HTML = """
       }
 
       async function openAuditDecisionSummary(taskId) {
-        const tid = _normalizeAuditTaskId(taskId);
-        if (!tid) {
-          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_decision', task_id: String(taskId || '')});
-          return;
-        }
+        const switched = await ensureAuditTaskActive(taskId, {verboseActivate: false});
+        if (!switched.ok) return;
+        const tid = switched.task_id;
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact/decision_summary?max_chars=30000`);
         renderJsonOut(r.data);
+        renderEvents([{stage: 'audit_open_decision', status: String((r.data && r.data.status) || 'unknown'), operation: tid, task_id: tid}], {project: state.project});
       }
 
       async function openAuditArtifactLinks(taskId) {
-        const tid = _normalizeAuditTaskId(taskId);
-        if (!tid) {
-          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_links', task_id: String(taskId || '')});
-          return;
-        }
+        const switched = await ensureAuditTaskActive(taskId, {verboseActivate: false});
+        if (!switched.ok) return;
+        const tid = switched.task_id;
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact-links`);
         renderJsonOut(r.data);
+        renderEvents([{stage: 'audit_open_paths', status: String((r.data && r.data.status) || 'unknown'), operation: tid, task_id: tid}], {project: state.project});
       }
 
       async function copyAuditResultDirPath(taskId) {
-        const tid = _normalizeAuditTaskId(taskId);
-        if (!tid) {
-          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_copy', task_id: String(taskId || '')});
-          return;
-        }
+        const switched = await ensureAuditTaskActive(taskId, {verboseActivate: false});
+        if (!switched.ok) return;
+        const tid = switched.task_id;
         const linksResp = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact-links`);
         const payload = linksResp.data && typeof linksResp.data === 'object' ? linksResp.data : {};
         const resultMeta = payload.result_dir && typeof payload.result_dir === 'object' ? payload.result_dir : {};
@@ -2366,11 +2382,13 @@ HTML = """
           if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
             await navigator.clipboard.writeText(pathText);
             renderJsonOut({status: 'pass', action: 'copy_audit_result_dir', task_id: tid, path: pathText});
+            renderEvents([{stage: 'audit_copy_result_dir', status: 'pass', operation: tid, task_id: tid}], {project: state.project});
             return;
           }
         } catch (e) {}
         triggerTextDownload(`result_dir_${tid}.txt`, `${pathText}\n`, 'text/plain;charset=utf-8');
         renderJsonOut({status: 'pass', action: 'copy_audit_result_dir_download_fallback', task_id: tid, path: pathText});
+        renderEvents([{stage: 'audit_copy_result_dir', status: 'pass', operation: tid, task_id: tid, reason: 'download_fallback'}], {project: state.project});
       }
 
       function _renderAuditRowLinks(row, container) {

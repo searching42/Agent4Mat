@@ -7178,6 +7178,20 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("release_evidence.json", content)
         self.assertIn("release_evidence.md", content)
 
+    def test_oled_agent_ci_has_manual_real_no_fallback_gate_job(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("run_real_no_fallback_gate:", content)
+        self.assertIn("real-no-fallback-gate:", content)
+        self.assertIn("acceptance real no-fallback (manual)", content)
+        self.assertIn("github.event.inputs.run_real_no_fallback_gate == 'true'", content)
+        self.assertIn("make real-no-fallback-gate WORKSPACE_ROOT=.", content)
+        self.assertIn("real-no-fallback-gate-artifact", content)
+        self.assertIn("runs/ci/real_no_fallback_gate.json", content)
+        self.assertIn("Publish real no-fallback gate summary", content)
+        self.assertIn("### Real No-Fallback Gate", content)
+
     def test_oled_agent_ci_has_manual_ui_freeze_acceptance_job(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)
@@ -7270,6 +7284,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("real-chain-baseline-archive-tgz:", content)
         self.assertIn("real-chain-release-bundle-check:", content)
         self.assertIn("real-chain-evidence:", content)
+        self.assertIn("real-no-fallback-gate:", content)
         self.assertIn("ui-freeze-acceptance:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("ui-stability-smoke:", content)
@@ -7303,11 +7318,11 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("experiment-trace-guard:", content)
         self.assertIn("resume-idempotence-guard:", content)
         self.assertIn("acceptance-local:", content)
-        self.assertIn("real-no-fallback-gate:", content)
         self.assertIn("scripts/check_experiment_trace.py", content)
         self.assertIn("scripts/check_resume_idempotence.py", content)
         self.assertIn("$(MAKE) resume-idempotence-guard TASK_ID=\"$(TASK_ID)\" WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("scripts/check_resume_idempotence.py --workspace-root \"$(WORKSPACE_ROOT)\" --result-json \"runs/agent/$(TASK_ID)/quickstart_result.json\" --task-id \"$(TASK_ID)\"", content)
+        self.assertIn("scripts/check_real_no_fallback.py --workspace-root \"$(WORKSPACE_ROOT)\" --out-json \"runs/ci/real_no_fallback_gate.json\"", content)
         self.assertIn("scripts/validate_run_artifacts.py --workspace-root \"$(WORKSPACE_ROOT)\" --result-json \"runs/agent/$(TASK_ID)/quickstart_result.json\"", content)
 
 

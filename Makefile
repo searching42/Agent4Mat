@@ -128,7 +128,8 @@ resume-idempotence-guard:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_resume_idempotence.py --workspace-root "$(WORKSPACE_ROOT)" --result-json "runs/agent/$(TASK_ID)/quickstart_result.json" --task-id "$(TASK_ID)" --planner-provider "rule_based_v1" --catalog "scripts/adapters/quickstart_catalog.json"
 
 real-no-fallback-gate:
-	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_real_no_fallback.py
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_real_no_fallback.py --workspace-root "$(WORKSPACE_ROOT)" --out-json "runs/ci/real_no_fallback_gate.json"
+	@echo "[PASS] real-no-fallback report: $(WORKSPACE_ROOT)/runs/ci/real_no_fallback_gate.json"
 
 ui-freeze-acceptance:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_freeze_acceptance.py --workspace-root "$(WORKSPACE_ROOT)" --out "runs/ci/ui_freeze_acceptance.json" --baseline "configs/acceptance/ui_freeze_acceptance_baseline.json"

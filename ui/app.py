@@ -455,6 +455,51 @@ HTML = """
         opacity: 0.54;
         cursor: not-allowed;
       }
+      .control-center-drawer {
+        border: 1px solid #d7e2f3;
+        border-radius: 10px;
+        background: #f8fbff;
+        margin: 0;
+      }
+      .control-center-drawer > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 8px 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .control-center-drawer > summary::-webkit-details-marker {
+        display: none;
+      }
+      .control-center-drawer[open] > summary {
+        border-bottom: 1px solid #d7e2f3;
+      }
+      .control-center-title {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #5d6b80;
+      }
+      .control-center-status {
+        font-size: 0.78rem;
+        color: #334155;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .control-center-body {
+        padding: 8px 10px 10px 10px;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .control-center-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
       .release-context-card {
         border: 1px solid #d7e2f3;
         border-radius: 10px;
@@ -605,6 +650,39 @@ HTML = """
       .conversation-summary-card button:disabled {
         opacity: 0.54;
         cursor: not-allowed;
+      }
+      .agent-recovery-card {
+        border: 1px solid #d7e2f3;
+        border-radius: 10px;
+        background: #ffffff;
+        padding: 8px 10px;
+      }
+      .agent-recovery-card .rc-head {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #5d6b80;
+        margin-bottom: 4px;
+      }
+      .agent-recovery-card .rc-text {
+        font-size: 0.78rem;
+        color: #334155;
+      }
+      .agent-recovery-card .rc-actions {
+        margin-top: 8px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .agent-recovery-card .rc-actions button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
+      @media (max-width: 980px) {
+        .control-center-grid {
+          grid-template-columns: 1fr;
+        }
       }
       .chat-log {
         border: 1px solid var(--line);
@@ -1367,51 +1445,69 @@ HTML = """
             <button id=\"chat_bundle_btn\" onclick=\"downloadTaskBundle()\">Bundle</button>
           </div>
         </div>
-        <div class=\"agent-guidance-card\" id=\"agent_guidance_card\">
-          <div class=\"ag-head\">Agent Guidance</div>
-          <div class=\"ag-text\" id=\"agent_guidance_text\">guidance: waiting for first task</div>
-          <div class=\"ag-detail\" id=\"agent_guidance_detail\">detail: -</div>
-          <div class=\"ag-actions\">
-            <button type=\"button\" id=\"agent_guidance_action_btn\" onclick=\"applyAgentGuidanceAction()\">Open Summary</button>
-            <button type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
-            <button type=\"button\" onclick=\"previewConversationSummary()\">Preview Memory</button>
+        <details class=\"control-center-drawer\" id=\"control_center_drawer\" open>
+          <summary>
+            <span class=\"control-center-title\">Control Center</span>
+            <span class=\"control-center-status\" id=\"control_center_status\">status: waiting for first task</span>
+          </summary>
+          <div class=\"control-center-body\">
+            <div class=\"agent-guidance-card\" id=\"agent_guidance_card\">
+              <div class=\"ag-head\">Agent Guidance</div>
+              <div class=\"ag-text\" id=\"agent_guidance_text\">guidance: waiting for first task</div>
+              <div class=\"ag-detail\" id=\"agent_guidance_detail\">detail: -</div>
+              <div class=\"ag-actions\">
+                <button type=\"button\" id=\"agent_guidance_action_btn\" onclick=\"applyAgentGuidanceAction()\">Open Summary</button>
+                <button type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
+                <button type=\"button\" onclick=\"previewConversationSummary()\">Preview Memory</button>
+              </div>
+            </div>
+            <div class=\"agent-recovery-card\" id=\"agent_recovery_card\">
+              <div class=\"rc-head\">Failure Recovery</div>
+              <div class=\"rc-text\" id=\"agent_recovery_text\">recovery: idle</div>
+              <div class=\"rc-actions\">
+                <button type=\"button\" id=\"agent_recovery_preview_btn\" onclick=\"runGuidedRecovery(true)\">Preview Retry Plan</button>
+                <button type=\"button\" id=\"agent_recovery_apply_btn\" onclick=\"runGuidedRecovery(false)\">Apply Recovery</button>
+              </div>
+            </div>
+            <div class=\"control-center-grid\">
+              <div class=\"release-context-card\" id=\"release_context_card\">
+                <div class=\"release-head\">Release Gate Context</div>
+                <div class=\"release-text\" id=\"release_context_text\">release: waiting for first task</div>
+                <div class=\"release-failures\" id=\"release_context_failures\"></div>
+              </div>
+              <div class=\"quality-guard-card\" id=\"quality_guard_card\">
+                <div class=\"qg-head\">Quality & Guardrails</div>
+                <div class=\"qg-text\" id=\"quality_guard_text\">quality: waiting for first task</div>
+                <div class=\"qg-issues\" id=\"quality_guard_issues\"></div>
+                <div class=\"qg-actions\">
+                  <button type=\"button\" id=\"quality_guard_suggest_btn\" onclick=\"applyQualitySuggestion()\">Apply Suggestion</button>
+                  <button type=\"button\" onclick=\"validateTask()\">Validate Task</button>
+                  <button type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
+                  <button type=\"button\" onclick=\"downloadTaskBundle()\">Download Bundle</button>
+                </div>
+              </div>
+              <div class=\"release-context-card\" id=\"ui_release_readiness_card\">
+                <div class=\"release-head\">UI Release Readiness</div>
+                <div class=\"release-text\" id=\"ui_release_readiness_text\">ui_release_ready: loading...</div>
+                <div class=\"release-failures\" id=\"ui_release_readiness_issues\"></div>
+                <div class=\"status-actions\" style=\"margin-top: 8px;\">
+                  <button type=\"button\" onclick=\"loadUiReleaseReadiness(true)\">Load Gate</button>
+                  <button type=\"button\" onclick=\"refreshUiReleaseReadiness(true)\">Run Gate</button>
+                </div>
+              </div>
+              <div class=\"conversation-summary-card\" id=\"conversation_summary_card\">
+                <div class=\"cs-head\">Conversation Summary</div>
+                <div class=\"cs-text\" id=\"conversation_summary_card_text\">summary: loading...</div>
+                <pre class=\"cs-preview\" id=\"conversation_summary_card_preview\">(empty)</pre>
+                <div class=\"cs-actions\">
+                  <button type=\"button\" id=\"summary_preview_btn\" onclick=\"previewConversationSummary()\">Preview Summary</button>
+                  <button type=\"button\" id=\"summary_rebuild_btn\" onclick=\"rebuildConversationSummary()\">Rebuild Summary</button>
+                  <button type=\"button\" id=\"summary_clear_btn\" onclick=\"clearConversationSummary()\">Clear Summary</button>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class=\"release-context-card\" id=\"release_context_card\">
-          <div class=\"release-head\">Release Gate Context</div>
-          <div class=\"release-text\" id=\"release_context_text\">release: waiting for first task</div>
-          <div class=\"release-failures\" id=\"release_context_failures\"></div>
-        </div>
-        <div class=\"release-context-card\" id=\"ui_release_readiness_card\">
-          <div class=\"release-head\">UI Release Readiness</div>
-          <div class=\"release-text\" id=\"ui_release_readiness_text\">ui_release_ready: loading...</div>
-          <div class=\"release-failures\" id=\"ui_release_readiness_issues\"></div>
-          <div class=\"status-actions\" style=\"margin-top: 8px;\">
-            <button type=\"button\" onclick=\"loadUiReleaseReadiness(true)\">Load Gate</button>
-            <button type=\"button\" onclick=\"refreshUiReleaseReadiness(true)\">Run Gate</button>
-          </div>
-        </div>
-        <div class=\"quality-guard-card\" id=\"quality_guard_card\">
-          <div class=\"qg-head\">Quality & Guardrails</div>
-          <div class=\"qg-text\" id=\"quality_guard_text\">quality: waiting for first task</div>
-          <div class=\"qg-issues\" id=\"quality_guard_issues\"></div>
-          <div class=\"qg-actions\">
-            <button type=\"button\" id=\"quality_guard_suggest_btn\" onclick=\"applyQualitySuggestion()\">Apply Suggestion</button>
-            <button type=\"button\" onclick=\"validateTask()\">Validate Task</button>
-            <button type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
-            <button type=\"button\" onclick=\"downloadTaskBundle()\">Download Bundle</button>
-          </div>
-        </div>
-        <div class=\"conversation-summary-card\" id=\"conversation_summary_card\">
-          <div class=\"cs-head\">Conversation Summary</div>
-          <div class=\"cs-text\" id=\"conversation_summary_card_text\">summary: loading...</div>
-          <pre class=\"cs-preview\" id=\"conversation_summary_card_preview\">(empty)</pre>
-          <div class=\"cs-actions\">
-            <button type=\"button\" id=\"summary_preview_btn\" onclick=\"previewConversationSummary()\">Preview Summary</button>
-            <button type=\"button\" id=\"summary_rebuild_btn\" onclick=\"rebuildConversationSummary()\">Rebuild Summary</button>
-            <button type=\"button\" id=\"summary_clear_btn\" onclick=\"clearConversationSummary()\">Clear Summary</button>
-          </div>
-        </div>
+        </details>
         <div class=\"chat-log\" id=\"chat_log\"></div>
         <div class=\"chat-input\">
           <label>Chat with agent</label>
@@ -2980,6 +3076,10 @@ HTML = """
           text += ` | ${resumeCompact}`;
         }
         textEle.textContent = text;
+        const ccStatus = document.getElementById('control_center_status');
+        if (ccStatus) {
+          ccStatus.textContent = text;
+        }
         setRuntimeElapsedHud(totalMs);
         syncChatRuntimeActions({
           hasTask: task && task !== '-',
@@ -3199,6 +3299,47 @@ HTML = """
           return;
         }
         await showCurrentTaskSummaryInline();
+      }
+
+      function renderAgentRecoveryCard(summaryPayload, timelinePayload) {
+        const textEle = document.getElementById('agent_recovery_text');
+        const previewBtn = document.getElementById('agent_recovery_preview_btn');
+        const applyBtn = document.getElementById('agent_recovery_apply_btn');
+        if (!textEle || !previewBtn || !applyBtn) return;
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const exec = (s.execution_summary && typeof s.execution_summary === 'object') ? s.execution_summary : {};
+        const fail = (s.failure_diagnostics && typeof s.failure_diagnostics === 'object') ? s.failure_diagnostics : {};
+        const runStatus = String(exec.status || s.status || '-').trim().toLowerCase();
+        const failedN = Number(exec.failed_count || 0);
+        const failureKind = String(fail.latest_failure_kind || '').trim();
+        const failedStep = String(fail.latest_failed_step || '').trim();
+        const canRecover = (failedN > 0) || runStatus === 'failed' || Boolean(failedStep);
+        if (canRecover) {
+          textEle.textContent = `recovery: failed_step=${failedStep || '-'} kind=${failureKind || '-'} status=${runStatus || '-'}`;
+        } else {
+          textEle.textContent = `recovery: no failed step (status=${runStatus || '-'})`;
+        }
+        previewBtn.disabled = !canRecover;
+        applyBtn.disabled = !canRecover;
+        previewBtn.title = canRecover ? '' : 'No failed step to recover';
+        applyBtn.title = canRecover ? '' : 'No failed step to recover';
+      }
+
+      async function runGuidedRecovery(previewOnly) {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const safe = String(previewOnly ? 'preview' : 'apply');
+        renderEvents([{stage: 'guided_recovery', status: 'running', operation: safe}]);
+        if (previewOnly) {
+          await previewRetryFailedStep();
+          return;
+        }
+        await previewRetryFailedStep();
+        await retryFailedStep();
       }
 
       async function applyQualitySuggestion() {
@@ -6941,6 +7082,7 @@ HTML = """
           renderQualityGuardCard({}, {});
           renderConversationSummaryCard(state.project || {});
           renderAgentGuidanceCard({}, {});
+          renderAgentRecoveryCard({}, {});
           return;
         }
         const [summaryResp, timelineResp] = await Promise.all([
@@ -6971,6 +7113,7 @@ HTML = """
         renderQualityGuardCard(s, tl);
         renderConversationSummaryCard(state.project || {});
         renderAgentGuidanceCard(s, tl);
+        renderAgentRecoveryCard(s, tl);
       }
 
       async function boot() {

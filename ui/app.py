@@ -495,6 +495,16 @@ HTML = """
         grid-template-columns: 1fr;
         gap: 8px;
       }
+      .control-center-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .control-center-actions button {
+        margin-top: 0;
+        padding: 5px 8px;
+        font-size: 0.72rem;
+      }
       .control-center-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -678,6 +688,24 @@ HTML = """
         margin-top: 0;
         padding: 5px 8px;
         font-size: 0.72rem;
+      }
+      .expert-only {
+        display: none !important;
+      }
+      body.control-center-expert .expert-only {
+        display: block !important;
+      }
+      body.control-center-expert .expert-inline {
+        display: inline-flex !important;
+      }
+      body.control-center-expert .expert-grid {
+        display: grid !important;
+      }
+      .novice-only {
+        display: block;
+      }
+      body.control-center-expert .novice-only {
+        display: none !important;
       }
       @media (max-width: 980px) {
         .control-center-grid {
@@ -1451,17 +1479,21 @@ HTML = """
             <span class=\"control-center-status\" id=\"control_center_status\">status: waiting for first task</span>
           </summary>
           <div class=\"control-center-body\">
+            <div class=\"control-center-actions\">
+              <button type=\"button\" id=\"control_center_mode_btn\" onclick=\"toggleControlCenterMode()\">Switch To Expert</button>
+              <div class=\"muted\">mode: <span id=\"control_center_mode_state\">novice</span></div>
+            </div>
             <div class=\"agent-guidance-card\" id=\"agent_guidance_card\">
               <div class=\"ag-head\">Agent Guidance</div>
               <div class=\"ag-text\" id=\"agent_guidance_text\">guidance: waiting for first task</div>
               <div class=\"ag-detail\" id=\"agent_guidance_detail\">detail: -</div>
               <div class=\"ag-actions\">
                 <button type=\"button\" id=\"agent_guidance_action_btn\" onclick=\"applyAgentGuidanceAction()\">Open Summary</button>
-                <button type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
-                <button type=\"button\" onclick=\"previewConversationSummary()\">Preview Memory</button>
+                <button class=\"expert-only expert-inline\" type=\"button\" onclick=\"showCurrentTaskSummaryInline()\">Open Summary</button>
+                <button class=\"expert-only expert-inline\" type=\"button\" onclick=\"previewConversationSummary()\">Preview Memory</button>
               </div>
             </div>
-            <div class=\"agent-recovery-card\" id=\"agent_recovery_card\">
+            <div class=\"agent-recovery-card novice-only\" id=\"agent_recovery_card\">
               <div class=\"rc-head\">Failure Recovery</div>
               <div class=\"rc-text\" id=\"agent_recovery_text\">recovery: idle</div>
               <div class=\"rc-actions\">
@@ -1469,7 +1501,7 @@ HTML = """
                 <button type=\"button\" id=\"agent_recovery_apply_btn\" onclick=\"runGuidedRecovery(false)\">Apply Recovery</button>
               </div>
             </div>
-            <div class=\"control-center-grid\">
+            <div class=\"control-center-grid expert-only expert-grid\">
               <div class=\"release-context-card\" id=\"release_context_card\">
                 <div class=\"release-head\">Release Gate Context</div>
                 <div class=\"release-text\" id=\"release_context_text\">release: waiting for first task</div>
@@ -1759,7 +1791,7 @@ HTML = """
         promptHistory: [],
         projects: [],
         memoryExplorer: null,
-        ui: {focusMode: false, outputViewMode: 'simple'},
+        ui: {focusMode: false, outputViewMode: 'simple', controlCenterMode: 'novice'},
         batchHistory: [],
         batchHistoryMeta: {offset: 0, limit: 20, total: 0, has_more: false, action: '', status: ''},
         latestBatchCompare: null,
@@ -2051,7 +2083,7 @@ HTML = """
       }
 
       function loadUiPrefs() {
-        const fallback = {focusMode: false, outputViewMode: 'simple'};
+        const fallback = {focusMode: false, outputViewMode: 'simple', controlCenterMode: 'novice'};
         try {
           const raw = localStorage.getItem(UI_PREFS_KEY);
           if (!raw) return fallback;
@@ -2059,9 +2091,12 @@ HTML = """
           if (!parsed || typeof parsed !== 'object') return fallback;
           const outputViewModeRaw = String(parsed.outputViewMode || 'simple').trim().toLowerCase();
           const outputViewMode = outputViewModeRaw === 'advanced' ? 'advanced' : 'simple';
+          const ccModeRaw = String(parsed.controlCenterMode || 'novice').trim().toLowerCase();
+          const controlCenterMode = ccModeRaw === 'expert' ? 'expert' : 'novice';
           return {
             focusMode: Boolean(parsed.focusMode),
             outputViewMode: outputViewMode,
+            controlCenterMode: controlCenterMode,
           };
         } catch (e) {
           return fallback;
@@ -2072,6 +2107,7 @@ HTML = """
         const payload = {
           focusMode: Boolean(v && v.focusMode),
           outputViewMode: String(v && v.outputViewMode).trim().toLowerCase() === 'advanced' ? 'advanced' : 'simple',
+          controlCenterMode: String(v && v.controlCenterMode).trim().toLowerCase() === 'expert' ? 'expert' : 'novice',
         };
         try {
           localStorage.setItem(UI_PREFS_KEY, JSON.stringify(payload));
@@ -2104,6 +2140,33 @@ HTML = """
 
       function normalizeOutputViewMode(raw) {
         return String(raw || '').trim().toLowerCase() === 'advanced' ? 'advanced' : 'simple';
+      }
+
+      function normalizeControlCenterMode(raw) {
+        return String(raw || '').trim().toLowerCase() === 'expert' ? 'expert' : 'novice';
+      }
+
+      function applyControlCenterMode(mode) {
+        const next = normalizeControlCenterMode(mode);
+        state.ui = state.ui && typeof state.ui === 'object' ? state.ui : {};
+        state.ui.controlCenterMode = next;
+        document.body.classList.toggle('control-center-expert', next === 'expert');
+        const stateEle = document.getElementById('control_center_mode_state');
+        if (stateEle) {
+          stateEle.textContent = next;
+        }
+        const btn = document.getElementById('control_center_mode_btn');
+        if (btn) {
+          btn.textContent = next === 'expert' ? 'Switch To Novice' : 'Switch To Expert';
+        }
+        saveUiPrefs(state.ui);
+      }
+
+      function toggleControlCenterMode() {
+        const current = normalizeControlCenterMode(state.ui && state.ui.controlCenterMode);
+        const next = current === 'expert' ? 'novice' : 'expert';
+        applyControlCenterMode(next);
+        renderEvents([{stage: 'control_center_mode', status: 'pass', operation: next}]);
       }
 
       function applyOutputViewMode(mode) {
@@ -3282,6 +3345,10 @@ HTML = """
       async function applyAgentGuidanceAction() {
         const btn = document.getElementById('agent_guidance_action_btn');
         const action = String((btn && btn.dataset && btn.dataset.action) || '').trim() || 'open_summary';
+        if (action === 'guided_recovery') {
+          await runGuidedRecovery(false);
+          return;
+        }
         if (action === 'retry_failed_step') {
           await retryFailedStep();
           return;
@@ -3299,6 +3366,25 @@ HTML = """
           return;
         }
         await showCurrentTaskSummaryInline();
+      }
+
+      function prefersGuidedRecovery(summaryPayload, timelinePayload) {
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const suggestion = computeQualitySuggestion(s, t);
+        const code = String(suggestion.code || '').trim();
+        return code === 'retry_failed_step' || code === 'resume_task';
+      }
+
+      function syncNoviceGuidanceAction(summaryPayload, timelinePayload) {
+        const s = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+        const t = timelinePayload && typeof timelinePayload === 'object' ? timelinePayload : {};
+        const guidanceBtn = document.getElementById('agent_guidance_action_btn');
+        if (!guidanceBtn) return;
+        if (prefersGuidedRecovery(s, t)) {
+          guidanceBtn.dataset.action = 'guided_recovery';
+          guidanceBtn.textContent = 'Preview + Apply Recovery';
+        }
       }
 
       function renderAgentRecoveryCard(summaryPayload, timelinePayload) {
@@ -7082,6 +7168,7 @@ HTML = """
           renderQualityGuardCard({}, {});
           renderConversationSummaryCard(state.project || {});
           renderAgentGuidanceCard({}, {});
+          syncNoviceGuidanceAction({}, {});
           renderAgentRecoveryCard({}, {});
           return;
         }
@@ -7113,6 +7200,7 @@ HTML = """
         renderQualityGuardCard(s, tl);
         renderConversationSummaryCard(state.project || {});
         renderAgentGuidanceCard(s, tl);
+        syncNoviceGuidanceAction(s, tl);
         renderAgentRecoveryCard(s, tl);
       }
 
@@ -7125,6 +7213,7 @@ HTML = """
         state.ui = uiPrefs;
         applyFocusMode(Boolean(uiPrefs.focusMode));
         applyOutputViewMode(String(uiPrefs.outputViewMode || 'simple'));
+        applyControlCenterMode(String(uiPrefs.controlCenterMode || 'novice'));
         setQuickCandidateStatus('quick path: idle');
         refreshCloneTargetSuggestion();
         bindComposerShortcuts();

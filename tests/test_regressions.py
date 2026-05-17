@@ -9627,6 +9627,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("quickSortPriority()", html)
         self.assertIn("openTopPrioritySession()", html)
         self.assertIn("openNextFailedSession()", html)
+        self.assertIn("filteredSessionRowsForQuickOpen()", html)
+        self.assertIn("no project available in current filters", html)
         self.assertIn("togglePinnedOnly()", html)
         self.assertIn("toggleSessionBoardGroupedView()", html)
         self.assertIn("batchShowProjectSummary()", html)

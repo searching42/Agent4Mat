@@ -4563,11 +4563,16 @@ HTML = """
         }
       }
 
+      function filteredSessionRowsForQuickOpen() {
+        const payload = computeSessionBoardRows(state.projects || []);
+        const rows = Array.isArray(payload && payload.rows) ? payload.rows : [];
+        return rows;
+      }
 
       async function openTopPrioritySession() {
-        const rows = Array.isArray(state.projects) ? state.projects.slice() : [];
+        const rows = filteredSessionRowsForQuickOpen();
         if (rows.length < 1) {
-          renderJsonOut({status: 'fail', error: 'no projects available'});
+          renderJsonOut({status: 'fail', error: 'no project available in current filters'});
           return;
         }
         const scoreRow = (row) => {
@@ -4588,9 +4593,9 @@ HTML = """
       }
 
       async function openNextFailedSession() {
-        const rows = Array.isArray(state.projects) ? state.projects.slice() : [];
+        const rows = filteredSessionRowsForQuickOpen();
         if (rows.length < 1) {
-          renderJsonOut({status: 'fail', error: 'no projects available'});
+          renderJsonOut({status: 'fail', error: 'no project available in current filters'});
           return;
         }
         const failedRows = rows.filter((row) => {

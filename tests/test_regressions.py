@@ -10240,6 +10240,13 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(compare_payload.get("primary_export_id"), export_id)
                 self.assertEqual(compare_payload.get("other_export_id"), other_export_id)
                 self.assertIn("diff", compare_payload)
+                gate_diff = compare_payload.get("release_gate_diff") if isinstance(compare_payload.get("release_gate_diff"), dict) else {}
+                self.assertEqual(str(gate_diff.get("primary_status") or ""), "other")
+                self.assertEqual(str(gate_diff.get("other_status") or ""), "missing")
+                gate_delta = gate_diff.get("delta") if isinstance(gate_diff.get("delta"), dict) else {}
+                self.assertEqual(int(gate_delta.get("pass") or 0), 1)
+                self.assertEqual(int(gate_delta.get("fail") or 0), 1)
+                self.assertEqual(int(gate_delta.get("missing") or 0), -1)
                 compare_lines = compare_payload.get("compare_lines") if isinstance(compare_payload.get("compare_lines"), list) else []
                 self.assertGreaterEqual(len(compare_lines), 1)
                 self.assertTrue(any("release_gate(pass/fail/missing/other)" in str(line) for line in compare_lines))

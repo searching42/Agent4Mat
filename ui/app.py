@@ -7582,6 +7582,24 @@ def _batch_export_compare_lines(primary: Dict[str, Any], other: Dict[str, Any], 
     return out
 
 
+def _batch_export_release_gate_diff(primary: Dict[str, Any], other: Dict[str, Any]) -> Dict[str, Any]:
+    p_stats = _normalize_release_gate_stats(primary.get("release_gate_stats"), fallback_rows=[])
+    o_stats = _normalize_release_gate_stats(other.get("release_gate_stats"), fallback_rows=[])
+    delta = {
+        "pass": int(p_stats.get("pass") or 0) - int(o_stats.get("pass") or 0),
+        "fail": int(p_stats.get("fail") or 0) - int(o_stats.get("fail") or 0),
+        "missing": int(p_stats.get("missing") or 0) - int(o_stats.get("missing") or 0),
+        "other": int(p_stats.get("other") or 0) - int(o_stats.get("other") or 0),
+    }
+    return {
+        "primary_status": _release_gate_status_from_stats(p_stats),
+        "other_status": _release_gate_status_from_stats(o_stats),
+        "primary": p_stats,
+        "other": o_stats,
+        "delta": delta,
+    }
+
+
 def _batch_export_download_filename(*, project_id: str, export_id: str, action: str, fmt: str) -> str:
     safe_project = re.sub(r"[^A-Za-z0-9._-]+", "_", str(project_id or "")).strip("._") or "project"
     safe_export = re.sub(r"[^A-Za-z0-9._-]+", "_", str(export_id or "")).strip("._") or "batch"
@@ -9846,6 +9864,7 @@ def api_project_batch_exports_compare(project_id: str):
             "primary": primary_summary,
             "other": other_summary,
             "diff": diff,
+            "release_gate_diff": _batch_export_release_gate_diff(primary_summary, other_summary),
             "compare_lines": _batch_export_compare_lines(primary_summary, other_summary, diff),
         }
     )

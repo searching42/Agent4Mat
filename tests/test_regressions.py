@@ -9407,6 +9407,45 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(payload.get("status"), "fail")
                 self.assertEqual(payload.get("error"), "invalid task_id")
 
+    def test_ui_project_select_task_missing_run_dir_has_suggestions(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_proj_switch_missing", "title": "switch"})
+                recent_tid = "ui_existing_task_20260517"
+                (root / "runs" / "agent" / recent_tid).mkdir(parents=True, exist_ok=True)
+                resp = client.post("/api/projects/ui_proj_switch_missing/select-task", json={"task_id": "ui_missing_task_20260517"})
+                self.assertEqual(resp.status_code, 404)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "fail")
+                self.assertEqual(payload.get("error"), "task_run_dir_not_found")
+                suggestions = payload.get("suggestions") if isinstance(payload.get("suggestions"), list) else []
+                self.assertGreaterEqual(len(suggestions), 1)
+                recents = payload.get("recent_task_ids") if isinstance(payload.get("recent_task_ids"), list) else []
+                self.assertIn(recent_tid, recents)
+
+    def test_ui_project_select_task_read_only_rejected(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={"project_id": "ui_proj_switch_ro", "title": "switch", "options": {"project_read_only": True}},
+                )
+                task_id = "ui_switch_ro_task_20260517"
+                (root / "runs" / "agent" / task_id).mkdir(parents=True, exist_ok=True)
+                resp = client.post("/api/projects/ui_proj_switch_ro/select-task", json={"task_id": task_id})
+                self.assertEqual(resp.status_code, 409)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "fail")
+                self.assertEqual(payload.get("error"), "project_read_only")
+                suggestions = payload.get("suggestions") if isinstance(payload.get("suggestions"), list) else []
+                self.assertGreaterEqual(len(suggestions), 1)
+
     def test_ui_project_memory_roundtrip_persists(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -10041,6 +10080,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("activateAuditTask(", html)
         self.assertIn("ensureAuditTaskActive(", html)
         self.assertIn("activeAuditTaskId()", html)
+        self.assertIn("_handleAuditActionFailure(", html)
+        self.assertIn("_auditFailureSuggestionLines(", html)
         self.assertIn("openAuditDecisionSummary(", html)
         self.assertIn("openAuditArtifactLinks(", html)
         self.assertIn("copyAuditResultDirPath(", html)

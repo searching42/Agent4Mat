@@ -2294,7 +2294,7 @@ HTML = """
       async function activateAuditTask(taskId, opts) {
         const tid = _normalizeAuditTaskId(taskId);
         if (!tid) {
-          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_activate', task_id: String(taskId || '')});
+          _handleAuditActionFailure('activate', String(taskId || ''), {error: 'invalid_task_id_for_audit_activate'});
           return {ok: false, task_id: ''};
         }
         const pid = selectedProjectId();
@@ -2302,7 +2302,7 @@ HTML = """
         const data = r.data && typeof r.data === 'object' ? r.data : {};
         const ok = r.status === 200 && String(data.status || '') === 'pass' && data.project && typeof data.project === 'object';
         if (!ok) {
-          renderJsonOut(data);
+          _handleAuditActionFailure('activate', tid, data);
           return {ok: false, task_id: tid, data: data};
         }
         state.project = data.project;
@@ -2320,10 +2320,65 @@ HTML = """
         return _normalizeAuditTaskId(taskId());
       }
 
+      function _auditFailureSuggestionLines(payload) {
+        const data = payload && typeof payload === 'object' ? payload : {};
+        const out = [];
+        const hints = Array.isArray(data.suggestions) ? data.suggestions : [];
+        for (const row of hints) {
+          if (typeof row === 'string') {
+            const txt = row.trim();
+            if (txt) out.push(txt);
+            continue;
+          }
+          if (!row || typeof row !== 'object') continue;
+          const label = String(row.label || row.name || row.code || '').trim();
+          const detail = String(row.detail || row.message || row.reason || '').trim();
+          if (label && detail) out.push(`${label}: ${detail}`);
+          else if (label) out.push(label);
+          else if (detail) out.push(detail);
+        }
+        const recents = Array.isArray(data.recent_task_ids) ? data.recent_task_ids : [];
+        if (recents.length > 0) {
+          out.push(`recent_task_ids: ${recents.slice(0, 6).join(', ')}`);
+        }
+        return out.slice(0, 6);
+      }
+
+      function _handleAuditActionFailure(action, taskId, payload) {
+        const actionName = String(action || 'action').trim() || 'action';
+        const tidRaw = String(taskId || '').trim();
+        const data = payload && typeof payload === 'object' ? payload : {};
+        const error = String(data.error || data.reason || data.message || 'unknown_error').trim();
+        const reason = String(data.reason || '').trim();
+        const suggestions = _auditFailureSuggestionLines(data);
+        const detailParts = [];
+        if (error) detailParts.push(error);
+        if (reason && reason !== error) detailParts.push(reason);
+        if (suggestions.length > 0) detailParts.push(`suggest=${suggestions[0]}`);
+        const detail = detailParts.join(' | ').slice(0, 240);
+        const out = {
+          ...(data && typeof data === 'object' ? data : {}),
+          status: String(data.status || 'fail') || 'fail',
+          action: `audit_${actionName}`,
+          task_id: tidRaw || String(data.task_id || ''),
+          failure_summary: detail || 'audit action failed',
+          suggestions: suggestions,
+        };
+        renderJsonOut(out);
+        setQuickCandidateStatus(`audit ${actionName} failed: ${detail || error || 'unknown'}`, 'fail');
+        appendControlCenterAudit({
+          stage: `audit_${actionName}`,
+          status: 'fail',
+          operation: tidRaw,
+          detail: detail || error || 'unknown',
+          artifact_context: {task_id: tidRaw || String(data.task_id || '')},
+        });
+      }
+
       async function ensureAuditTaskActive(taskId, opts) {
         const tid = _normalizeAuditTaskId(taskId);
         if (!tid) {
-          renderJsonOut({status: 'fail', error: 'invalid_task_id_for_audit_action', task_id: String(taskId || '')});
+          _handleAuditActionFailure('activate', String(taskId || ''), {error: 'invalid_task_id_for_audit_action'});
           return {ok: false, task_id: ''};
         }
         const current = activeAuditTaskId();
@@ -2353,6 +2408,11 @@ HTML = """
         if (!switched.ok) return;
         const tid = switched.task_id;
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact/decision_summary?max_chars=30000`);
+        const st = String((r.data && r.data.status) || '').trim().toLowerCase();
+        if (st && st !== 'pass') {
+          _handleAuditActionFailure('open_decision', tid, r.data);
+          return;
+        }
         renderJsonOut(r.data);
         renderEvents([{stage: 'audit_open_decision', status: String((r.data && r.data.status) || 'unknown'), operation: tid, task_id: tid}], {project: state.project});
       }
@@ -2362,6 +2422,11 @@ HTML = """
         if (!switched.ok) return;
         const tid = switched.task_id;
         const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact-links`);
+        const st = String((r.data && r.data.status) || '').trim().toLowerCase();
+        if (st && st !== 'pass') {
+          _handleAuditActionFailure('open_paths', tid, r.data);
+          return;
+        }
         renderJsonOut(r.data);
         renderEvents([{stage: 'audit_open_paths', status: String((r.data && r.data.status) || 'unknown'), operation: tid, task_id: tid}], {project: state.project});
       }
@@ -2372,10 +2437,15 @@ HTML = """
         const tid = switched.task_id;
         const linksResp = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact-links`);
         const payload = linksResp.data && typeof linksResp.data === 'object' ? linksResp.data : {};
+        const linksStatus = String(payload.status || '').trim().toLowerCase();
+        if (linksStatus && linksStatus !== 'pass') {
+          _handleAuditActionFailure('copy_result_dir', tid, payload);
+          return;
+        }
         const resultMeta = payload.result_dir && typeof payload.result_dir === 'object' ? payload.result_dir : {};
         const pathText = String(resultMeta.path || '').trim();
         if (!pathText) {
-          renderJsonOut({status: 'fail', error: 'result_dir_missing', task_id: tid, links: payload});
+          _handleAuditActionFailure('copy_result_dir', tid, {status: 'fail', error: 'result_dir_missing', task_id: tid, links: payload});
           return;
         }
         try {
@@ -8816,6 +8886,48 @@ def _task_list_item(task_id: str, run_dir: Path) -> Dict[str, Any]:
     }
 
 
+def _recent_task_ids(*, limit: int = 8, prefix: str = "") -> List[str]:
+    root = (REPO_ROOT / "runs" / "agent").resolve()
+    if not root.exists() or not root.is_dir():
+        return []
+    rows: List[Tuple[float, str]] = []
+    pref = str(prefix or "").strip().lower()
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        tid = str(child.name or "").strip()
+        if not _is_safe_task_id(tid):
+            continue
+        if pref and pref not in tid.lower():
+            continue
+        try:
+            mt = float(child.stat().st_mtime)
+        except Exception:
+            mt = 0.0
+        rows.append((mt, tid))
+    rows.sort(key=lambda item: item[0], reverse=True)
+    out: List[str] = []
+    for _, tid in rows:
+        if tid in out:
+            continue
+        out.append(tid)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def _select_task_failure_payload(*, project_id: str, task_id: str, error: str, reason: str = "", suggestions: Optional[List[str]] = None) -> Dict[str, Any]:
+    sug = [str(x).strip() for x in (suggestions or []) if str(x).strip()]
+    return {
+        "status": "fail",
+        "project_id": str(project_id or ""),
+        "task_id": str(task_id or ""),
+        "error": str(error or "select_task_failed"),
+        "reason": str(reason or ""),
+        "suggestions": sug,
+    }
+
+
 def _experiment_row_from_trace(trace: Dict[str, Any], trace_path: Path) -> Dict[str, Any]:
     model_choice = trace.get("model_choice") if isinstance(trace.get("model_choice"), dict) else {}
     execution_summary = trace.get("execution_summary") if isinstance(trace.get("execution_summary"), dict) else {}
@@ -12421,9 +12533,46 @@ def api_project_select_task(project_id: str):
     project = _load_project_state(pid)
     if not isinstance(project, dict):
         return jsonify({"status": "missing", "error": "project_not_found", "project_id": pid}), 404
+    if _project_is_read_only(project):
+        return (
+            jsonify(
+                _select_task_failure_payload(
+                    project_id=pid,
+                    task_id=task_id,
+                    error="project_read_only",
+                    reason="project is read-only; unlock project before switching task",
+                    suggestions=[
+                        "disable `project_read_only` in project options",
+                        "save project after unlocking, then retry audit action",
+                    ],
+                )
+            ),
+            409,
+        )
 
     selected_task = _task_artifact_links_payload(task_id)
     run_dir = (REPO_ROOT / "runs" / "agent" / task_id).resolve()
+    if not run_dir.exists() or not run_dir.is_dir():
+        prefix = _infer_base_task_id(task_id)
+        recent_ids = _recent_task_ids(limit=8, prefix=prefix)
+        if not recent_ids:
+            recent_ids = _recent_task_ids(limit=8)
+        suggestions = [
+            "verify task_id spelling",
+            "run the task first so runs/agent/<task_id> is created",
+        ]
+        if recent_ids:
+            suggestions.append(f"try one of recent task_ids: {', '.join(recent_ids[:6])}")
+        out = _select_task_failure_payload(
+            project_id=pid,
+            task_id=task_id,
+            error="task_run_dir_not_found",
+            reason="task run directory is missing under runs/agent",
+            suggestions=suggestions,
+        )
+        out["recent_task_ids"] = recent_ids
+        return jsonify(out), 404
+
     task_draft_path = run_dir / "task.draft.json"
     task_json_path = run_dir / "task.json"
     request_path = run_dir / "request_from_task.json"

@@ -962,6 +962,13 @@ HTML = """
               <option value=\"warn\">readiness: warn</option>
               <option value=\"pass\">readiness: pass</option>
             </select>
+            <select id=\"session_filter_resume_mode\">
+              <option value=\"all\">resume: all</option>
+              <option value=\"full_skip\">resume: full_skip</option>
+              <option value=\"partial_rerun\">resume: partial_rerun</option>
+              <option value=\"full_rerun\">resume: full_rerun</option>
+              <option value=\"no_resume\">resume: no_resume</option>
+            </select>
             <select id=\"session_sort_mode\">
               <option value=\"updated_desc\">sort: updated desc</option>
               <option value=\"failed_desc\">sort: failed desc</option>
@@ -982,6 +989,9 @@ HTML = """
             <button type=\"button\" onclick=\"quickFilterByReadiness('fail')\">Readiness Fail</button>
             <button type=\"button\" onclick=\"quickFilterByReadiness('warn')\">Readiness Warn</button>
             <button type=\"button\" onclick=\"quickFilterByReadiness('pass')\">Readiness Pass</button>
+            <button type=\"button\" onclick=\"quickFilterByResume('full_skip')\">Resume Full Skip</button>
+            <button type=\"button\" onclick=\"quickFilterByResume('partial_rerun')\">Resume Partial</button>
+            <button type=\"button\" onclick=\"quickFilterByResume('no_resume')\">Resume None</button>
             <button type=\"button\" onclick=\"quickSortPriority()\">Priority First</button>
             <button type=\"button\" onclick=\"openTopPrioritySession()\">Open Top Priority</button>
             <button type=\"button\" onclick=\"openNextFailedSession()\">Open Next Failed</button>
@@ -1373,6 +1383,8 @@ HTML = """
         <div class=\"muted\" id=\"runtime_stage_text\">stage: -</div>
         <div class=\"progress-wrap\"><div class=\"progress-bar\" id=\"runtime_progress_bar\"></div></div>
         <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
+        <div class=\"runtime\" id=\"resume_diag_box\">resume_diagnostics: -</div>
+        <div class=\"muted\" id=\"resume_diag_steps\">steps: -</div>
         <div class=\"right-simple-actions simple-only\" id=\"right_simple_actions\">
           <button onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
           <button onclick=\"showTimeline()\">Timeline</button>
@@ -1503,6 +1515,7 @@ HTML = """
           health: 'all',
           releaseGate: 'all',
           readiness: 'all',
+          resumeMode: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -1709,6 +1722,7 @@ HTML = """
           health: 'all',
           releaseGate: 'all',
           readiness: 'all',
+          resumeMode: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -1730,6 +1744,9 @@ HTML = """
           const readinessRaw = String(parsed.readiness || 'all').trim().toLowerCase();
           const readinessAllow = new Set(['all', 'pass', 'warn', 'fail']);
           const readiness = readinessAllow.has(readinessRaw) ? readinessRaw : 'all';
+          const resumeModeRaw = String(parsed.resumeMode || 'all').trim().toLowerCase();
+          const resumeModeAllow = new Set(['all', 'full_skip', 'partial_rerun', 'full_rerun', 'no_resume']);
+          const resumeMode = resumeModeAllow.has(resumeModeRaw) ? resumeModeRaw : 'all';
           const sort = String(parsed.sort || 'updated_desc').trim().toLowerCase();
           const autoRefreshEnabled = Boolean(parsed.autoRefreshEnabled);
           const refreshSecondsRaw = Number(parsed.refreshSeconds || 30);
@@ -1743,7 +1760,7 @@ HTML = """
             .map((x) => String(x || '').trim())
             .filter((x) => Boolean(x))
             .slice(0, 200);
-          return {filterText, health, releaseGate, readiness, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, groupedView, batchLimit, pinnedProjectIds};
+          return {filterText, health, releaseGate, readiness, resumeMode, sort, autoRefreshEnabled, refreshSeconds, pinnedOnly, groupedView, batchLimit, pinnedProjectIds};
         } catch (e) {
           return fallback;
         }
@@ -1755,6 +1772,7 @@ HTML = """
           health: String((v && v.health) || 'all').trim().toLowerCase(),
           releaseGate: String((v && v.releaseGate) || 'all').trim().toLowerCase(),
           readiness: String((v && v.readiness) || 'all').trim().toLowerCase(),
+          resumeMode: String((v && v.resumeMode) || 'all').trim().toLowerCase(),
           sort: String((v && v.sort) || 'updated_desc').trim().toLowerCase(),
           autoRefreshEnabled: Boolean(v && v.autoRefreshEnabled),
           refreshSeconds: Number.isFinite(Number(v && v.refreshSeconds)) ? Math.max(10, Math.min(120, Math.floor(Number(v.refreshSeconds)))) : 30,
@@ -1865,6 +1883,7 @@ HTML = """
         const healthEle = document.getElementById('session_filter_health');
         const gateEle = document.getElementById('session_filter_release_gate');
         const readinessEle = document.getElementById('session_filter_readiness');
+        const resumeEle = document.getElementById('session_filter_resume_mode');
         const sortEle = document.getElementById('session_sort_mode');
         const autoEle = document.getElementById('session_auto_refresh');
         const secEle = document.getElementById('session_refresh_seconds');
@@ -1873,6 +1892,7 @@ HTML = """
         if (healthEle) healthEle.value = String(payload.health || 'all');
         if (gateEle) gateEle.value = String(payload.releaseGate || 'all');
         if (readinessEle) readinessEle.value = String(payload.readiness || 'all');
+        if (resumeEle) resumeEle.value = String(payload.resumeMode || 'all');
         if (sortEle) sortEle.value = String(payload.sort || 'updated_desc');
         if (autoEle) autoEle.checked = Boolean(payload.autoRefreshEnabled);
         if (secEle) secEle.value = String(payload.refreshSeconds || 30);
@@ -2628,6 +2648,28 @@ HTML = """
         return line;
       }
 
+      function renderResumeDiagnostics(projectPayload) {
+        const box = document.getElementById('resume_diag_box');
+        const steps = document.getElementById('resume_diag_steps');
+        if (!box || !steps) return;
+        const p = projectPayload && typeof projectPayload === 'object'
+          ? projectPayload
+          : (state.project && typeof state.project === 'object' ? state.project : {});
+        const lastRuntime = (p.last_runtime && typeof p.last_runtime === 'object') ? p.last_runtime : {};
+        const rv = normalizeResumeVisibility(lastRuntime.resume_visibility);
+        if (!rv.mode && rv.reused < 1 && rv.rerun < 1 && rv.total < 1) {
+          box.textContent = 'resume_diagnostics: -';
+          steps.textContent = 'steps: -';
+          return;
+        }
+        let text = `resume_diagnostics: mode=${rv.mode || 'unknown'} reused=${rv.reused} rerun=${rv.rerun}`;
+        if (rv.total > 0) text += ` total=${rv.total}`;
+        box.textContent = text;
+        const reusedText = rv.reusedSteps.length > 0 ? rv.reusedSteps.join(',') : '-';
+        const rerunText = rv.rerunSteps.length > 0 ? rv.rerunSteps.join(',') : '-';
+        steps.textContent = `steps: reused=[${reusedText}] rerun=[${rerunText}]`;
+      }
+
       function renderEvents(events) {
         const arr = Array.isArray(events) ? events : [];
         if (arr.length < 1) {
@@ -3376,6 +3418,7 @@ HTML = """
         renderProjectOptions(project);
         renderProjectMeta(project);
         renderPendingInput(project.pending_input || null);
+        renderResumeDiagnostics(project);
         restoreMessageDraft(pid);
         renderPromptHistory(pid);
         document.getElementById('clone_project_id').value = '';
@@ -3805,6 +3848,10 @@ HTML = """
         const releaseGate = (new Set(['all', 'pass', 'fail', 'missing', 'other'])).has(releaseGateRaw) ? releaseGateRaw : 'all';
         const readinessRaw = String(document.getElementById('session_filter_readiness').value || 'all').trim().toLowerCase();
         const readiness = (new Set(['all', 'pass', 'warn', 'fail'])).has(readinessRaw) ? readinessRaw : 'all';
+        const resumeModeRaw = String(document.getElementById('session_filter_resume_mode').value || 'all').trim().toLowerCase();
+        const resumeMode = (new Set(['all', 'full_skip', 'partial_rerun', 'full_rerun', 'no_resume'])).has(resumeModeRaw)
+          ? resumeModeRaw
+          : 'all';
         const sort = String(document.getElementById('session_sort_mode').value || 'updated_desc').trim().toLowerCase();
         const autoRefreshEnabled = Boolean(document.getElementById('session_auto_refresh').checked);
         const refreshSecondsRaw = Number(document.getElementById('session_refresh_seconds').value || 30);
@@ -3816,7 +3863,7 @@ HTML = """
         const pinnedProjectIds = Array.isArray(state.sessionBoard && state.sessionBoard.pinnedProjectIds)
           ? state.sessionBoard.pinnedProjectIds.slice()
           : [];
-        return {filterText, health, releaseGate, readiness, sort, autoRefreshEnabled, refreshSeconds, batchLimit, pinnedOnly, groupedView, pinnedProjectIds};
+        return {filterText, health, releaseGate, readiness, resumeMode, sort, autoRefreshEnabled, refreshSeconds, batchLimit, pinnedOnly, groupedView, pinnedProjectIds};
       }
 
       function applySessionBoardControls() {
@@ -3867,6 +3914,17 @@ HTML = """
         applySessionBoardControls();
       }
 
+      function quickFilterByResume(resumeMode) {
+        const value = String(resumeMode || 'all').trim().toLowerCase();
+        const allow = new Set(['all', 'full_skip', 'partial_rerun', 'full_rerun', 'no_resume']);
+        const next = allow.has(value) ? value : 'all';
+        const ele = document.getElementById('session_filter_resume_mode');
+        if (ele) {
+          ele.value = next;
+        }
+        applySessionBoardControls();
+      }
+
       function quickSortPriority() {
         const sortEle = document.getElementById('session_sort_mode');
         if (sortEle) {
@@ -3881,6 +3939,7 @@ HTML = """
           health: 'all',
           releaseGate: 'all',
           readiness: 'all',
+          resumeMode: 'all',
           sort: 'updated_desc',
           autoRefreshEnabled: false,
           refreshSeconds: 30,
@@ -4025,6 +4084,14 @@ HTML = """
         }
         if (controls.readiness && controls.readiness !== 'all') {
           rows = rows.filter((row) => projectReadinessStatus(row) === controls.readiness);
+        }
+        if (controls.resumeMode && controls.resumeMode !== 'all') {
+          rows = rows.filter((row) => {
+            const lastRuntime = (row && row.last_runtime && typeof row.last_runtime === 'object') ? row.last_runtime : {};
+            const rv = normalizeResumeVisibility(lastRuntime.resume_visibility);
+            const mode = String(rv.mode || '').trim();
+            return mode === controls.resumeMode;
+          });
         }
         if (controls.sort === 'failed_desc') {
           rows.sort((a, b) => Number((b && b.runtime_health && b.runtime_health.failed_steps) || 0) - Number((a && a.runtime_health && a.runtime_health.failed_steps) || 0));
@@ -6415,6 +6482,7 @@ HTML = """
           renderTimelineGroups(null);
           renderMemoryExplorerFromPreview(null, 'runtime');
           renderChatStatusRibbon({}, {}, state.project || {});
+          renderResumeDiagnostics(state.project || {});
           renderReleaseContextCard({}, {});
           return;
         }
@@ -6441,6 +6509,7 @@ HTML = """
         renderTimelineGroups(tl);
         renderMemoryExplorerFromSummary(s);
         renderChatStatusRibbon(s, tl, state.project || {});
+        renderResumeDiagnostics(state.project || {});
         renderReleaseContextCard(s, tl);
       }
 

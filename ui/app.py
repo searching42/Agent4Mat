@@ -2591,6 +2591,33 @@ HTML = """
         return out;
       }
 
+      function normalizeResumeVisibility(raw) {
+        const rv = raw && typeof raw === 'object' ? raw : {};
+        const mode = String(rv.mode || '').trim();
+        const reused = Math.max(0, Number(rv.reused_steps_count || rv.resume_skipped_steps || 0) || 0);
+        const rerun = Math.max(0, Number(rv.rerun_steps_count || 0) || 0);
+        const total = Math.max(0, Number(rv.resume_total_steps || 0) || 0);
+        const reusedSteps = Array.isArray(rv.reused_steps)
+          ? rv.reused_steps.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8)
+          : [];
+        const rerunSteps = Array.isArray(rv.rerun_steps)
+          ? rv.rerun_steps.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8)
+          : [];
+        return {mode, reused, rerun, total, reusedSteps, rerunSteps};
+      }
+
+      function formatResumeVisibilityLine(raw) {
+        const rv = normalizeResumeVisibility(raw);
+        if (!rv.mode && rv.reused < 1 && rv.rerun < 1 && rv.total < 1) {
+          return '';
+        }
+        let line = `resume=${rv.mode || 'unknown'} reused=${rv.reused} rerun=${rv.rerun}`;
+        if (rv.total > 0) line += ` total=${rv.total}`;
+        if (rv.reusedSteps.length > 0) line += ` | reused_steps=${rv.reusedSteps.join(',')}`;
+        if (rv.rerunSteps.length > 0) line += ` | rerun_steps=${rv.rerunSteps.join(',')}`;
+        return line;
+      }
+
       function renderEvents(events) {
         const arr = Array.isArray(events) ? events : [];
         if (arr.length < 1) {
@@ -2607,12 +2634,14 @@ HTML = """
           const failureKind = String(e.failure_kind || e.resume_failure_kind || '').trim();
           const failedStep = String(e.failed_step || e.resume_failed_step || '').trim();
           const detail = String(e.failure_detail || e.resume_failure_detail || '').trim();
+          const resumeVisibilityLine = formatResumeVisibilityLine(e.resume_visibility);
           let line = `${stage}: ${status}`;
           if (op) line += ` | op=${op}`;
           if (reason) line += ` | reason=${reason}`;
           if (failureKind) line += ` | failure=${failureKind}`;
           if (failedStep) line += ` | failed_step=${failedStep}`;
           if (detail) line += ` | detail=${detail.slice(0, 220)}`;
+          if (resumeVisibilityLine) line += ` | ${resumeVisibilityLine}`;
           lines.push(line);
         }
         document.getElementById('event_out').textContent = lines.length > 0 ? lines.join('\n') : '(no events)';
@@ -5857,9 +5886,30 @@ HTML = """
         const data = (payload && typeof payload === 'object') ? payload : {};
         renderJsonOut(data);
         const baseEvents = Array.isArray(data.events) ? data.events.slice() : [];
+        const resumeVisibility = data.resume_visibility && typeof data.resume_visibility === 'object'
+          ? data.resume_visibility
+          : null;
         const failureKind = String(data.resume_failure_kind || '').trim();
         const failureDetail = String(data.resume_failure_detail || '').trim();
         const failedStep = String(data.resume_failed_step || '').trim();
+        if (resumeVisibility) {
+          let attached = false;
+          for (const evt of baseEvents) {
+            if (!evt || typeof evt !== 'object') continue;
+            if (String(evt.stage || '') !== 'resume') continue;
+            if (!evt.resume_visibility || typeof evt.resume_visibility !== 'object') {
+              evt.resume_visibility = resumeVisibility;
+            }
+            attached = true;
+          }
+          if (!attached) {
+            baseEvents.push({
+              stage: 'resume',
+              status: String(data.status || 'unknown'),
+              resume_visibility: resumeVisibility,
+            });
+          }
+        }
         if (failureKind || failureDetail || failedStep) {
           let attached = false;
           for (const evt of baseEvents) {
@@ -9757,6 +9807,78 @@ def _resume_failure_info(resume_payload: Dict[str, Any], resume_result: Any) -> 
     }
 
 
+def _resume_visibility_info(resume_result: Any) -> Dict[str, Any]:
+    rr = resume_result if isinstance(resume_result, dict) else {}
+    resumed = bool(rr.get("resumed"))
+    try:
+        skipped = int(rr.get("resume_skipped_steps") or 0)
+    except Exception:
+        skipped = 0
+    try:
+        total = int(rr.get("resume_total_steps") or 0)
+    except Exception:
+        total = 0
+    skipped = max(0, skipped)
+    total = max(0, total)
+
+    execution_path = _resolve_optional_path(rr.get("execution_path"))
+    step_names: List[str] = []
+    if execution_path is not None and execution_path.exists():
+        execution = _load_json_path(execution_path)
+        records = execution.get("records") if isinstance(execution, dict) and isinstance(execution.get("records"), list) else []
+        for idx, rec in enumerate(records):
+            if not isinstance(rec, dict):
+                continue
+            name = str(rec.get("name") or rec.get("tool") or f"step_{idx + 1}").strip()
+            if name:
+                step_names.append(name)
+    record_count = len(step_names)
+
+    if total < 1:
+        if record_count > 0:
+            total = record_count
+        elif skipped > 0:
+            total = skipped
+    if total > 0 and skipped > total:
+        skipped = total
+
+    reused_steps_count = skipped
+    rerun_steps_count = max(total - skipped, 0) if total > 0 else max(record_count - skipped, 0)
+    reused_from_records = min(reused_steps_count, record_count)
+    reused_steps = step_names[: min(reused_from_records, 8)]
+    rerun_steps = step_names[reused_from_records : reused_from_records + 8]
+
+    if resumed:
+        if total > 0 and skipped >= total:
+            mode = "full_skip"
+        elif skipped > 0:
+            mode = "partial_rerun"
+        else:
+            mode = "full_rerun"
+    else:
+        mode = "no_resume"
+
+    summary_text = f"mode={mode} reused={reused_steps_count} rerun={rerun_steps_count}"
+    if total > 0:
+        summary_text += f" total={total}"
+
+    out: Dict[str, Any] = {
+        "mode": mode,
+        "resumed": resumed,
+        "resume_skipped_steps": reused_steps_count,
+        "resume_total_steps": total,
+        "reused_steps_count": reused_steps_count,
+        "rerun_steps_count": rerun_steps_count,
+        "execution_record_count": record_count,
+        "reused_steps": reused_steps,
+        "rerun_steps": rerun_steps,
+        "summary_text": summary_text,
+    }
+    if execution_path is not None:
+        out["execution_path"] = str(execution_path)
+    return out
+
+
 def _pending_input_payload(
     *,
     stage: str,
@@ -9894,6 +10016,7 @@ def _chat_resume_from_pending(
     elapsed_ms = int((datetime.now() - started_at).total_seconds() * 1000)
     resume_result = resume.get("result")
     resume_failure = _resume_failure_info(resume, resume_result)
+    resume_visibility = _resume_visibility_info(resume_result)
 
     if resume.get("status") != "pass":
         _append_message(project, role="assistant", kind="assistant", content=_assistant_cli_fail_text("agent-resume", resume))
@@ -9911,12 +10034,14 @@ def _chat_resume_from_pending(
                     "failure_kind": resume_failure.get("kind"),
                     "failure_detail": resume_failure.get("detail"),
                     "failed_step": resume_failure.get("failed_step"),
+                    "resume_visibility": resume_visibility,
                 }
             ],
             "resume_result": resume_result,
             "resume_failure_kind": resume_failure.get("kind"),
             "resume_failure_detail": resume_failure.get("detail"),
             "resume_failed_step": resume_failure.get("failed_step"),
+            "resume_visibility": resume_visibility,
         }
 
     rr = resume_result if isinstance(resume_result, dict) else {}
@@ -9962,6 +10087,7 @@ def _chat_resume_from_pending(
                     "failure_kind": "need_user_input",
                     "failure_detail": resume_failure.get("detail"),
                     "failed_step": resume_failure.get("failed_step"),
+                    "resume_visibility": resume_visibility,
                 }
             ],
             "pending_input": pending_next,
@@ -9969,6 +10095,7 @@ def _chat_resume_from_pending(
             "resume_failure_kind": "need_user_input",
             "resume_failure_detail": resume_failure.get("detail"),
             "resume_failed_step": resume_failure.get("failed_step"),
+            "resume_visibility": resume_visibility,
         }
 
     if rr_status != "success":
@@ -9987,12 +10114,14 @@ def _chat_resume_from_pending(
                     "failure_kind": resume_failure.get("kind"),
                     "failure_detail": resume_failure.get("detail"),
                     "failed_step": resume_failure.get("failed_step"),
+                    "resume_visibility": resume_visibility,
                 }
             ],
             "resume_result": rr,
             "resume_failure_kind": resume_failure.get("kind"),
             "resume_failure_detail": resume_failure.get("detail"),
             "resume_failed_step": resume_failure.get("failed_step"),
+            "resume_visibility": resume_visibility,
         }
 
     project["pending_input"] = {}
@@ -10005,15 +10134,25 @@ def _chat_resume_from_pending(
         project["request_path"] = str(request_path)
     run_label = str(rr.get("run_label") or "")
     result_dir = str(rr.get("result_dir") or "")
+    summary_text = str(resume_visibility.get("summary_text") or "").strip()
+    reused_steps = resume_visibility.get("reused_steps") if isinstance(resume_visibility.get("reused_steps"), list) else []
+    rerun_steps = resume_visibility.get("rerun_steps") if isinstance(resume_visibility.get("rerun_steps"), list) else []
+    content_lines = [
+        "已根据补充字段继续执行: status=success",
+        f"run_label={run_label}",
+        f"result_dir={result_dir}",
+    ]
+    if summary_text:
+        content_lines.append(f"resume_visibility={summary_text}")
+    if reused_steps:
+        content_lines.append(f"reused_steps={', '.join(str(x) for x in reused_steps[:8])}")
+    if rerun_steps:
+        content_lines.append(f"rerun_steps={', '.join(str(x) for x in rerun_steps[:8])}")
     _append_message(
         project,
         role="assistant",
         kind="assistant",
-        content=(
-            f"已根据补充字段继续执行: status=success"
-            f"\nrun_label={run_label}"
-            f"\nresult_dir={result_dir}"
-        ),
+        content="\n".join(content_lines),
         meta={"resume_result": rr, "source_message": source_message},
     )
     project["last_runtime"] = {
@@ -10029,8 +10168,9 @@ def _chat_resume_from_pending(
         "status": "pass",
         "project": _project_summary(project),
         "messages": _recent_messages(project),
-        "events": [{"stage": "resume", "status": "success"}],
+        "events": [{"stage": "resume", "status": "success", "resume_visibility": resume_visibility}],
         "resume_result": rr,
+        "resume_visibility": resume_visibility,
     }
 
 

@@ -9916,6 +9916,9 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("pending_state_badge", html)
         self.assertIn("pending_state_continue_btn", html)
         self.assertIn("/api/chat/pending-continue", html)
+        self.assertIn("normalizeResumeVisibility(", html)
+        self.assertIn("formatResumeVisibilityLine(", html)
+        self.assertIn("resume_visibility", html)
         self.assertIn("SESSION_BOARD_KEY", html)
         self.assertIn("loadSessionBoardState()", html)
         self.assertIn("saveSessionBoardState(", html)
@@ -10794,12 +10797,33 @@ class UiPrototypeTests(unittest.TestCase):
                     "task_draft_path": str(draft_path),
                 }
                 ui_app_mod._save_project_state(project)
+                execution_path = root / "runs" / "agent" / "ui_chat_pending_task" / "execution.json"
+                execution_path.parent.mkdir(parents=True, exist_ok=True)
+                execution_path.write_text(
+                    json.dumps(
+                        {
+                            "records": [
+                                {"name": "retrieve_candidate_data", "status": "success"},
+                                {"name": "clean_dataset", "status": "success"},
+                                {"name": "prepare_train_data", "status": "success"},
+                                {"name": "score_candidates", "status": "success"},
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
 
                 fake_resume = {
                     "task_id": "ui_chat_pending_task",
                     "status": "success",
                     "run_label": "ui_chat_pending_task-20260515-120000",
                     "result_dir": str(root / "result" / "ui_chat_pending_task-20260515-120000"),
+                    "execution_path": str(execution_path),
+                    "resumed": True,
+                    "resume_skipped_steps": 2,
+                    "resume_total_steps": 4,
                 }
                 fake_cp = subprocess.CompletedProcess(
                     args=["python3", "-m", "oled_agent.cli", "agent-resume"],
@@ -10819,8 +10843,20 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
                 payload = resp.get_json()
                 self.assertEqual(payload.get("status"), "pass")
+                resume_vis = payload.get("resume_visibility") if isinstance(payload.get("resume_visibility"), dict) else {}
+                self.assertEqual(str(resume_vis.get("mode") or ""), "partial_rerun")
+                self.assertEqual(int(resume_vis.get("reused_steps_count", -1)), 2)
+                self.assertEqual(int(resume_vis.get("rerun_steps_count", -1)), 2)
+                reused_steps = resume_vis.get("reused_steps") if isinstance(resume_vis.get("reused_steps"), list) else []
+                rerun_steps = resume_vis.get("rerun_steps") if isinstance(resume_vis.get("rerun_steps"), list) else []
+                self.assertEqual(reused_steps, ["retrieve_candidate_data", "clean_dataset"])
+                self.assertEqual(rerun_steps, ["prepare_train_data", "score_candidates"])
                 events = payload.get("events") if isinstance(payload.get("events"), list) else []
                 self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("status") == "success" for e in events))
+                resume_events = [e for e in events if isinstance(e, dict) and e.get("stage") == "resume"]
+                self.assertGreaterEqual(len(resume_events), 1)
+                event_vis = resume_events[0].get("resume_visibility") if isinstance(resume_events[0].get("resume_visibility"), dict) else {}
+                self.assertEqual(str(event_vis.get("mode") or ""), "partial_rerun")
                 project_out = payload.get("project") if isinstance(payload.get("project"), dict) else {}
                 self.assertEqual(project_out.get("current_task_id"), "ui_chat_pending_task")
                 self.assertEqual(project_out.get("pending_input"), {})
@@ -10870,12 +10906,32 @@ class UiPrototypeTests(unittest.TestCase):
                     "task_draft_path": str(draft_path),
                 }
                 ui_app_mod._save_project_state(project)
+                execution_path = root / "runs" / "agent" / "ui_chat_pending_continue_task" / "execution.json"
+                execution_path.parent.mkdir(parents=True, exist_ok=True)
+                execution_path.write_text(
+                    json.dumps(
+                        {
+                            "records": [
+                                {"name": "retrieve_candidate_data", "status": "success"},
+                                {"name": "clean_dataset", "status": "success"},
+                                {"name": "prepare_train_data", "status": "success"},
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
 
                 fake_resume = {
                     "task_id": "ui_chat_pending_continue_task",
                     "status": "success",
                     "run_label": "ui_chat_pending_continue_task-20260517-120000",
                     "result_dir": str(root / "result" / "ui_chat_pending_continue_task-20260517-120000"),
+                    "execution_path": str(execution_path),
+                    "resumed": True,
+                    "resume_skipped_steps": 3,
+                    "resume_total_steps": 3,
                 }
                 fake_cp = subprocess.CompletedProcess(
                     args=["python3", "-m", "oled_agent.cli", "agent-resume"],
@@ -10894,8 +10950,16 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
                 payload = resp.get_json()
                 self.assertEqual(payload.get("status"), "pass")
+                resume_vis = payload.get("resume_visibility") if isinstance(payload.get("resume_visibility"), dict) else {}
+                self.assertEqual(str(resume_vis.get("mode") or ""), "full_skip")
+                self.assertEqual(int(resume_vis.get("reused_steps_count", -1)), 3)
+                self.assertEqual(int(resume_vis.get("rerun_steps_count", -1)), 0)
                 events = payload.get("events") if isinstance(payload.get("events"), list) else []
                 self.assertTrue(any(isinstance(e, dict) and e.get("stage") == "resume" and e.get("status") == "success" for e in events))
+                resume_events = [e for e in events if isinstance(e, dict) and e.get("stage") == "resume"]
+                self.assertGreaterEqual(len(resume_events), 1)
+                event_vis = resume_events[0].get("resume_visibility") if isinstance(resume_events[0].get("resume_visibility"), dict) else {}
+                self.assertEqual(str(event_vis.get("mode") or ""), "full_skip")
                 project_out = payload.get("project") if isinstance(payload.get("project"), dict) else {}
                 self.assertEqual(project_out.get("current_task_id"), "ui_chat_pending_continue_task")
                 self.assertEqual(project_out.get("pending_input"), {})

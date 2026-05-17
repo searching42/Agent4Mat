@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,63 @@ def _pick_plqy_target(plan: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _load_json_if_exists(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _infer_base_task_id(task_id: str) -> str:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return ""
+    return re.sub(r"_r\d+$", "", tid)
+
+
+def _collect_baseline_context(*, workspace_root: Path, task_id: str) -> Dict[str, Any]:
+    base_task_id = _infer_base_task_id(task_id)
+    if not base_task_id:
+        return {
+            "base_task_id": "",
+            "baseline_summary_path": "",
+            "baseline_status": "missing",
+            "baseline_run_count": -1,
+            "archive_manifest_path": "",
+            "archive_manifest_status": "missing",
+            "archive_release_gate_status": "missing",
+            "archive_release_gate_checked_runs": -1,
+            "archive_release_gate_pass_count": -1,
+            "archive_release_gate_fail_count": -1,
+            "archive_release_gate_failures_preview": [],
+        }
+
+    baseline_summary_path = (workspace_root / "runs" / "agent" / base_task_id / "baseline_summary.json").resolve()
+    archive_manifest_path = (workspace_root / "runs" / "archive" / base_task_id / "archive_manifest.json").resolve()
+    baseline_summary = _load_json_if_exists(baseline_summary_path)
+    archive_manifest = _load_json_if_exists(archive_manifest_path)
+    gate = archive_manifest.get("release_gate_summary") if isinstance(archive_manifest, dict) and isinstance(archive_manifest.get("release_gate_summary"), dict) else {}
+    gate_failures = gate.get("failures") if isinstance(gate.get("failures"), list) else []
+    gate_failures_preview = [str(x) for x in gate_failures[:5]]
+
+    return {
+        "base_task_id": base_task_id,
+        "baseline_summary_path": str(baseline_summary_path),
+        "baseline_status": str((baseline_summary or {}).get("status") or "missing"),
+        "baseline_run_count": int((baseline_summary or {}).get("run_count") or -1),
+        "archive_manifest_path": str(archive_manifest_path),
+        "archive_manifest_status": str((archive_manifest or {}).get("status") or "missing"),
+        "archive_release_gate_status": str(gate.get("status") or "missing"),
+        "archive_release_gate_checked_runs": int(gate.get("checked_runs") or -1),
+        "archive_release_gate_pass_count": int(gate.get("pass_count") or -1),
+        "archive_release_gate_fail_count": int(gate.get("fail_count") or -1),
+        "archive_release_gate_failures_preview": gate_failures_preview,
+    }
+
+
 def _safe_env_snapshot() -> Dict[str, str]:
     keys = [
         "UNIMOL_REMOTE_HOST",
@@ -77,6 +135,7 @@ def _build_markdown(evidence: Dict[str, Any]) -> str:
     planner = evidence.get("planner", {})
     plqy = evidence.get("plqy_semantics", {})
     failure_diag = evidence.get("failure_diagnostics", {})
+    baseline_ctx = evidence.get("baseline_context", {})
     artifacts = evidence.get("artifacts", {})
     env_snapshot = evidence.get("env_snapshot", {})
 
@@ -112,6 +171,22 @@ def _build_markdown(evidence: Dict[str, Any]) -> str:
     lines.append(f"- guardrails_failed_count: `{failure_diag.get('guardrails_failed_count')}`")
     lines.append(f"- evaluation_latest_failure_kind: `{failure_diag.get('evaluation_latest_failure_kind')}`")
     lines.append(f"- guardrails_latest_failure_kind: `{failure_diag.get('guardrails_latest_failure_kind')}`")
+    lines.append("")
+    lines.append("## Baseline Context")
+    lines.append(f"- base_task_id: `{baseline_ctx.get('base_task_id')}`")
+    lines.append(f"- baseline_status: `{baseline_ctx.get('baseline_status')}`")
+    lines.append(f"- baseline_run_count: `{baseline_ctx.get('baseline_run_count')}`")
+    lines.append(f"- archive_manifest_status: `{baseline_ctx.get('archive_manifest_status')}`")
+    lines.append(f"- archive_release_gate_status: `{baseline_ctx.get('archive_release_gate_status')}`")
+    lines.append(
+        f"- archive_release_gate_checked/pass/fail: `{baseline_ctx.get('archive_release_gate_checked_runs')}/"
+        f"{baseline_ctx.get('archive_release_gate_pass_count')}/{baseline_ctx.get('archive_release_gate_fail_count')}`"
+    )
+    gate_failures = baseline_ctx.get("archive_release_gate_failures_preview") if isinstance(baseline_ctx.get("archive_release_gate_failures_preview"), list) else []
+    if gate_failures:
+        lines.append("- archive_release_gate_failures_preview:")
+        for row in gate_failures:
+            lines.append(f"  - {row}")
     lines.append("")
     lines.append("## Artifacts")
     for key, value in artifacts.items():
@@ -214,6 +289,10 @@ def main() -> int:
     out_md.parent.mkdir(parents=True, exist_ok=True)
 
     planner_md = plan.get("design_spec", {}).get("metadata", {}) if isinstance(plan.get("design_spec", {}), dict) else {}
+    baseline_context = _collect_baseline_context(
+        workspace_root=workspace_root,
+        task_id=str(result.get("task_id") or ""),
+    )
     evidence = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "task_id": result.get("task_id"),
@@ -236,6 +315,7 @@ def main() -> int:
             "evaluation_latest_failure_kind": str(eval_diag.get("latest_failure_kind") or ""),
             "guardrails_latest_failure_kind": str(guard_diag.get("latest_failure_kind") or ""),
         },
+        "baseline_context": baseline_context,
         "plqy_semantics": {
             "target_center": plqy_center,
             "metadata_plqy_scale": planner_md.get("plqy_scale"),

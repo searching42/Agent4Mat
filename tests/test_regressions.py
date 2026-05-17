@@ -9433,6 +9433,97 @@ class UiPrototypeTests(unittest.TestCase):
                     any(isinstance(m, dict) and str(m.get("kind") or "") == "memory_context" for m in messages)
                 )
 
+    def test_ui_chat_send_injects_conversation_summary_when_enabled(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_chat_summary_on",
+                        "title": "summary on",
+                        "options": {"memory_enabled": False, "context_summary_enabled": True},
+                    },
+                )
+                intake_result = {
+                    "task_id": "ui_chat_summary_on_20260517_000001",
+                    "status": "need_user_input",
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_summary_on_20260517_000001" / "task.draft.json"),
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=2,
+                    stdout=json.dumps(intake_result, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_summary_on",
+                            "message": "先设计一个470nm目标任务",
+                            "options": {"planner_provider": "rule_based_v1", "context_summary_enabled": True},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                cmd = mocked.call_args.args[0]
+                request_text = str(cmd[cmd.index("--request") + 1])
+                self.assertIn("Conversation context summary:", request_text)
+                self.assertIn("先设计一个470nm目标任务", request_text)
+                proj = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                self.assertTrue(str(proj.get("conversation_summary") or "").strip())
+                opts = proj.get("options") if isinstance(proj.get("options"), dict) else {}
+                self.assertEqual(bool(opts.get("context_summary_enabled")), True)
+
+    def test_ui_chat_send_does_not_inject_conversation_summary_when_disabled(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post(
+                    "/api/projects",
+                    json={
+                        "project_id": "ui_chat_summary_off",
+                        "title": "summary off",
+                        "options": {"memory_enabled": False, "context_summary_enabled": False},
+                    },
+                )
+                intake_result = {
+                    "task_id": "ui_chat_summary_off_20260517_000001",
+                    "status": "need_user_input",
+                    "task_draft_path": str(root / "runs" / "agent" / "ui_chat_summary_off_20260517_000001" / "task.draft.json"),
+                    "missing_fields": ["candidate_data"],
+                    "questions": ["候选数据来源是什么？"],
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-intake"],
+                    returncode=2,
+                    stdout=json.dumps(intake_result, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+                    resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "project_id": "ui_chat_summary_off",
+                            "message": "只做纯消息，不注入summary",
+                            "options": {"planner_provider": "rule_based_v1", "context_summary_enabled": False},
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "need_user_input")
+                cmd = mocked.call_args.args[0]
+                request_text = str(cmd[cmd.index("--request") + 1])
+                self.assertNotIn("Conversation context summary:", request_text)
+
     def test_ui_chat_send_injects_web_preferences_into_intake_request(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -9711,6 +9802,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("webSearchPresets", html)
         self.assertIn("memory_enabled", html)
         self.assertIn("memory_notes", html)
+        self.assertIn("context_summary_enabled", html)
+        self.assertIn("context_summary_status", html)
         self.assertIn("updateMemoryStatus()", html)
         self.assertIn("pending_hints_box", html)
         self.assertIn("applyPendingSuggestedCandidateData(true)", html)

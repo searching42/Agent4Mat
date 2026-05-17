@@ -40,6 +40,8 @@ UI_RELEASE_READINESS_JSON_REL = Path("runs/ci/ui_release_readiness.json")
 UI_RELEASE_READINESS_MD_REL = Path("runs/ci/ui_release_readiness.md")
 MAX_PROJECT_HISTORY = 400
 MAX_MEMORY_NOTES_CHARS = 8000
+MAX_CONVERSATION_SUMMARY_CHARS = 4000
+SUMMARY_RECENT_MESSAGE_LIMIT = 10
 STEP_OPERATIONS = (
     "retrieve_candidate_data",
     "clean_dataset",
@@ -1177,6 +1179,8 @@ HTML = """
         <label><input id=\"memory_enabled\" type=\"checkbox\" onchange=\"updateMemoryStatus()\" /> Enable project memory injection</label>
         <label>Project memory notes</label>
         <textarea id=\"memory_notes\" rows=\"5\" placeholder=\"记录该项目长期约束/偏好，例如目标波长范围、禁用骨架、数据来源优先级。\" oninput=\"updateMemoryStatus()\"></textarea>
+        <label><input id=\"context_summary_enabled\" type=\"checkbox\" checked onchange=\"updateMemoryStatus()\" /> Enable conversation summary injection</label>
+        <div class=\"muted\" id=\"context_summary_status\">context summary: disabled</div>
         <div class=\"muted\" id=\"memory_status\">memory: disabled, chars=0</div>
         <label><input id=\"project_read_only\" type=\"checkbox\" onchange=\"updateProjectLockStatus()\" /> Snapshot read-only mode</label>
         <div class=\"muted\" id=\"project_lock_status\">project lock: writable</div>
@@ -3364,6 +3368,9 @@ HTML = """
         if (Object.prototype.hasOwnProperty.call(opts, 'memory_enabled')) {
           document.getElementById('memory_enabled').checked = Boolean(opts.memory_enabled);
         }
+        if (Object.prototype.hasOwnProperty.call(opts, 'context_summary_enabled')) {
+          document.getElementById('context_summary_enabled').checked = Boolean(opts.context_summary_enabled);
+        }
         if (Object.prototype.hasOwnProperty.call(opts, 'project_read_only')) {
           document.getElementById('project_read_only').checked = Boolean(opts.project_read_only);
         }
@@ -3841,6 +3848,7 @@ HTML = """
         const webPrefs = collectWebSearchPrefs();
         const customParsed = collectCustomWebPresets();
         const memoryEnabled = document.getElementById('memory_enabled').checked;
+        const contextSummaryEnabled = document.getElementById('context_summary_enabled').checked;
         const projectReadOnly = document.getElementById('project_read_only').checked;
         return {
           planner_provider: planner,
@@ -3851,6 +3859,7 @@ HTML = """
           web_time_range: webPrefs.time_range,
           web_custom_presets: customParsed.presets || {},
           memory_enabled: Boolean(memoryEnabled),
+          context_summary_enabled: Boolean(contextSummaryEnabled),
           project_read_only: Boolean(projectReadOnly),
           batch_replay_defaults: readBatchReplayOptions(),
         };
@@ -3862,9 +3871,20 @@ HTML = """
 
       function updateMemoryStatus() {
         const enabled = Boolean(document.getElementById('memory_enabled').checked);
+        const summaryEnabled = Boolean(document.getElementById('context_summary_enabled').checked);
         const notes = collectMemoryNotes().trim();
         const status = enabled ? 'enabled' : 'disabled';
         document.getElementById('memory_status').textContent = `memory: ${status}, chars=${notes.length}`;
+        const summaryText = summaryEnabled ? 'enabled' : 'disabled';
+        const proj = state.project && typeof state.project === 'object' ? state.project : {};
+        const conversationSummary = String(proj.conversation_summary || '').trim();
+        const summaryChars = conversationSummary.length;
+        const summaryUpdated = String(proj.conversation_summary_updated_at || '').trim();
+        const extra = summaryUpdated ? `, updated=${summaryUpdated}` : '';
+        const summaryEle = document.getElementById('context_summary_status');
+        if (summaryEle) {
+          summaryEle.textContent = `context summary: ${summaryText}, chars=${summaryChars}${extra}`;
+        }
       }
 
       function clearMemoryNotes() {
@@ -8269,6 +8289,7 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
         web_time_range = web_time_range[:80]
     web_custom_presets = _normalize_web_custom_presets(options.get("web_custom_presets"))
     memory_enabled = bool(options.get("memory_enabled", False))
+    context_summary_enabled = bool(options.get("context_summary_enabled", True))
     project_read_only = bool(options.get("project_read_only", False))
     batch_replay_defaults = _normalize_batch_replay_options(options.get("batch_replay_defaults"))
     return {
@@ -8280,6 +8301,7 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
         "web_time_range": web_time_range,
         "web_custom_presets": web_custom_presets,
         "memory_enabled": memory_enabled,
+        "context_summary_enabled": context_summary_enabled,
         "project_read_only": project_read_only,
         "batch_replay_defaults": batch_replay_defaults,
     }
@@ -8302,6 +8324,8 @@ def _new_project_state(project_id: str, *, title: str = "", options: Optional[Di
         "pending_input": {},
         "memory_notes": "",
         "memory_updated_at": "",
+        "conversation_summary": "",
+        "conversation_summary_updated_at": "",
         "attachments": [],
         "messages": [],
     }
@@ -8326,6 +8350,8 @@ def _project_summary(project: Dict[str, Any]) -> Dict[str, Any]:
         "pending_input": project.get("pending_input") if isinstance(project.get("pending_input"), dict) else {},
         "memory_notes": _normalize_memory_notes(project.get("memory_notes")),
         "memory_updated_at": str(project.get("memory_updated_at") or ""),
+        "conversation_summary": _normalize_conversation_summary(project.get("conversation_summary")),
+        "conversation_summary_updated_at": str(project.get("conversation_summary_updated_at") or ""),
         "message_count": len(messages) if isinstance(messages, list) else 0,
         "attachment_count": len(attachments) if isinstance(attachments, list) else 0,
         "project_path": str(_project_file_path(pid)) if pid else "",
@@ -8486,6 +8512,10 @@ def _load_project_state(project_id: str) -> Optional[Dict[str, Any]]:
     payload["memory_updated_at"] = str(payload.get("memory_updated_at") or "").strip()
     if payload["memory_notes"] and not payload["memory_updated_at"]:
         payload["memory_updated_at"] = str(payload.get("updated_at") or "")
+    payload["conversation_summary"] = _normalize_conversation_summary(payload.get("conversation_summary"))
+    payload["conversation_summary_updated_at"] = str(payload.get("conversation_summary_updated_at") or "").strip()
+    if payload["conversation_summary"] and not payload["conversation_summary_updated_at"]:
+        payload["conversation_summary_updated_at"] = str(payload.get("updated_at") or "")
     return payload
 
 
@@ -8504,6 +8534,12 @@ def _save_project_state(project: Dict[str, Any]) -> Dict[str, Any]:
         project["memory_updated_at"] = str(project.get("updated_at") or "")
     if not project["memory_notes"]:
         project["memory_updated_at"] = ""
+    project["conversation_summary"] = _normalize_conversation_summary(project.get("conversation_summary"))
+    project["conversation_summary_updated_at"] = str(project.get("conversation_summary_updated_at") or "").strip()
+    if project["conversation_summary"] and not project["conversation_summary_updated_at"]:
+        project["conversation_summary_updated_at"] = str(project.get("updated_at") or "")
+    if not project["conversation_summary"]:
+        project["conversation_summary_updated_at"] = ""
     messages = project.get("messages")
     if not isinstance(messages, list):
         messages = []
@@ -8522,6 +8558,69 @@ def _save_project_state(project: Dict[str, Any]) -> Dict[str, Any]:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(project, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return project
+
+
+def _normalize_conversation_summary(raw: Any) -> str:
+    text = str(raw or "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(text) > MAX_CONVERSATION_SUMMARY_CHARS:
+        text = text[:MAX_CONVERSATION_SUMMARY_CHARS]
+    return text
+
+
+def _summary_message_line(msg: Dict[str, Any]) -> str:
+    role = str(msg.get("role") or "system").strip().lower()
+    content = str(msg.get("content") or "").strip()
+    if not content:
+        return ""
+    content = re.sub(r"\s+", " ", content).strip()
+    if len(content) > 220:
+        content = content[:220] + "..."
+    if role == "assistant":
+        prefix = "A"
+    elif role == "user":
+        prefix = "U"
+    else:
+        prefix = "S"
+    return f"- {prefix}: {content}"
+
+
+def _build_conversation_summary(project: Dict[str, Any]) -> str:
+    messages = project.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    usable: List[Dict[str, Any]] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        kind = str(item.get("kind") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        if kind in {"event_trace"}:
+            continue
+        if not str(item.get("content") or "").strip():
+            continue
+        usable.append(item)
+    if not usable:
+        return ""
+    recent = usable[-SUMMARY_RECENT_MESSAGE_LIMIT:]
+    lines: List[str] = []
+    lines.append("Recent conversation summary:")
+    for row in recent:
+        line = _summary_message_line(row)
+        if line:
+            lines.append(line)
+    summary = "\n".join(lines).strip()
+    return _normalize_conversation_summary(summary)
+
+
+def _refresh_conversation_summary(project: Dict[str, Any]) -> None:
+    summary = _build_conversation_summary(project)
+    previous = _normalize_conversation_summary(project.get("conversation_summary"))
+    project["conversation_summary"] = summary
+    if summary != previous:
+        project["conversation_summary_updated_at"] = _now_iso() if summary else ""
 
 
 def _apply_project_memory_update(project: Dict[str, Any], memory_notes: Any, *, provided: bool) -> None:
@@ -8564,12 +8663,19 @@ def _compose_intake_request_text(*, message: str, project: Dict[str, Any], optio
             lines.append(f"- time_range: {web_time_range}")
         base = "\n".join(lines)
     if not bool(options.get("memory_enabled", False)):
-        return base, False
-    notes = _normalize_memory_notes(project.get("memory_notes"))
-    if not notes:
-        return base, False
-    merged = f"{base}\n\nProject memory context:\n{notes}"
-    return merged, True
+        memory_injected = False
+    else:
+        notes = _normalize_memory_notes(project.get("memory_notes"))
+        if notes:
+            base = f"{base}\n\nProject memory context:\n{notes}"
+            memory_injected = True
+        else:
+            memory_injected = False
+    if bool(options.get("context_summary_enabled", True)):
+        summary = _normalize_conversation_summary(project.get("conversation_summary"))
+        if summary:
+            base = f"{base}\n\nConversation context summary:\n{summary}"
+    return base, memory_injected
 
 
 def _batch_export_entry_path(project_id: str, export_id: str) -> Path:
@@ -9681,6 +9787,7 @@ def _append_message(
     )
     if len(messages) > MAX_PROJECT_HISTORY:
         project["messages"] = messages[-MAX_PROJECT_HISTORY:]
+    _refresh_conversation_summary(project)
 
 
 def _recent_messages(project: Dict[str, Any], *, limit: int = 160) -> List[Dict[str, Any]]:

@@ -1463,6 +1463,19 @@ HTML = """
         </div>
         <div class=\"muted\" id=\"web_custom_presets_status\">custom presets: 0</div>
         <div class=\"muted\" id=\"web_search_status\">web: enabled, topk=5, domains=all, time=any</div>
+        <label>Runtime timeout sec (optional)</label>
+        <input id=\"budget_timeout_sec\" type=\"number\" min=\"0\" step=\"1\" placeholder=\"0 = inherit request\" oninput=\"updateBudgetStatus()\" />
+        <label>Runtime max tool calls (optional)</label>
+        <input id=\"budget_max_tool_calls\" type=\"number\" min=\"0\" step=\"1\" placeholder=\"0 = inherit request\" oninput=\"updateBudgetStatus()\" />
+        <label>Runtime max external calls (optional)</label>
+        <input id=\"budget_max_external_calls\" type=\"number\" min=\"0\" step=\"1\" placeholder=\"0 = inherit request\" oninput=\"updateBudgetStatus()\" />
+        <label>On budget limit</label>
+        <select id=\"budget_on_limit\" onchange=\"updateBudgetStatus()\">
+          <option value=\"\" selected>inherit request</option>
+          <option value=\"fail\">fail</option>
+          <option value=\"need_approval\">need_approval</option>
+        </select>
+        <div class=\"muted\" id=\"budget_status\">runtime budget: inherit request defaults</div>
         <label><input id=\"memory_enabled\" type=\"checkbox\" onchange=\"updateMemoryStatus()\" /> Enable project memory injection</label>
         <label>Project memory notes</label>
         <textarea id=\"memory_notes\" rows=\"5\" placeholder=\"记录该项目长期约束/偏好，例如目标波长范围、禁用骨架、数据来源优先级。\" oninput=\"updateMemoryStatus()\"></textarea>
@@ -4568,6 +4581,19 @@ HTML = """
         if (Object.prototype.hasOwnProperty.call(opts, 'web_custom_presets')) {
           writeCustomWebPresetsToTextarea(opts.web_custom_presets);
         }
+        if (Object.prototype.hasOwnProperty.call(opts, 'budget_timeout_sec')) {
+          document.getElementById('budget_timeout_sec').value = String(Number(opts.budget_timeout_sec || 0) || '');
+        }
+        if (Object.prototype.hasOwnProperty.call(opts, 'budget_max_tool_calls')) {
+          document.getElementById('budget_max_tool_calls').value = String(Number(opts.budget_max_tool_calls || 0) || '');
+        }
+        if (Object.prototype.hasOwnProperty.call(opts, 'budget_max_external_calls')) {
+          document.getElementById('budget_max_external_calls').value = String(Number(opts.budget_max_external_calls || 0) || '');
+        }
+        if (Object.prototype.hasOwnProperty.call(opts, 'budget_on_limit')) {
+          const onLimitRaw = String(opts.budget_on_limit || '').trim().toLowerCase();
+          document.getElementById('budget_on_limit').value = (onLimitRaw === 'fail' || onLimitRaw === 'need_approval') ? onLimitRaw : '';
+        }
         if (Object.prototype.hasOwnProperty.call(opts, 'memory_enabled')) {
           document.getElementById('memory_enabled').checked = Boolean(opts.memory_enabled);
         }
@@ -4582,6 +4608,7 @@ HTML = """
           applyBatchReplayOptions(opts.batch_replay_defaults);
         }
         updateWebSearchStatus();
+        updateBudgetStatus();
         updateMemoryStatus();
         updateProjectLockStatus();
       }
@@ -5046,11 +5073,40 @@ HTML = """
         }
       }
 
+      function collectRuntimeBudgetPrefs() {
+        const timeoutRaw = Number(document.getElementById('budget_timeout_sec').value || 0);
+        const maxToolRaw = Number(document.getElementById('budget_max_tool_calls').value || 0);
+        const maxExternalRaw = Number(document.getElementById('budget_max_external_calls').value || 0);
+        const onLimitRaw = String(document.getElementById('budget_on_limit').value || '').trim().toLowerCase();
+        const timeoutSec = Number.isFinite(timeoutRaw) ? Math.max(0, Math.min(604800, Math.floor(timeoutRaw))) : 0;
+        const maxToolCalls = Number.isFinite(maxToolRaw) ? Math.max(0, Math.min(10000, Math.floor(maxToolRaw))) : 0;
+        const maxExternalCalls = Number.isFinite(maxExternalRaw) ? Math.max(0, Math.min(10000, Math.floor(maxExternalRaw))) : 0;
+        const onLimit = (onLimitRaw === 'fail' || onLimitRaw === 'need_approval') ? onLimitRaw : '';
+        return {
+          timeout_sec: timeoutSec,
+          max_tool_calls: maxToolCalls,
+          max_external_calls: maxExternalCalls,
+          on_limit: onLimit,
+        };
+      }
+
+      function updateBudgetStatus() {
+        const budget = collectRuntimeBudgetPrefs();
+        const timeoutTxt = budget.timeout_sec > 0 ? `${budget.timeout_sec}s` : 'inherit';
+        const toolsTxt = budget.max_tool_calls > 0 ? String(budget.max_tool_calls) : 'inherit';
+        const externalTxt = budget.max_external_calls > 0 ? String(budget.max_external_calls) : 'inherit';
+        const onLimitTxt = budget.on_limit || 'inherit';
+        const statusEle = document.getElementById('budget_status');
+        if (!statusEle) return;
+        statusEle.textContent = `runtime budget: timeout=${timeoutTxt}, tool_calls=${toolsTxt}, external_calls=${externalTxt}, on_limit=${onLimitTxt}`;
+      }
+
       function collectOptions() {
         const planner = document.getElementById('planner').value;
         const catalog = document.getElementById('catalog').value;
         const webPrefs = collectWebSearchPrefs();
         const customParsed = collectCustomWebPresets();
+        const runtimeBudget = collectRuntimeBudgetPrefs();
         const memoryEnabled = document.getElementById('memory_enabled').checked;
         const contextSummaryEnabled = document.getElementById('context_summary_enabled').checked;
         const projectReadOnly = document.getElementById('project_read_only').checked;
@@ -5062,6 +5118,10 @@ HTML = """
           web_domains: webPrefs.domains,
           web_time_range: webPrefs.time_range,
           web_custom_presets: customParsed.presets || {},
+          budget_timeout_sec: Number(runtimeBudget.timeout_sec || 0),
+          budget_max_tool_calls: Number(runtimeBudget.max_tool_calls || 0),
+          budget_max_external_calls: Number(runtimeBudget.max_external_calls || 0),
+          budget_on_limit: String(runtimeBudget.on_limit || ''),
           memory_enabled: Boolean(memoryEnabled),
           context_summary_enabled: Boolean(contextSummaryEnabled),
           project_read_only: Boolean(projectReadOnly),
@@ -8222,6 +8282,7 @@ HTML = """
       async function boot() {
         applyStepArgsTemplate(true);
         updateWebSearchStatus();
+        updateBudgetStatus();
         updateMemoryStatus();
         updateProjectLockStatus();
         const uiPrefs = loadUiPrefs();
@@ -9943,6 +10004,14 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
     if len(web_time_range) > 80:
         web_time_range = web_time_range[:80]
     web_custom_presets = _normalize_web_custom_presets(options.get("web_custom_presets"))
+    budget_timeout_sec = _as_int(options.get("budget_timeout_sec"), 0)
+    budget_timeout_sec = max(0, min(budget_timeout_sec, 604800))
+    budget_max_tool_calls = _as_int(options.get("budget_max_tool_calls"), 0)
+    budget_max_tool_calls = max(0, min(budget_max_tool_calls, 10000))
+    budget_max_external_calls = _as_int(options.get("budget_max_external_calls"), 0)
+    budget_max_external_calls = max(0, min(budget_max_external_calls, 10000))
+    budget_on_limit_raw = str(options.get("budget_on_limit") or "").strip().lower()
+    budget_on_limit = budget_on_limit_raw if budget_on_limit_raw in {"fail", "need_approval"} else ""
     memory_enabled = bool(options.get("memory_enabled", False))
     context_summary_enabled = bool(options.get("context_summary_enabled", True))
     project_read_only = bool(options.get("project_read_only", False))
@@ -9955,6 +10024,10 @@ def _normalize_project_options(raw: Any) -> Dict[str, Any]:
         "web_domains": web_domains,
         "web_time_range": web_time_range,
         "web_custom_presets": web_custom_presets,
+        "budget_timeout_sec": budget_timeout_sec,
+        "budget_max_tool_calls": budget_max_tool_calls,
+        "budget_max_external_calls": budget_max_external_calls,
+        "budget_on_limit": budget_on_limit,
         "memory_enabled": memory_enabled,
         "context_summary_enabled": context_summary_enabled,
         "project_read_only": project_read_only,
@@ -10476,6 +10549,31 @@ def _compose_intake_request_text(*, message: str, project: Dict[str, Any], optio
             else:
                 base = f"{base}\n\nConversation context summary:\n{summary}"
     return base, memory_injected
+
+
+def _apply_runtime_budget_to_request_payload(*, request_payload: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(request_payload)
+    existing_budget = payload.get("budget")
+    budget = dict(existing_budget) if isinstance(existing_budget, dict) else {}
+    timeout_sec = _as_int(options.get("budget_timeout_sec"), 0)
+    timeout_sec = max(0, min(timeout_sec, 604800))
+    max_tool_calls = _as_int(options.get("budget_max_tool_calls"), 0)
+    max_tool_calls = max(0, min(max_tool_calls, 10000))
+    max_external_calls = _as_int(options.get("budget_max_external_calls"), 0)
+    max_external_calls = max(0, min(max_external_calls, 10000))
+    on_limit_raw = str(options.get("budget_on_limit") or "").strip().lower()
+    on_limit = on_limit_raw if on_limit_raw in {"fail", "need_approval"} else ""
+    if timeout_sec > 0:
+        budget["timeout_sec"] = timeout_sec
+    if max_tool_calls > 0:
+        budget["max_tool_calls"] = max_tool_calls
+    if max_external_calls > 0:
+        budget["max_external_calls"] = max_external_calls
+    if on_limit:
+        budget["on_limit"] = on_limit
+    if budget:
+        payload["budget"] = budget
+    return payload
 
 
 def _batch_export_entry_path(project_id: str, export_id: str) -> Path:
@@ -12699,6 +12797,7 @@ def _chat_run_pipeline(*, project: Dict[str, Any], message: str, new_task: bool)
         _append_message(project, role="assistant", content=f"request_from_task.json 解析失败: {request_path}", kind="assistant")
         project = _save_project_state(project)
         return {"status": "fail", "project": _project_summary(project), "messages": _recent_messages(project), "events": [{"stage": "request_load", "status": "fail"}]}
+    request_payload = _apply_runtime_budget_to_request_payload(request_payload=request_payload, options=options)
 
     run_result = _run_agent_run_json(payload=request_payload, planner_provider=planner, catalog_path=catalog)
     elapsed_ms = int((datetime.now() - started_at).total_seconds() * 1000)

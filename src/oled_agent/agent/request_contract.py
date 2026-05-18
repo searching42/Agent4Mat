@@ -817,6 +817,7 @@ def validate_evaluation_report_payload(payload: Dict[str, Any], workspace_root: 
     contract = default_contract_paths(workspace_root)
     schema = _load_json(contract.evaluation_report_schema)
     _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="evaluation_report")
+    _validate_evaluation_report_minimal(instance=payload, schema=schema)
     return payload
 
 
@@ -824,6 +825,7 @@ def validate_guardrails_report_payload(payload: Dict[str, Any], workspace_root: 
     contract = default_contract_paths(workspace_root)
     schema = _load_json(contract.guardrails_report_schema)
     _validate_via_jsonschema(instance=payload, schema=schema, contract_kind="guardrails_report")
+    _validate_guardrails_report_minimal(instance=payload, schema=schema)
     return payload
 
 

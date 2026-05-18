@@ -10203,6 +10203,33 @@ class UiPrototypeTests(unittest.TestCase):
                 hist_proj = hist.get("project") if isinstance(hist.get("project"), dict) else {}
                 self.assertIn("禁用 alert", str(hist_proj.get("memory_notes") or ""))
 
+    def test_ui_normalize_project_options_runtime_budget_fields(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        opts = ui_app_mod._normalize_project_options(
+            {
+                "budget_timeout_sec": "211",
+                "budget_max_tool_calls": "9",
+                "budget_max_external_calls": "4",
+                "budget_on_limit": "need_approval",
+            }
+        )
+        self.assertEqual(int(opts.get("budget_timeout_sec") or 0), 211)
+        self.assertEqual(int(opts.get("budget_max_tool_calls") or 0), 9)
+        self.assertEqual(int(opts.get("budget_max_external_calls") or 0), 4)
+        self.assertEqual(str(opts.get("budget_on_limit") or ""), "need_approval")
+        opts_invalid = ui_app_mod._normalize_project_options(
+            {
+                "budget_timeout_sec": -5,
+                "budget_max_tool_calls": "x",
+                "budget_max_external_calls": None,
+                "budget_on_limit": "unexpected",
+            }
+        )
+        self.assertEqual(int(opts_invalid.get("budget_timeout_sec") or 0), 0)
+        self.assertEqual(int(opts_invalid.get("budget_max_tool_calls") or 0), 0)
+        self.assertEqual(int(opts_invalid.get("budget_max_external_calls") or 0), 0)
+        self.assertEqual(str(opts_invalid.get("budget_on_limit") or ""), "")
+
     def test_ui_chat_send_injects_project_memory_into_intake_request_when_enabled(self) -> None:
         ui_app_mod = self._load_ui_module()
         with tempfile.TemporaryDirectory() as td:
@@ -10914,6 +10941,13 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("Open Task Summary", html)
         self.assertIn("Use + Run", html)
         self.assertIn("project_read_only", html)
+        self.assertIn("budget_timeout_sec", html)
+        self.assertIn("budget_max_tool_calls", html)
+        self.assertIn("budget_max_external_calls", html)
+        self.assertIn("budget_on_limit", html)
+        self.assertIn("budget_status", html)
+        self.assertIn("collectRuntimeBudgetPrefs()", html)
+        self.assertIn("updateBudgetStatus()", html)
         self.assertIn("updateProjectLockStatus()", html)
         self.assertIn("snapshot_note", html)
         self.assertIn("createProjectSnapshot()", html)
@@ -12520,7 +12554,21 @@ class UiPrototypeTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
-                with mock.patch("ui.app.subprocess.run", side_effect=[cp_intake, cp_approve, cp_run]) as mocked:
+                captured_run_payload: dict[str, object] = {}
+
+                def _subprocess_side_effect(cmd, **kwargs):
+                    if "agent-intake" in cmd:
+                        return cp_intake
+                    if "agent-approve" in cmd:
+                        return cp_approve
+                    if "agent-run-json" in cmd:
+                        req_idx = cmd.index("--request-json")
+                        req_path = Path(str(cmd[req_idx + 1]))
+                        captured_run_payload.update(json.loads(req_path.read_text(encoding="utf-8")))
+                        return cp_run
+                    raise AssertionError(f"unexpected subprocess command: {cmd}")
+
+                with mock.patch("ui.app.subprocess.run", side_effect=_subprocess_side_effect) as mocked:
                     resp = client.post(
                         "/api/chat/send",
                         json={
@@ -12531,6 +12579,10 @@ class UiPrototypeTests(unittest.TestCase):
                                 "catalog_path": "configs/models/catalog.json",
                                 "web_search_enabled": True,
                                 "web_topk": 4,
+                                "budget_timeout_sec": 210,
+                                "budget_max_tool_calls": 11,
+                                "budget_max_external_calls": 4,
+                                "budget_on_limit": "need_approval",
                             },
                         },
                     )
@@ -12553,6 +12605,18 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertTrue(len(event_msgs) >= 1)
                 meta_events = event_msgs[-1].get("meta", {}).get("events") if isinstance(event_msgs[-1].get("meta"), dict) else []
                 self.assertTrue(any(isinstance(e, dict) and str(e.get("stage") or "") == "run" for e in (meta_events if isinstance(meta_events, list) else [])))
+                run_budget = captured_run_payload.get("budget") if isinstance(captured_run_payload.get("budget"), dict) else {}
+                self.assertEqual(int(run_budget.get("max_candidates") or 0), 120)
+                self.assertEqual(int(run_budget.get("timeout_sec") or 0), 210)
+                self.assertEqual(int(run_budget.get("max_tool_calls") or 0), 11)
+                self.assertEqual(int(run_budget.get("max_external_calls") or 0), 4)
+                self.assertEqual(str(run_budget.get("on_limit") or ""), "need_approval")
+                proj = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                opts = proj.get("options") if isinstance(proj.get("options"), dict) else {}
+                self.assertEqual(int(opts.get("budget_timeout_sec") or 0), 210)
+                self.assertEqual(int(opts.get("budget_max_tool_calls") or 0), 11)
+                self.assertEqual(int(opts.get("budget_max_external_calls") or 0), 4)
+                self.assertEqual(str(opts.get("budget_on_limit") or ""), "need_approval")
                 self.assertEqual(mocked.call_count, 3)
 
     def test_ui_chat_send_step_command_runs_step_json(self) -> None:

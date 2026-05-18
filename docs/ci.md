@@ -32,6 +32,33 @@
   - manual `workflow_dispatch` gate with `run_external_acceptance=true`
   - runs `./scripts/run_external_chain_acceptance_with_debug.sh`
 
+## UI manual acceptance gates
+- workflow: `.github/workflows/agent4mat-ci.yml` (`workflow_dispatch`)
+- available inputs:
+  - `run_ui_freeze_acceptance=true`:
+    - runs `make ui-freeze-acceptance WORKSPACE_ROOT=.`
+    - uploads `runs/ci/ui_freeze_acceptance.json`
+    - publishes `UI Freeze Acceptance` summary
+  - `run_ui_audit_acceptance=true`:
+    - runs `make ui-audit-acceptance WORKSPACE_ROOT=.`
+    - uploads `runs/ci/ui_audit_acceptance.json`
+    - publishes `UI Audit Acceptance` summary
+  - `run_ui_release_readiness=true`:
+    - runs `make ui-release-readiness WORKSPACE_ROOT=.`
+    - uploads `runs/ci/ui_release_readiness.json` + `runs/ci/ui_release_readiness.md`
+    - publishes `UI Release Readiness` summary
+  - `run_ui_acceptance_bundle=true`:
+    - unified one-click entry for all three UI jobs (`freeze + audit + release-readiness`)
+    - also runs `ui-acceptance-bundle-summary` job to print per-job status aggregation
+
+### Bundle behavior
+- if `run_ui_acceptance_bundle=true`, all three UI jobs are triggered even when single-job inputs are `false`
+- you can still run any single UI job by toggling its own input only
+- bundle summary job prints:
+  - `ui-freeze-acceptance` result
+  - `ui-audit-acceptance` result
+  - `ui-release-readiness` result
+
 ## Real adapter contract smoke
 - `make real-adapter-validate` exercises adapter shells in smoke mode, plus:
   - REINVENT4 real-mode logic through a local stub pipeline

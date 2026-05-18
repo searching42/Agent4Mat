@@ -479,6 +479,12 @@ make input-smoke
 - optional real-chain minimal acceptance:
   - only runs on `workflow_dispatch` with input `run_real_chain_acceptance=true`
   - runs `make real-chain-acceptance` and uploads run artifacts
+- optional UI acceptance gates (manual):
+  - `run_ui_freeze_acceptance=true`: run `ui-freeze-acceptance`
+  - `run_ui_audit_acceptance=true`: run `ui-audit-acceptance`
+  - `run_ui_release_readiness=true`: run `ui-release-readiness`
+  - `run_ui_acceptance_bundle=true`: run the full UI bundle (`freeze + audit + release-readiness`) and publish a bundle summary
+  - each UI job uploads `runs/ci/*` artifacts and publishes a step summary in Actions
 - production non-stub acceptance:
   - see `docs/real_chain_acceptance_real.md` and run manually in real runtime environment
 

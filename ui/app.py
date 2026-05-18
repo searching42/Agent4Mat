@@ -7490,11 +7490,15 @@ HTML = """
         const draftEle = document.getElementById('simple_new_project_id');
         const pid = String((draftEle && draftEle.value) || '').trim();
         if (!pid) {
-          renderJsonOut({status: 'fail', error: 'empty project_id'});
+          renderSimpleHubError('empty project_id', '请填写 project_id，例如 oled_470_v2。');
           return;
         }
         if (!isSafeProjectId(pid)) {
-          renderJsonOut({status: 'fail', error: 'invalid project_id', project_id: pid});
+          renderSimpleHubError(
+            'invalid project_id',
+            'project_id 仅允许字母/数字/._-，并且需以字母或数字开头。',
+            {project_id: pid},
+          );
           return;
         }
         document.getElementById('project_id').value = pid;
@@ -8304,6 +8308,23 @@ HTML = """
         }
       }
 
+      function renderSimpleHubError(error, hint, extra) {
+        const payload = {
+          status: 'fail',
+          source: 'simple_input_hub',
+          error: String(error || 'unknown_error'),
+          hint: String(hint || '').trim(),
+        };
+        if (extra && typeof extra === 'object') {
+          for (const [k, v] of Object.entries(extra)) {
+            payload[k] = v;
+          }
+        }
+        renderJsonOut(payload);
+        const msg = payload.hint || payload.error;
+        setQuickCandidateStatus(`simple hub: ${msg}`, 'fail');
+      }
+
       function syncSimpleInputHubFromMain() {
         const mainPath = document.getElementById('attachment_path');
         const simplePath = document.getElementById('simple_attachment_path');
@@ -8419,18 +8440,33 @@ HTML = """
       }
 
       async function simpleAttachPath() {
+        const path = String((document.getElementById('simple_attachment_path').value || '')).trim();
+        if (!path) {
+          renderSimpleHubError('empty attachment_path', '请先填写本地文件路径，例如 /abs/path/candidates.csv');
+          return;
+        }
         syncMainFromSimpleInputHub(true);
         await attachPath();
         syncSimpleInputHubFromMain();
       }
 
       async function simpleSetCandidateDataFromPath() {
+        const path = String((document.getElementById('simple_attachment_path').value || '')).trim();
+        if (!path) {
+          renderSimpleHubError('empty attachment_path', '请先填写本地文件路径，再写入 candidate_data。');
+          return;
+        }
         syncMainFromSimpleInputHub(true);
         await setCandidateDataFromPath();
         syncSimpleInputHubFromMain();
       }
 
       async function simpleSetCandidateDataFromPathAndSend() {
+        const path = String((document.getElementById('simple_attachment_path').value || '')).trim();
+        if (!path) {
+          renderSimpleHubError('empty attachment_path', '请先填写本地文件路径，再执行 Use + Send。');
+          return;
+        }
         syncMainFromSimpleInputHub(true);
         const out = await setCandidateDataFromPathAndSend();
         syncSimpleInputHubFromMain();
@@ -8438,6 +8474,11 @@ HTML = """
       }
 
       async function simpleSendChat(newTask) {
+        const message = String((document.getElementById('message_input').value || '')).trim();
+        if (!message) {
+          renderSimpleHubError('empty message', '请先输入任务描述，或先使用 Use candidate_data 自动生成补丁消息。');
+          return;
+        }
         syncMainFromSimpleInputHub(true);
         const out = await sendChat(Boolean(newTask));
         syncSimpleInputHubFromMain();

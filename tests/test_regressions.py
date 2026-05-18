@@ -11142,6 +11142,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("simpleSetCandidateDataFromPath()", html)
         self.assertIn("simpleSetCandidateDataFromPathAndSend()", html)
         self.assertIn("simpleSendChat(false)", html)
+        self.assertIn("renderSimpleHubError(", html)
         self.assertIn("showCurrentTaskSummaryInline()", html)
         self.assertIn("focus_mode_btn", html)
         self.assertIn("focus_mode_state", html)
@@ -11408,6 +11409,40 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("/api/projects/${encodeURIComponent(sourceProjectId)}/clone", html)
         self.assertIn("/api/projects/${encodeURIComponent(pid)}/snapshots", html)
         self.assertIn("/api/projects/${encodeURIComponent(pid)}/snapshots/${encodeURIComponent(sid)}/restore", html)
+
+    def test_ui_simple_mode_visibility_contract_enforces_behavior_rules(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        css_contract_patterns = [
+            r"body\.output-simple-mode \.right-advanced\s*\{\s*display:\s*none !important;\s*\}",
+            r"body\.output-simple-mode \.panel\.left-drawer\s*\{\s*display:\s*none !important;\s*\}",
+            r"body\.output-simple-mode \.simple-only\s*\{\s*display:\s*flex !important;\s*\}",
+            r"body\.output-simple-mode #control_center_drawer,\s*"
+            r"body\.output-simple-mode #chat_timeline_panel_drawer,\s*"
+            r"body\.output-simple-mode #single_step_runner_drawer,\s*"
+            r"body\.output-simple-mode #artifacts_validation_drawer,\s*"
+            r"body\.output-simple-mode #file_input_drawer,\s*"
+            r"body\.output-simple-mode \.chat-quick-chips,\s*"
+            r"body\.output-simple-mode #prompt_history_box,\s*"
+            r"body\.output-simple-mode \.web-preset-row\s*\{\s*display:\s*none !important;\s*\}",
+        ]
+        for pat in css_contract_patterns:
+            self.assertRegex(html, re.compile(pat, re.S))
+
+        js_contract_patterns = [
+            r"function applyOutputViewMode\(mode\)\s*\{[\s\S]*?"
+            r"document\.body\.classList\.toggle\('output-simple-mode', next === 'simple'\);[\s\S]*?"
+            r"syncPrimaryUiModeSwitch\(next\);",
+            r"function syncPrimaryUiModeSwitch\(mode\)\s*\{[\s\S]*?"
+            r"simpleBtn\.classList\.toggle\('active', next === 'simple'\);[\s\S]*?"
+            r"advancedBtn\.classList\.toggle\('active', next === 'advanced'\);",
+            r"applyOutputViewMode\(String\(uiPrefs\.outputViewMode \|\| 'simple'\)\);",
+        ]
+        for pat in js_contract_patterns:
+            self.assertRegex(html, re.compile(pat, re.S))
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()

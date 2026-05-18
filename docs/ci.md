@@ -46,10 +46,12 @@
   - `run_ui_release_readiness=true`:
     - runs `make ui-release-readiness WORKSPACE_ROOT=.`
     - uploads `runs/ci/ui_release_readiness.json` + `runs/ci/ui_release_readiness.md`
+    - uploads dependency reports `runs/ci/ui_stability_smoke.json` + `runs/ci/ui_freeze_acceptance.json` + `runs/ci/ui_audit_acceptance.json`
     - publishes `UI Release Readiness` summary
   - `run_ui_acceptance_bundle=true`:
     - unified one-click entry for all three UI jobs (`freeze + audit + release-readiness`)
-    - also runs `ui-acceptance-bundle-summary` job to print per-job status aggregation
+    - also runs `ui-acceptance-bundle-summary` to build bundle verdict artifacts
+    - then runs `ui-acceptance-bundle-verify` to re-download and validate bundle artifact schema
 
 ### Bundle behavior
 - if `run_ui_acceptance_bundle=true`, all three UI jobs are triggered even when single-job inputs are `false`
@@ -58,6 +60,7 @@
   - `ui-freeze-acceptance` result
   - `ui-audit-acceptance` result
   - `ui-release-readiness` result
+  - `build_bundle_verdict_step` result
 
 ## Real adapter contract smoke
 - `make real-adapter-validate` exercises adapter shells in smoke mode, plus:

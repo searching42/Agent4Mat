@@ -576,6 +576,7 @@ jobs:
             runs/ci/ui_release_readiness.json
             runs/ci/ui_release_readiness.md
             runs/ci/ui_stability_smoke.json
+            runs/ci/ui_freeze_acceptance.json
             runs/ci/ui_audit_acceptance.json
           if-no-files-found: warn
 
@@ -640,7 +641,13 @@ jobs:
 
       - name: Build ui acceptance bundle verdict
         id: build_bundle_verdict
-        if: always()
+        if: >
+          always() &&
+          !(
+            needs['ui-freeze-acceptance'].result == 'skipped' &&
+            needs['ui-audit-acceptance'].result == 'skipped' &&
+            needs['ui-release-readiness'].result == 'skipped'
+          )
         continue-on-error: true
         run: |
           mkdir -p runs/ci
@@ -666,6 +673,10 @@ jobs:
           echo "- ui-release-readiness: ${{ needs['ui-release-readiness'].result }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- build_bundle_verdict_step: ${{ steps.build_bundle_verdict.outcome }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ needs['ui-freeze-acceptance'].result }}" = "skipped" ] && [ "${{ needs['ui-audit-acceptance'].result }}" = "skipped" ] && [ "${{ needs['ui-release-readiness'].result }}" = "skipped" ]; then
+            echo "- note: all upstream UI jobs were skipped; bundle verdict build was skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [ -f runs/ci/ui_acceptance_bundle_summary.md ]; then
             cat runs/ci/ui_acceptance_bundle_summary.md >> "$GITHUB_STEP_SUMMARY"
           elif [ -f runs/ci/ui_acceptance_bundle_summary.json ]; then

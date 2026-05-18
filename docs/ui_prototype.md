@@ -19,6 +19,7 @@ Open: `http://127.0.0.1:8787`
   - one-click bundle (`freeze + audit + release-readiness`) ↔ `run_ui_acceptance_bundle=true`
 - bundle summary:
   - when bundle or any UI manual gate is selected, workflow also runs `ui-acceptance-bundle-summary`
+  - workflow then runs `ui-acceptance-bundle-verify` to re-download and verify summary artifacts
   - summary prints the final result of:
     - `ui-freeze-acceptance`
     - `ui-audit-acceptance`
@@ -29,6 +30,8 @@ Open: `http://127.0.0.1:8787`
   - `ui_stability_smoke.json`
   - `ui_release_readiness.json`
   - `ui_release_readiness.md`
+  - `ui_acceptance_bundle_summary.json`
+  - `ui_acceptance_bundle_summary.md`
 - recommended manual release check order:
   - default path: run `run_ui_acceptance_bundle=true`
   - if bundle fails, re-run single gate inputs to isolate the failing stage

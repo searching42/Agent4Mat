@@ -7235,6 +7235,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("ui-release-readiness-artifacts", content)
         self.assertIn("runs/ci/ui_release_readiness.json", content)
         self.assertIn("runs/ci/ui_release_readiness.md", content)
+        self.assertIn("runs/ci/ui_freeze_acceptance.json", content)
         self.assertIn("Publish ui-release-readiness summary", content)
         self.assertIn("### UI Release Readiness", content)
 
@@ -7264,6 +7265,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("steps.build_bundle_verdict.outcome", content)
         self.assertIn("runs/ci/ui_acceptance_bundle_summary.json", content)
         self.assertIn("runs/ci/ui_acceptance_bundle_summary.md", content)
+        self.assertIn("all upstream UI jobs were skipped; bundle verdict build was skipped.", content)
         self.assertIn("Download ui acceptance bundle summary artifacts", content)
         self.assertIn("Verify ui acceptance bundle artifact schema", content)
         self.assertIn("verify_bundle_artifact_step", content)
@@ -7393,6 +7395,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("check_real_chain_release_bundle.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --require-tar-gz", content)
         self.assertIn("$(MAKE) ui-release-readiness WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("$(MAKE) ui-stability-smoke WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("check_ui_release_readiness.py --workspace-root \"$(WORKSPACE_ROOT)\" --require-freeze-report --require-audit-report", content)
         self.assertIn("--require-audit-report", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)

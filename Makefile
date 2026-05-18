@@ -173,7 +173,7 @@ ui-stability-smoke:
 
 ui-release-readiness:
 	@$(MAKE) ui-stability-smoke
-	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-audit-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
+	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-freeze-report --require-audit-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
 
 ui-acceptance-bundle:
 	@$(MAKE) ui-stability-smoke WORKSPACE_ROOT="$(WORKSPACE_ROOT)"

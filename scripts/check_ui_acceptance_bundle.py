@@ -96,6 +96,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ui-freeze-json", default="runs/ci/ui_freeze_acceptance.json")
     p.add_argument("--ui-audit-json", default="runs/ci/ui_audit_acceptance.json")
     p.add_argument("--ui-release-json", default="runs/ci/ui_release_readiness.json")
+    p.add_argument("--real-no-fallback-json", default="runs/ci/real_no_fallback_gate.json")
     p.add_argument("--out-json", default="runs/ci/ui_acceptance_bundle_summary.json")
     p.add_argument("--out-md", default="runs/ci/ui_acceptance_bundle_summary.md")
     return p.parse_args()
@@ -113,6 +114,7 @@ def main() -> int:
     freeze_path = _resolve_path(str(args.ui_freeze_json or ""), workspace_root)
     audit_path = _resolve_path(str(args.ui_audit_json or ""), workspace_root)
     release_path = _resolve_path(str(args.ui_release_json or ""), workspace_root)
+    real_no_fallback_path = _resolve_path(str(args.real_no_fallback_json or ""), workspace_root)
 
     def _check_component(name: str, path: Path) -> Optional[Dict[str, Any]]:
         payload: Optional[Dict[str, Any]] = None
@@ -153,6 +155,7 @@ def main() -> int:
     freeze_payload = _check_component("ui_freeze_acceptance", freeze_path)
     audit_payload = _check_component("ui_audit_acceptance", audit_path)
     release_payload = _check_component("ui_release_readiness", release_path)
+    real_no_fallback_payload = _check_component("real_no_fallback_gate", real_no_fallback_path)
 
     if isinstance(release_payload, dict):
         gate_rows = release_payload.get("gate_reports") if isinstance(release_payload.get("gate_reports"), list) else []
@@ -161,7 +164,7 @@ def main() -> int:
             for row in gate_rows
             if isinstance(row, dict) and str(row.get("name") or "").strip()
         }
-        for gate in ("ui_stability_smoke", "ui_freeze_acceptance", "ui_audit_acceptance"):
+        for gate in ("ui_stability_smoke", "ui_freeze_acceptance", "ui_audit_acceptance", "real_no_fallback_gate"):
             row = by_name.get(gate)
             if not isinstance(row, dict):
                 failures.append({"name": f"ui_release_readiness_gate_{gate}_exists", "message": "missing gate report"})
@@ -176,6 +179,15 @@ def main() -> int:
                         "message": f"status is not pass: {status or 'missing'}",
                     }
                 )
+
+    if isinstance(real_no_fallback_payload, dict):
+        if str(real_no_fallback_payload.get("check") or "").strip() != "require-real-adapters":
+            failures.append(
+                {
+                    "name": "real_no_fallback_gate_check",
+                    "message": "check field must be require-real-adapters",
+                }
+            )
 
     status = "pass" if not failures else "fail"
     report: Dict[str, Any] = {

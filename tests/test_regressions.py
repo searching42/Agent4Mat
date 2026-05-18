@@ -9251,7 +9251,15 @@ class PlanProgressAssetsTests(unittest.TestCase):
                     {"name": "ui_stability_smoke", "status": "pass"},
                     {"name": "ui_freeze_acceptance", "status": "pass"},
                     {"name": "ui_audit_acceptance", "status": "pass"},
+                    {"name": "real_no_fallback_gate", "status": "pass"},
                 ],
+            }
+            real_no_fallback_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 1,
+                "failed_count": 0,
+                "check": "require-real-adapters",
             }
             (ci_dir / "ui_freeze_acceptance.json").write_text(
                 json.dumps(freeze_payload, ensure_ascii=False, indent=2) + "\n",
@@ -9263,6 +9271,10 @@ class PlanProgressAssetsTests(unittest.TestCase):
             )
             (ci_dir / "ui_release_readiness.json").write_text(
                 json.dumps(release_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (ci_dir / "real_no_fallback_gate.json").write_text(
+                json.dumps(real_no_fallback_payload, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
             out_json = ci_dir / "ui_acceptance_bundle_summary.json"
@@ -9330,6 +9342,71 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(str(payload.get("status") or ""), "fail")
             failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
             self.assertTrue(any("ui_freeze_acceptance_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict)))
+
+    def test_check_ui_acceptance_bundle_script_missing_real_no_fallback_gate_fails(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            freeze_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 8,
+                "failed_count": 0,
+            }
+            audit_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 6,
+                "failed_count": 0,
+            }
+            # missing real_no_fallback_gate in gate_reports and as component
+            release_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 9,
+                "failure_count": 0,
+                "warning_count": 0,
+                "gate_reports": [
+                    {"name": "ui_stability_smoke", "status": "pass"},
+                    {"name": "ui_freeze_acceptance", "status": "pass"},
+                    {"name": "ui_audit_acceptance", "status": "pass"},
+                ],
+            }
+            (ci_dir / "ui_freeze_acceptance.json").write_text(
+                json.dumps(freeze_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (ci_dir / "ui_audit_acceptance.json").write_text(
+                json.dumps(audit_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (ci_dir / "ui_release_readiness.json").write_text(
+                json.dumps(release_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            script = repo_root / "scripts" / "check_ui_acceptance_bundle.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "fail")
+            failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
+            self.assertTrue(
+                any("real_no_fallback_gate_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict))
+            )
 
     def test_check_ui_acceptance_bundle_artifact_script_reports_pass(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

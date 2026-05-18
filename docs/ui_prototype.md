@@ -17,6 +17,7 @@ Open: `http://127.0.0.1:8787`
   - `make ui-audit-acceptance WORKSPACE_ROOT=.` ↔ `run_ui_audit_acceptance=true`
   - `make ui-release-readiness WORKSPACE_ROOT=.` ↔ `run_ui_release_readiness=true`
   - one-click bundle (`freeze + audit + release-readiness`) ↔ `run_ui_acceptance_bundle=true`
+  - local verify-only (`make ui-acceptance-bundle-verify-local WORKSPACE_ROOT=.`) checks bundle artifact schema
 - bundle summary:
   - when bundle or any UI manual gate is selected, workflow also runs `ui-acceptance-bundle-summary`
   - workflow then runs `ui-acceptance-bundle-verify` to re-download and verify summary artifacts
@@ -32,6 +33,7 @@ Open: `http://127.0.0.1:8787`
   - `ui_release_readiness.md`
   - `ui_acceptance_bundle_summary.json`
   - `ui_acceptance_bundle_summary.md`
+  - `ui_acceptance_bundle_artifact_verify.json`
 - recommended manual release check order:
   - default path: run `run_ui_acceptance_bundle=true`
   - if bundle fails, re-run single gate inputs to isolate the failing stage

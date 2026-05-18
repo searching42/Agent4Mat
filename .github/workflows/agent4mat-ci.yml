@@ -716,44 +716,15 @@ jobs:
         id: verify_bundle_artifact
         if: always() && needs['ui-acceptance-bundle-summary'].result != 'skipped'
         run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
+          python scripts/check_ui_acceptance_bundle_artifact.py --workspace-root . --summary-json runs/ci/ui_acceptance_bundle_summary.json --summary-md runs/ci/ui_acceptance_bundle_summary.md --out-json runs/ci/ui_acceptance_bundle_artifact_verify.json
 
-          json_path = Path("runs/ci/ui_acceptance_bundle_summary.json")
-          md_path = Path("runs/ci/ui_acceptance_bundle_summary.md")
-          if not json_path.exists():
-              raise SystemExit(f"missing summary json artifact: {json_path}")
-          if not md_path.exists():
-              raise SystemExit(f"missing summary markdown artifact: {md_path}")
-
-          payload = json.loads(json_path.read_text(encoding="utf-8"))
-          if not isinstance(payload, dict):
-              raise SystemExit("summary json must be an object")
-          required = [
-              "status",
-              "generated_at",
-              "components",
-              "checks",
-              "failures",
-              "check_count",
-              "failure_count",
-          ]
-          missing = [k for k in required if k not in payload]
-          if missing:
-              raise SystemExit(f"missing summary keys: {missing}")
-          if payload.get("status") not in {"pass", "fail"}:
-              raise SystemExit(f"unexpected summary status: {payload.get('status')!r}")
-          if not isinstance(payload.get("components"), list):
-              raise SystemExit("components must be a list")
-          if not isinstance(payload.get("checks"), list):
-              raise SystemExit("checks must be a list")
-          if not isinstance(payload.get("failures"), list):
-              raise SystemExit("failures must be a list")
-          if not str(md_path.read_text(encoding="utf-8")).strip():
-              raise SystemExit("summary markdown is empty")
-          print("ui acceptance bundle summary artifact schema: PASS")
-          PY
+      - name: Upload ui acceptance bundle verify artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-acceptance-bundle-verify-artifacts
+          path: runs/ci/ui_acceptance_bundle_artifact_verify.json
+          if-no-files-found: warn
 
       - name: Publish ui acceptance bundle verify summary
         if: always()
@@ -762,3 +733,18 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- ui-acceptance-bundle-summary: ${{ needs['ui-acceptance-bundle-summary'].result }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- verify_bundle_artifact_step: ${{ steps.verify_bundle_artifact.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f runs/ci/ui_acceptance_bundle_artifact_verify.json ]; then
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+            import json
+            from pathlib import Path
+
+            path = Path("runs/ci/ui_acceptance_bundle_artifact_verify.json")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            print("- verify_status: `{}`".format(payload.get("status")))
+            print("- summary_status: `{}`".format(payload.get("summary_status")))
+            print("- summary_check_count: `{}`".format(payload.get("summary_check_count")))
+            print("- summary_failure_count: `{}`".format(payload.get("summary_failure_count")))
+            PY
+          else
+            echo "- verify artifact json missing" >> "$GITHUB_STEP_SUMMARY"
+          fi

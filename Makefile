@@ -6,7 +6,7 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke experiment-summary
-.PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard resume-idempotence-guard real-no-fallback-gate ui-freeze-acceptance ui-audit-acceptance ui-acceptance-bundle
+.PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard resume-idempotence-guard real-no-fallback-gate ui-freeze-acceptance ui-audit-acceptance ui-acceptance-bundle ui-acceptance-bundle-verify-local
 .PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run ui-stability-smoke ui-release-readiness
 .PHONY: acceptance-local
 
@@ -31,6 +31,7 @@ help:
 	@echo "  make ui-freeze-acceptance - run frozen UI acceptance chain checks + baseline contract"
 	@echo "  make ui-audit-acceptance - run targeted UI audit-link acceptance checks + baseline contract"
 	@echo "  make ui-acceptance-bundle - run freeze+audit+release-readiness and emit bundle verdict"
+	@echo "  make ui-acceptance-bundle-verify-local - verify local ui bundle summary artifacts schema"
 	@echo "  make real-chain-acceptance - run minimal real-chain acceptance with local stubs"
 	@echo "  make real-chain-acceptance-real - run non-stub real-chain acceptance (requires real env)"
 	@echo "  make real-chain-baseline   - run strict real-chain acceptance repeatedly (default x3)"
@@ -179,6 +180,9 @@ ui-acceptance-bundle:
 	@$(MAKE) ui-stability-smoke WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-freeze-report --require-audit-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_acceptance_bundle.py --workspace-root "$(WORKSPACE_ROOT)" --out-json "runs/ci/ui_acceptance_bundle_summary.json" --out-md "runs/ci/ui_acceptance_bundle_summary.md"
+
+ui-acceptance-bundle-verify-local:
+	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_acceptance_bundle_artifact.py --workspace-root "$(WORKSPACE_ROOT)" --summary-json "runs/ci/ui_acceptance_bundle_summary.json" --summary-md "runs/ci/ui_acceptance_bundle_summary.md" --out-json "runs/ci/ui_acceptance_bundle_artifact_verify.json"
 
 ui-run:
 	@$(PYTHONPATH_ENV) $(PYTHON) ui/app.py

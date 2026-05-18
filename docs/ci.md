@@ -52,6 +52,7 @@
     - unified one-click entry for all three UI jobs (`freeze + audit + release-readiness`)
     - also runs `ui-acceptance-bundle-summary` to build bundle verdict artifacts
     - then runs `ui-acceptance-bundle-verify` to re-download and validate bundle artifact schema
+    - uploads verify artifact `runs/ci/ui_acceptance_bundle_artifact_verify.json`
 
 ### Bundle behavior
 - if `run_ui_acceptance_bundle=true`, all three UI jobs are triggered even when single-job inputs are `false`
@@ -61,6 +62,11 @@
   - `ui-audit-acceptance` result
   - `ui-release-readiness` result
   - `build_bundle_verdict_step` result
+- bundle verify job prints:
+  - `verify_status`
+  - `summary_status`
+  - `summary_check_count`
+  - `summary_failure_count`
 
 ## Real adapter contract smoke
 - `make real-adapter-validate` exercises adapter shells in smoke mode, plus:

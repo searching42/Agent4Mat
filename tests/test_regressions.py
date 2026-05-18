@@ -7254,6 +7254,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("Download ui-release-readiness artifacts", content)
         self.assertIn("actions/download-artifact@v4", content)
         self.assertIn("Build ui acceptance bundle verdict", content)
+        self.assertIn("continue-on-error: true", content)
         self.assertIn("python scripts/check_ui_acceptance_bundle.py", content)
         self.assertIn("Upload ui acceptance bundle summary artifacts", content)
         self.assertIn("ui-acceptance-bundle-summary-artifacts", content)
@@ -7268,9 +7269,25 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("all upstream UI jobs were skipped; bundle verdict build was skipped.", content)
         self.assertIn("Download ui acceptance bundle summary artifacts", content)
         self.assertIn("Verify ui acceptance bundle artifact schema", content)
+        self.assertIn("scripts/check_ui_acceptance_bundle_artifact.py", content)
+        self.assertIn("Upload ui acceptance bundle verify artifacts", content)
+        self.assertIn("ui-acceptance-bundle-verify-artifacts", content)
         self.assertIn("verify_bundle_artifact_step", content)
-        self.assertIn("ui acceptance bundle summary artifact schema: PASS", content)
+        self.assertIn("summary_check_count", content)
+        self.assertIn("summary_failure_count", content)
+        self.assertIn("verify artifact json missing", content)
         self.assertIn("UI Acceptance Bundle Verify", content)
+
+    def test_oled_agent_ci_ui_bundle_summary_build_step_is_continue_on_error(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        section = self._extract_job_block(content, "ui-acceptance-bundle-summary")
+        self.assertIn("Build ui acceptance bundle verdict", section)
+        self.assertIn("id: build_bundle_verdict", section)
+        self.assertIn("continue-on-error: true", section)
+        self.assertIn("if: >", section)
+        self.assertIn("needs['ui-freeze-acceptance'].result == 'skipped'", section)
 
     def test_oled_agent_ci_ui_manual_jobs_support_bundle_trigger(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -7366,6 +7383,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("ui-freeze-acceptance:", content)
         self.assertIn("ui-audit-acceptance:", content)
         self.assertIn("ui-acceptance-bundle:", content)
+        self.assertIn("ui-acceptance-bundle-verify-local:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("ui-stability-smoke:", content)
         self.assertIn("ui-release-readiness:", content)
@@ -7376,12 +7394,14 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/check_ui_audit_acceptance.py", content)
         self.assertIn("scripts/check_ui_release_readiness.py", content)
         self.assertIn("scripts/check_ui_acceptance_bundle.py", content)
+        self.assertIn("scripts/check_ui_acceptance_bundle_artifact.py", content)
         self.assertIn("runs/ci/ui_stability_smoke.json", content)
         self.assertIn("runs/ci/ui_audit_acceptance.json", content)
         self.assertIn("runs/ci/ui_release_readiness.json", content)
         self.assertIn("runs/ci/ui_release_readiness.md", content)
         self.assertIn("runs/ci/ui_acceptance_bundle_summary.json", content)
         self.assertIn("runs/ci/ui_acceptance_bundle_summary.md", content)
+        self.assertIn("runs/ci/ui_acceptance_bundle_artifact_verify.json", content)
         self.assertIn("configs/acceptance/ui_freeze_acceptance_baseline.json", content)
         self.assertIn("configs/acceptance/ui_audit_acceptance_baseline.json", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
@@ -7435,6 +7455,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "check_ui_audit_acceptance.py",
             repo_root / "scripts" / "check_ui_release_readiness.py",
             repo_root / "scripts" / "check_ui_acceptance_bundle.py",
+            repo_root / "scripts" / "check_ui_acceptance_bundle_artifact.py",
             repo_root / "scripts" / "summarize_experiments.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
@@ -8939,6 +8960,96 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(str(payload.get("status") or ""), "fail")
             failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
             self.assertTrue(any("ui_freeze_acceptance_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict)))
+
+    def test_check_ui_acceptance_bundle_artifact_script_reports_pass(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            summary_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "components": [],
+                "checks": [{"name": "sample", "message": "ok"}],
+                "failures": [],
+                "check_count": 1,
+                "failure_count": 0,
+            }
+            (ci_dir / "ui_acceptance_bundle_summary.json").write_text(
+                json.dumps(summary_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (ci_dir / "ui_acceptance_bundle_summary.md").write_text(
+                "# UI Acceptance Bundle Summary\n\n- status: pass\n",
+                encoding="utf-8",
+            )
+
+            script = repo_root / "scripts" / "check_ui_acceptance_bundle_artifact.py"
+            out_json = ci_dir / "ui_acceptance_bundle_artifact_verify.json"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--out-json",
+                    str(out_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "pass")
+            self.assertEqual(str(payload.get("summary_status") or ""), "pass")
+            self.assertEqual(int(payload.get("summary_failure_count", -1)), 0)
+            self.assertTrue(out_json.exists())
+
+    def test_check_ui_acceptance_bundle_artifact_script_missing_markdown_fails(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            summary_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "components": [],
+                "checks": [],
+                "failures": [],
+                "check_count": 0,
+                "failure_count": 0,
+            }
+            (ci_dir / "ui_acceptance_bundle_summary.json").write_text(
+                json.dumps(summary_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            script = repo_root / "scripts" / "check_ui_acceptance_bundle_artifact.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "fail")
+            failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
+            self.assertTrue(
+                any("summary_md_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict))
+            )
 
 
 class ModelCatalogTests(unittest.TestCase):

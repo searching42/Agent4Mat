@@ -4226,6 +4226,7 @@ HTML = """
           run_stability_smoke: true,
           max_age_hours: 72,
           require_freeze_report: false,
+          require_audit_report: true,
         });
         if (showOutput) {
           renderJsonOut(r.data);
@@ -8591,7 +8592,13 @@ def _ui_release_readiness_snapshot() -> Dict[str, Any]:
     }
 
 
-def _run_ui_release_readiness_refresh(*, run_stability_smoke: bool, max_age_hours: int, require_freeze_report: bool) -> Dict[str, Any]:
+def _run_ui_release_readiness_refresh(
+    *,
+    run_stability_smoke: bool,
+    max_age_hours: int,
+    require_freeze_report: bool,
+    require_audit_report: bool,
+) -> Dict[str, Any]:
     commands: List[Dict[str, Any]] = []
     env = dict(os.environ)
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
@@ -8626,6 +8633,8 @@ def _run_ui_release_readiness_refresh(*, run_stability_smoke: bool, max_age_hour
     ]
     if require_freeze_report:
         cmd_ready.append("--require-freeze-report")
+    if require_audit_report:
+        cmd_ready.append("--require-audit-report")
     cp_ready = subprocess.run(cmd_ready, cwd=REPO_ROOT, capture_output=True, text=True, check=False, env=env)
     commands.append(
         {
@@ -8648,6 +8657,7 @@ def _run_ui_release_readiness_refresh(*, run_stability_smoke: bool, max_age_hour
         "run_stability_smoke": bool(run_stability_smoke),
         "max_age_hours": int(max(0, int(max_age_hours))),
         "require_freeze_report": bool(require_freeze_report),
+        "require_audit_report": bool(require_audit_report),
         "returncode": overall_rc,
         "commands": commands,
         **snapshot,
@@ -12450,10 +12460,12 @@ def api_release_readiness_refresh():
     run_stability = bool(body.get("run_stability_smoke", True))
     max_age_hours = _as_int(body.get("max_age_hours"), 72)
     require_freeze = bool(body.get("require_freeze_report", False))
+    require_audit = bool(body.get("require_audit_report", True))
     result = _run_ui_release_readiness_refresh(
         run_stability_smoke=run_stability,
         max_age_hours=max_age_hours,
         require_freeze_report=require_freeze,
+        require_audit_report=require_audit,
     )
     return jsonify(result)
 

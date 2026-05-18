@@ -7312,6 +7312,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("archive_real_chain_baseline.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --tar-gz", content)
         self.assertIn("check_real_chain_release_bundle.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --require-tar-gz", content)
         self.assertIn("$(MAKE) ui-release-readiness WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("--require-audit-report", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
         self.assertIn("experiment-summary:", content)
@@ -8614,6 +8615,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             ci_dir.mkdir(parents=True, exist_ok=True)
             stability_path = ci_dir / "ui_stability_smoke.json"
             freeze_path = ci_dir / "ui_freeze_acceptance.json"
+            audit_path = ci_dir / "ui_audit_acceptance.json"
             now = datetime.now(timezone.utc).isoformat()
             payload = {
                 "status": "pass",
@@ -8623,6 +8625,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             }
             stability_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             freeze_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            audit_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
             out_json = ci_dir / "ui_release_readiness.json"
             out_md = ci_dir / "ui_release_readiness.md"
@@ -8634,6 +8637,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
                     "--workspace-root",
                     str(td_path),
                     "--require-freeze-report",
+                    "--require-audit-report",
                     "--max-age-hours",
                     "24",
                     "--out-json",
@@ -8665,8 +8669,18 @@ class PlanProgressAssetsTests(unittest.TestCase):
                 "check_count": 8,
                 "failed_count": 0,
             }
+            fresh_payload = {
+                "status": "pass",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "check_count": 6,
+                "failed_count": 0,
+            }
             (ci_dir / "ui_stability_smoke.json").write_text(
                 json.dumps(stale_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (ci_dir / "ui_audit_acceptance.json").write_text(
+                json.dumps(fresh_payload, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
 
@@ -8677,6 +8691,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
                     str(script),
                     "--workspace-root",
                     str(td_path),
+                    "--require-audit-report",
                     "--max-age-hours",
                     "1",
                 ],
@@ -8690,6 +8705,46 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(str(report.get("status") or ""), "fail")
             failures = report.get("failures") if isinstance(report.get("failures"), list) else []
             self.assertTrue(any("freshness" in str(item.get("name") or "") for item in failures if isinstance(item, dict)))
+
+    def test_check_ui_release_readiness_script_require_audit_report_missing_fails(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 8,
+                "failed_count": 0,
+            }
+            (ci_dir / "ui_stability_smoke.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            script = repo_root / "scripts" / "check_ui_release_readiness.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--require-audit-report",
+                    "--max-age-hours",
+                    "24",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            report = json.loads(cp.stdout)
+            self.assertEqual(str(report.get("status") or ""), "fail")
+            failures = report.get("failures") if isinstance(report.get("failures"), list) else []
+            self.assertTrue(any("ui_audit_report_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict)))
 
 
 class ModelCatalogTests(unittest.TestCase):
@@ -9344,12 +9399,18 @@ class UiPrototypeTests(unittest.TestCase):
                 with mock.patch("ui.app.subprocess.run", side_effect=cps) as mocked:
                     resp = client.post(
                         "/api/release/readiness/refresh",
-                        json={"run_stability_smoke": True, "max_age_hours": 48, "require_freeze_report": False},
+                        json={
+                            "run_stability_smoke": True,
+                            "max_age_hours": 48,
+                            "require_freeze_report": False,
+                            "require_audit_report": True,
+                        },
                     )
                 self.assertEqual(resp.status_code, 200)
                 payload = resp.get_json()
                 self.assertEqual(str(payload.get("status") or ""), "pass")
                 self.assertEqual(int(payload.get("returncode", -1)), 0)
+                self.assertEqual(bool(payload.get("require_audit_report")), True)
                 commands = payload.get("commands") if isinstance(payload.get("commands"), list) else []
                 self.assertEqual(len(commands), 2)
                 self.assertEqual(str(commands[0].get("name") or ""), "ui-stability-smoke")
@@ -9359,6 +9420,7 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertEqual(first_cmd[0], "make")
                 self.assertIn("ui-stability-smoke", first_cmd)
                 self.assertTrue(any("check_ui_release_readiness.py" in str(item) for item in second_cmd))
+                self.assertIn("--require-audit-report", second_cmd)
                 self.assertEqual(mocked.call_count, 2)
 
     def test_ui_projects_create_history_and_upload_ref(self) -> None:

@@ -122,6 +122,7 @@ def _build_markdown(report: Dict[str, Any]) -> str:
     lines.append(f"- max_age_hours: `{report.get('max_age_hours')}`")
     lines.append(f"- require_freeze_report: `{report.get('require_freeze_report')}`")
     lines.append(f"- require_audit_report: `{report.get('require_audit_report')}`")
+    lines.append(f"- require_real_no_fallback_report: `{report.get('require_real_no_fallback_report')}`")
     lines.append("")
 
     gate_rows = report.get("gate_reports") if isinstance(report.get("gate_reports"), list) else []
@@ -176,8 +177,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ui-stability-json", default="runs/ci/ui_stability_smoke.json", help="Path to ui_stability_smoke.json")
     p.add_argument("--ui-freeze-json", default="runs/ci/ui_freeze_acceptance.json", help="Path to ui_freeze_acceptance.json")
     p.add_argument("--ui-audit-json", default="runs/ci/ui_audit_acceptance.json", help="Path to ui_audit_acceptance.json")
+    p.add_argument(
+        "--real-no-fallback-json",
+        default="runs/ci/real_no_fallback_gate.json",
+        help="Path to real_no_fallback_gate.json",
+    )
     p.add_argument("--require-freeze-report", action="store_true", help="Require ui_freeze_acceptance.json to exist and pass")
     p.add_argument("--require-audit-report", action="store_true", help="Require ui_audit_acceptance.json to exist and pass")
+    p.add_argument(
+        "--require-real-no-fallback-report",
+        action="store_true",
+        help="Require real_no_fallback_gate.json to exist and pass",
+    )
     p.add_argument("--max-age-hours", type=int, default=72, help="Max allowed report age in hours; <=0 disables age check")
     p.add_argument("--out-json", default="runs/ci/ui_release_readiness.json", help="Output JSON report path")
     p.add_argument("--out-md", default="runs/ci/ui_release_readiness.md", help="Output markdown report path")
@@ -197,6 +208,7 @@ def main() -> int:
     stability_path = _resolve_path(str(args.ui_stability_json or ""), workspace_root)
     freeze_path = _resolve_path(str(args.ui_freeze_json or ""), workspace_root)
     audit_path = _resolve_path(str(args.ui_audit_json or ""), workspace_root)
+    real_no_fallback_path = _resolve_path(str(args.real_no_fallback_json or ""), workspace_root)
 
     if not stability_path.exists():
         failures.append({"name": "ui_stability_report_exists", "message": f"missing report: {stability_path}"})
@@ -268,6 +280,33 @@ def main() -> int:
     else:
         warnings.append({"name": "ui_audit_report_exists", "message": f"optional report missing: {audit_path}"})
 
+    if real_no_fallback_path.exists():
+        try:
+            real_payload = _load_json(real_no_fallback_path)
+            gate = _check_gate_report(
+                name="real_no_fallback_gate",
+                path=real_no_fallback_path,
+                payload=real_payload,
+                now_utc=now_utc,
+                max_age_hours=int(args.max_age_hours),
+                required=bool(args.require_real_no_fallback_report),
+            )
+            gate_reports.append(gate)
+            checks.extend(gate["checks"])
+            failures.extend(gate["failures"])
+            warnings.extend(gate["warnings"])
+        except Exception as exc:
+            if args.require_real_no_fallback_report:
+                failures.append({"name": "real_no_fallback_report_parse", "message": f"{real_no_fallback_path}: {exc}"})
+            else:
+                warnings.append({"name": "real_no_fallback_report_parse", "message": f"{real_no_fallback_path}: {exc}"})
+    elif args.require_real_no_fallback_report:
+        failures.append({"name": "real_no_fallback_report_exists", "message": f"missing report: {real_no_fallback_path}"})
+    else:
+        warnings.append(
+            {"name": "real_no_fallback_report_exists", "message": f"optional report missing: {real_no_fallback_path}"}
+        )
+
     status = "pass" if not failures else "fail"
     report: Dict[str, Any] = {
         "status": status,
@@ -276,6 +315,7 @@ def main() -> int:
         "max_age_hours": int(args.max_age_hours),
         "require_freeze_report": bool(args.require_freeze_report),
         "require_audit_report": bool(args.require_audit_report),
+        "require_real_no_fallback_report": bool(args.require_real_no_fallback_report),
         "gate_reports": gate_reports,
         "checks": checks,
         "warnings": warnings,

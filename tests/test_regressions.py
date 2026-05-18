@@ -7715,7 +7715,9 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("check_real_chain_release_bundle.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --require-tar-gz", content)
         self.assertIn("$(MAKE) ui-release-readiness WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("$(MAKE) ui-stability-smoke WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("$(MAKE) real-no-fallback-gate WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("check_ui_release_readiness.py --workspace-root \"$(WORKSPACE_ROOT)\" --require-freeze-report --require-audit-report", content)
+        self.assertIn("--require-real-no-fallback-report", content)
         self.assertIn("--require-audit-report", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
@@ -9023,6 +9025,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             stability_path = ci_dir / "ui_stability_smoke.json"
             freeze_path = ci_dir / "ui_freeze_acceptance.json"
             audit_path = ci_dir / "ui_audit_acceptance.json"
+            real_no_fallback_path = ci_dir / "real_no_fallback_gate.json"
             now = datetime.now(timezone.utc).isoformat()
             payload = {
                 "status": "pass",
@@ -9033,6 +9036,21 @@ class PlanProgressAssetsTests(unittest.TestCase):
             stability_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             freeze_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             audit_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            real_no_fallback_path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "generated_at": now,
+                        "check_count": 1,
+                        "failed_count": 0,
+                        "check": "require-real-adapters",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             out_json = ci_dir / "ui_release_readiness.json"
             out_md = ci_dir / "ui_release_readiness.md"
@@ -9045,6 +9063,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
                     str(td_path),
                     "--require-freeze-report",
                     "--require-audit-report",
+                    "--require-real-no-fallback-report",
                     "--max-age-hours",
                     "24",
                     "--out-json",
@@ -9061,6 +9080,9 @@ class PlanProgressAssetsTests(unittest.TestCase):
             report = json.loads(cp.stdout)
             self.assertEqual(str(report.get("status") or ""), "pass")
             self.assertEqual(int(report.get("failure_count", -1)), 0)
+            gate_rows = report.get("gate_reports") if isinstance(report.get("gate_reports"), list) else []
+            gate_names = {str(row.get("name") or "") for row in gate_rows if isinstance(row, dict)}
+            self.assertIn("real_no_fallback_gate", gate_names)
             self.assertTrue(out_json.exists())
             self.assertTrue(out_md.exists())
 
@@ -9152,6 +9174,53 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(str(report.get("status") or ""), "fail")
             failures = report.get("failures") if isinstance(report.get("failures"), list) else []
             self.assertTrue(any("ui_audit_report_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict)))
+
+    def test_check_ui_release_readiness_script_require_real_no_fallback_missing_fails(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 8,
+                "failed_count": 0,
+            }
+            (ci_dir / "ui_stability_smoke.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (ci_dir / "ui_audit_acceptance.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            script = repo_root / "scripts" / "check_ui_release_readiness.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--require-audit-report",
+                    "--require-real-no-fallback-report",
+                    "--max-age-hours",
+                    "24",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            report = json.loads(cp.stdout)
+            self.assertEqual(str(report.get("status") or ""), "fail")
+            failures = report.get("failures") if isinstance(report.get("failures"), list) else []
+            self.assertTrue(
+                any("real_no_fallback_report_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict))
+            )
 
     def test_check_ui_acceptance_bundle_script_reports_pass(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -10034,6 +10103,69 @@ class UiPrototypeTests(unittest.TestCase):
                 self.assertTrue(any("check_ui_release_readiness.py" in str(item) for item in second_cmd))
                 self.assertIn("--require-audit-report", second_cmd)
                 self.assertEqual(mocked.call_count, 2)
+
+    def test_ui_release_readiness_refresh_endpoint_runs_real_no_fallback_gate_when_enabled(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                ci_dir = root / "runs" / "ci"
+                ci_dir.mkdir(parents=True, exist_ok=True)
+                (ci_dir / "ui_release_readiness.json").write_text(
+                    json.dumps(
+                        {
+                            "status": "pass",
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                            "check_count": 8,
+                            "warning_count": 0,
+                            "failure_count": 0,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                (ci_dir / "ui_release_readiness.md").write_text("# ready\n", encoding="utf-8")
+                cps = [
+                    subprocess.CompletedProcess(args=["make", "ui-stability-smoke"], returncode=0, stdout="ok", stderr=""),
+                    subprocess.CompletedProcess(args=["make", "real-no-fallback-gate"], returncode=0, stdout="ok", stderr=""),
+                    subprocess.CompletedProcess(args=["python3", "scripts/check_ui_release_readiness.py"], returncode=0, stdout="{}", stderr=""),
+                ]
+                with mock.patch("ui.app.subprocess.run", side_effect=cps) as mocked:
+                    resp = client.post(
+                        "/api/release/readiness/refresh",
+                        json={
+                            "run_stability_smoke": True,
+                            "run_real_no_fallback_gate": True,
+                            "max_age_hours": 48,
+                            "require_freeze_report": False,
+                            "require_audit_report": True,
+                            "require_real_no_fallback_report": True,
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(str(payload.get("status") or ""), "pass")
+                self.assertEqual(int(payload.get("returncode", -1)), 0)
+                self.assertEqual(bool(payload.get("run_real_no_fallback_gate")), True)
+                self.assertEqual(bool(payload.get("require_real_no_fallback_report")), True)
+                commands = payload.get("commands") if isinstance(payload.get("commands"), list) else []
+                self.assertEqual(len(commands), 3)
+                self.assertEqual(str(commands[0].get("name") or ""), "ui-stability-smoke")
+                self.assertEqual(str(commands[1].get("name") or ""), "real-no-fallback-gate")
+                self.assertEqual(str(commands[2].get("name") or ""), "check_ui_release_readiness")
+                first_cmd = mocked.call_args_list[0].args[0]
+                second_cmd = mocked.call_args_list[1].args[0]
+                third_cmd = mocked.call_args_list[2].args[0]
+                self.assertEqual(first_cmd[0], "make")
+                self.assertIn("ui-stability-smoke", first_cmd)
+                self.assertEqual(second_cmd[0], "make")
+                self.assertIn("real-no-fallback-gate", second_cmd)
+                self.assertTrue(any("check_ui_release_readiness.py" in str(item) for item in third_cmd))
+                self.assertIn("--require-audit-report", third_cmd)
+                self.assertIn("--require-real-no-fallback-report", third_cmd)
+                self.assertEqual(mocked.call_count, 3)
 
     def test_ui_projects_create_history_and_upload_ref(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -12166,6 +12298,139 @@ class UiPrototypeTests(unittest.TestCase):
                 cmd = mocked.call_args.args[0]
                 self.assertIn("agent-resume", cmd)
                 self.assertNotIn("--candidate-data", cmd)
+
+    def test_ui_chat_pending_continue_waiting_approval_preserves_request_budget(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                client.post("/api/projects", json={"project_id": "ui_chat_pending_budget", "title": "pending budget"})
+                project = ui_app_mod._load_project_state("ui_chat_pending_budget")
+                self.assertIsInstance(project, dict)
+                task_id = "ui_chat_pending_budget_task"
+                project["current_task_id"] = task_id
+                draft_path = root / "runs" / "agent" / task_id / "task.draft.json"
+                request_path = root / "runs" / "agent" / task_id / "request_from_task.json"
+                draft_path.parent.mkdir(parents=True, exist_ok=True)
+                draft_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": task_id,
+                            "request_text": "设计470nm附近且高PLQY分子",
+                            "status": "approved",
+                            "property": "plqy",
+                            "range": "470+-12nm",
+                            "n_structures": 120,
+                            "runtime_budget": {
+                                "timeout_sec": 240,
+                                "max_tool_calls": 5,
+                                "max_external_calls": 2,
+                                "on_limit": "fail",
+                            },
+                            "missing_fields": [],
+                            "questions": [],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                request_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": task_id,
+                            "request_text": "设计470nm附近且高PLQY分子",
+                            "mode": "fast_screen",
+                            "targets": [{"property": "plqy", "objective": "maximize"}],
+                            "budget": {
+                                "max_candidates": 120,
+                                "timeout_sec": 240,
+                                "max_tool_calls": 5,
+                                "max_external_calls": 2,
+                                "on_limit": "fail",
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                project["request_path"] = str(request_path)
+                project["task_draft_path"] = str(draft_path)
+                project["pending_input"] = {
+                    "stage": "resume",
+                    "workflow_state": "WAITING_APPROVAL",
+                    "missing_fields": [],
+                    "questions": [],
+                    "task_draft_path": str(draft_path),
+                }
+                ui_app_mod._save_project_state(project)
+
+                execution_path = root / "runs" / "agent" / task_id / "execution.json"
+                execution_path.parent.mkdir(parents=True, exist_ok=True)
+                execution_path.write_text(
+                    json.dumps({"records": [{"name": "prepare_train_data", "status": "success"}]}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                fake_resume = {
+                    "task_id": task_id,
+                    "status": "success",
+                    "run_label": f"{task_id}-20260518-120000",
+                    "result_dir": str(root / "result" / f"{task_id}-20260518-120000"),
+                    "execution_path": str(execution_path),
+                    "resumed": True,
+                    "resume_skipped_steps": 1,
+                    "resume_total_steps": 1,
+                }
+                fake_cp = subprocess.CompletedProcess(
+                    args=["python3", "-m", "oled_agent.cli", "agent-resume"],
+                    returncode=0,
+                    stdout=json.dumps(fake_resume, ensure_ascii=False),
+                    stderr="",
+                )
+                with mock.patch("ui.app.subprocess.run", return_value=fake_cp) as mocked:
+                    resp = client.post(
+                        "/api/chat/pending-continue",
+                        json={
+                            "project_id": "ui_chat_pending_budget",
+                            "options": {
+                                "planner_provider": "rule_based_v1",
+                                "catalog_path": "configs/models/catalog.json",
+                                "budget_timeout_sec": 999,
+                                "budget_max_tool_calls": 88,
+                                "budget_max_external_calls": 9,
+                                "budget_on_limit": "need_approval",
+                            },
+                        },
+                    )
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.get_json()
+                self.assertEqual(payload.get("status"), "pass")
+                cmd = mocked.call_args.args[0]
+                self.assertIn("agent-resume", cmd)
+                self.assertIn("--task-id", cmd)
+                self.assertIn(task_id, cmd)
+                self.assertNotIn("--candidate-data", cmd)
+                self.assertNotIn("--n-structures", cmd)
+                budget_saved = json.loads(request_path.read_text(encoding="utf-8")).get("budget")
+                self.assertEqual(
+                    budget_saved,
+                    {
+                        "max_candidates": 120,
+                        "timeout_sec": 240,
+                        "max_tool_calls": 5,
+                        "max_external_calls": 2,
+                        "on_limit": "fail",
+                    },
+                )
+                project_out = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+                opts = project_out.get("options") if isinstance(project_out.get("options"), dict) else {}
+                self.assertEqual(int(opts.get("budget_timeout_sec") or 0), 999)
+                self.assertEqual(int(opts.get("budget_max_tool_calls") or 0), 88)
+                self.assertEqual(int(opts.get("budget_max_external_calls") or 0), 9)
+                self.assertEqual(str(opts.get("budget_on_limit") or ""), "need_approval")
+                self.assertEqual(project_out.get("pending_input"), {})
 
     def test_ui_chat_pending_submit_resume_need_user_input(self) -> None:
         ui_app_mod = self._load_ui_module()

@@ -174,11 +174,13 @@ ui-stability-smoke:
 
 ui-release-readiness:
 	@$(MAKE) ui-stability-smoke
-	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-freeze-report --require-audit-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
+	@$(MAKE) real-no-fallback-gate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-freeze-report --require-audit-report --require-real-no-fallback-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
 
 ui-acceptance-bundle:
 	@$(MAKE) ui-stability-smoke WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
-	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-freeze-report --require-audit-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
+	@$(MAKE) real-no-fallback-gate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-freeze-report --require-audit-report --require-real-no-fallback-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_acceptance_bundle.py --workspace-root "$(WORKSPACE_ROOT)" --out-json "runs/ci/ui_acceptance_bundle_summary.json" --out-md "runs/ci/ui_acceptance_bundle_summary.md"
 
 ui-acceptance-bundle-verify-local:

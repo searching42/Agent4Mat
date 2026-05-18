@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -73,6 +74,19 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
 
 def _finalize(*, payload: Dict[str, Any], out_json_path: Path, exit_code: int) -> int:
     final_payload = dict(payload)
+    final_payload["generated_at"] = str(final_payload.get("generated_at") or datetime.now(timezone.utc).isoformat())
+    status_text = str(final_payload.get("status") or "").strip().lower()
+    default_failed_count = 0 if status_text == "pass" else 1
+    try:
+        failed_count = int(final_payload.get("failed_count"))
+    except Exception:
+        failed_count = default_failed_count
+    final_payload["failed_count"] = max(0, failed_count)
+    try:
+        check_count = int(final_payload.get("check_count"))
+    except Exception:
+        check_count = 1
+    final_payload["check_count"] = max(1, check_count)
     final_payload["out_json_path"] = str(out_json_path)
     _write_json(out_json_path, final_payload)
     print(json.dumps(final_payload, ensure_ascii=False))

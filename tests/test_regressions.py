@@ -7205,6 +7205,19 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("ui-freeze-acceptance-artifacts", content)
         self.assertIn("runs/ci/ui_freeze_acceptance.json", content)
 
+    def test_oled_agent_ci_has_manual_ui_audit_acceptance_job(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("run_ui_audit_acceptance:", content)
+        self.assertIn("ui-audit-acceptance:", content)
+        self.assertIn("acceptance ui-audit (manual)", content)
+        self.assertIn("github.event.inputs.run_ui_audit_acceptance == 'true'", content)
+        self.assertIn("Run ui-audit acceptance", content)
+        self.assertIn("make ui-audit-acceptance WORKSPACE_ROOT=.", content)
+        self.assertIn("ui-audit-acceptance-artifacts", content)
+        self.assertIn("runs/ci/ui_audit_acceptance.json", content)
+
     def test_oled_agent_ci_validates_structured_reports_schema(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)

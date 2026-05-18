@@ -613,6 +613,8 @@ jobs:
       bundle_check_count: ${{ steps.bundle_outputs.outputs.bundle_check_count }}
       bundle_failure_count: ${{ steps.bundle_outputs.outputs.bundle_failure_count }}
       bundle_artifact_ready: ${{ steps.bundle_outputs.outputs.bundle_artifact_ready }}
+      bundle_failure_names: ${{ steps.bundle_outputs.outputs.bundle_failure_names }}
+      bundle_first_failure: ${{ steps.bundle_outputs.outputs.bundle_first_failure }}
       bundle_build_outcome: ${{ steps.build_bundle_verdict.outcome }}
     runs-on: ubuntu-latest
     steps:
@@ -685,6 +687,8 @@ jobs:
           check_count = -1
           failure_count = -1
           artifact_ready = "false"
+          failure_names = ""
+          first_failure = ""
 
           if summary_path.exists():
               artifact_ready = "true"
@@ -701,6 +705,19 @@ jobs:
                           failure_count = int(payload.get("failure_count"))
                       except Exception:
                           failure_count = -1
+                      failures = payload.get("failures")
+                      if isinstance(failures, list):
+                          names = []
+                          for row in failures:
+                              if not isinstance(row, dict):
+                                  continue
+                              name = str(row.get("name") or "").strip()
+                              if not name:
+                                  continue
+                              names.append(name)
+                          if names:
+                              first_failure = names[0]
+                              failure_names = ",".join(names[:12])
                   else:
                       status = "invalid_payload"
               except Exception:
@@ -711,6 +728,8 @@ jobs:
                   fh.write(f"bundle_check_count={check_count}\n")
                   fh.write(f"bundle_failure_count={failure_count}\n")
                   fh.write(f"bundle_artifact_ready={artifact_ready}\n")
+                  fh.write(f"bundle_failure_names={failure_names}\n")
+                  fh.write(f"bundle_first_failure={first_failure}\n")
           print(
               json.dumps(
                   {
@@ -718,6 +737,8 @@ jobs:
                       "bundle_check_count": check_count,
                       "bundle_failure_count": failure_count,
                       "bundle_artifact_ready": artifact_ready,
+                      "bundle_failure_names": failure_names,
+                      "bundle_first_failure": first_failure,
                   },
                   ensure_ascii=False,
               )
@@ -736,6 +757,8 @@ jobs:
           echo "- bundle_status: ${{ steps.bundle_outputs.outputs.bundle_status }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- bundle_check_count: ${{ steps.bundle_outputs.outputs.bundle_check_count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- bundle_failure_count: ${{ steps.bundle_outputs.outputs.bundle_failure_count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- bundle_failure_names: ${{ steps.bundle_outputs.outputs.bundle_failure_names }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- bundle_first_failure: ${{ steps.bundle_outputs.outputs.bundle_first_failure }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ needs['ui-freeze-acceptance'].result }}" = "skipped" ] && [ "${{ needs['ui-audit-acceptance'].result }}" = "skipped" ] && [ "${{ needs['ui-release-readiness'].result }}" = "skipped" ]; then
             echo "- note: all upstream UI jobs were skipped; bundle verdict build was skipped." >> "$GITHUB_STEP_SUMMARY"
@@ -799,6 +822,7 @@ jobs:
           echo "- summary_bundle_status: ${{ needs['ui-acceptance-bundle-summary'].outputs.bundle_status }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- summary_bundle_check_count: ${{ needs['ui-acceptance-bundle-summary'].outputs.bundle_check_count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- summary_bundle_failure_count: ${{ needs['ui-acceptance-bundle-summary'].outputs.bundle_failure_count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- summary_bundle_first_failure: ${{ needs['ui-acceptance-bundle-summary'].outputs.bundle_first_failure }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- verify_bundle_artifact_step: ${{ steps.verify_bundle_artifact.outcome }}" >> "$GITHUB_STEP_SUMMARY"
           if [ -f runs/ci/ui_acceptance_bundle_artifact_verify.json ]; then
             python - <<'PY' >> "$GITHUB_STEP_SUMMARY"

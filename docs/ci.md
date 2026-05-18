@@ -67,6 +67,8 @@
     - `bundle_check_count`
     - `bundle_failure_count`
     - `bundle_artifact_ready`
+    - `bundle_failure_names`
+    - `bundle_first_failure`
 - bundle verify job prints:
   - `verify_status`
   - `summary_status`

@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import time
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -1699,6 +1700,8 @@ HTML = """
                   <option value=\"success\">success</option>
                   <option value=\"failed\">failed</option>
                 </select>
+                <label style=\"margin-top:0; font-weight:600;\">Tool</label>
+                <input id=\"chat_timeline_tool_filter\" placeholder=\"e.g. score_candidates\" style=\"max-width: 210px;\" />
                 <label style=\"margin-top:0; font-weight:600;\">Sort</label>
                 <select id=\"chat_timeline_sort\" style=\"max-width: 170px;\">
                   <option value=\"duration_desc\" selected>duration_desc</option>
@@ -1706,6 +1709,7 @@ HTML = """
                   <option value=\"name_asc\">name_asc</option>
                   <option value=\"original\">original</option>
                 </select>
+                <button type=\"button\" onclick=\"loadSuggestedRetryArgs()\">Prefill Retry</button>
                 <button type=\"button\" onclick=\"refreshChatTimelinePanel()\">Refresh</button>
               </div>
               <div class=\"muted\" id=\"chat_timeline_meta\">timeline: (not loaded)</div>
@@ -1721,8 +1725,11 @@ HTML = """
                 <button type=\"button\" onclick=\"copyCurrentArtifactLinksForExport()\">Copy Links JSON</button>
                 <button type=\"button\" onclick=\"exportTaskArtifactJson('decision_summary')\">Export decision_summary</button>
                 <button type=\"button\" onclick=\"exportTaskArtifactJson('web_evidence')\">Export web_evidence</button>
+                <button type=\"button\" onclick=\"downloadTaskArtifactPack()\">Download Artifact Pack (zip)</button>
                 <button type=\"button\" onclick=\"downloadTaskBundle()\">Download Bundle</button>
               </div>
+              <label>Artifact pack list (comma-separated)</label>
+              <input id=\"output_export_artifact_pack_list\" value=\"decision_summary,execution,web_evidence\" />
               <pre id=\"output_export_links_out\">(artifact links not loaded)</pre>
             </div>
           </details>
@@ -7657,10 +7664,14 @@ HTML = """
           return;
         }
         const statusFilter = String(document.getElementById('chat_timeline_status_filter').value || 'all').trim();
+        const toolFilter = String(document.getElementById('chat_timeline_tool_filter').value || '').trim();
         const sort = String(document.getElementById('chat_timeline_sort').value || 'duration_desc').trim();
         const q = new URLSearchParams();
         if (statusFilter && statusFilter !== 'all') {
           q.set('status_filter', statusFilter);
+        }
+        if (toolFilter) {
+          q.set('tool', toolFilter);
         }
         if (sort) {
           q.set('sort', sort);
@@ -7680,6 +7691,28 @@ HTML = """
         if (out) {
           out.textContent = lines.length > 0 ? lines.join('\n') : '(no timeline events)';
         }
+      }
+
+      async function downloadTaskArtifactPack() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const raw = String(document.getElementById('output_export_artifact_pack_list').value || '').trim();
+        const parts = raw
+          ? raw.split(',').map((x) => String(x || '').trim()).filter((x) => x.length > 0)
+          : ['decision_summary', 'execution', 'web_evidence'];
+        if (parts.length < 1) {
+          renderJsonOut({status: 'fail', error: 'artifact pack list is empty'});
+          return;
+        }
+        const q = new URLSearchParams();
+        q.set('artifacts', parts.join(','));
+        const url = `/api/task/${encodeURIComponent(tid)}/artifact-pack?${q.toString()}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        renderEvents([{stage: 'artifact_pack_export', status: 'requested', operation: parts.join(',')}], {project: state.project});
+        renderJsonOut({status: 'pass', action: 'artifact_pack_export_requested', task_id: tid, artifacts: parts, url: url});
       }
 
       async function showTimeline() {
@@ -8502,6 +8535,7 @@ def _task_artifact_links_payload(task_id: str) -> Dict[str, Any]:
         "summary_api": f"/api/task/{tid}/summary",
         "decision_summary_api": f"/api/task/{tid}/artifact/decision_summary",
         "artifact_export_api": f"/api/task/{tid}/artifact-export",
+        "artifact_pack_api": f"/api/task/{tid}/artifact-pack",
         "bundle_api": f"/api/task/{tid}/bundle",
     }
 
@@ -14055,6 +14089,100 @@ def api_task_artifact_export(task_id: str, artifact_name: str):
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return Response(text, mimetype="application/json", headers=headers)
+
+
+@app.get("/api/task/<task_id>/artifact-pack")
+def api_task_artifact_pack(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+
+    run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    if not run_dir.exists():
+        return jsonify({"status": "missing", "task_id": tid, "error": "run_dir_not_found"}), 404
+
+    raw = str(request.args.get("artifacts") or "").strip()
+    selected = (
+        [part.strip() for part in raw.split(",") if str(part or "").strip()]
+        if raw
+        else ["decision_summary", "execution", "web_evidence"]
+    )
+    selected = selected[:20]
+    invalid = [name for name in selected if name not in ARTIFACT_NAME_TO_FILE]
+    if invalid:
+        return jsonify({"status": "fail", "error": "invalid_artifact_names", "invalid_artifacts": invalid}), 400
+
+    by_name = _task_artifact_paths(tid)
+    fd, tmp_name = tempfile.mkstemp(prefix=f"agent4mat_artifact_pack_{tid}_", suffix=".zip")
+    os.close(fd)
+    out_path = Path(tmp_name).resolve()
+    included: List[Dict[str, Any]] = []
+    missing: List[Dict[str, Any]] = []
+    try:
+        with zipfile.ZipFile(out_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for name in selected:
+                src = by_name.get(name)
+                if not isinstance(src, Path) or not src.exists() or not src.is_file():
+                    missing.append({"artifact": name, "path": str(src) if isinstance(src, Path) else ""})
+                    continue
+                rel_name = Path(str(ARTIFACT_NAME_TO_FILE.get(name) or "")).name or f"{name}.json"
+                arcname = f"artifacts/{name}/{rel_name}"
+                zf.write(str(src), arcname=arcname)
+                included.append({"artifact": name, "path": str(src), "archive_path": arcname})
+
+            manifest = {
+                "task_id": tid,
+                "generated_at": _now_iso(),
+                "selected_artifacts": selected,
+                "included": included,
+                "missing": missing,
+                "included_count": len(included),
+                "missing_count": len(missing),
+            }
+            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+
+        if len(included) < 1:
+            try:
+                out_path.unlink()
+            except Exception:
+                pass
+            return (
+                jsonify(
+                    {
+                        "status": "missing",
+                        "task_id": tid,
+                        "error": "no_selected_artifacts_found",
+                        "selected_artifacts": selected,
+                        "missing": missing,
+                    }
+                ),
+                404,
+            )
+
+        filename = f"agent4mat-task-{tid}-artifact-pack-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+        size = int(out_path.stat().st_size) if out_path.exists() else 0
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(size),
+            "X-Agent4Mat-Pack-Task": tid,
+            "X-Agent4Mat-Pack-Included": str(len(included)),
+        }
+        return Response(
+            _stream_file_and_cleanup(out_path),
+            mimetype="application/zip",
+            headers=headers,
+        )
+    except Exception as exc:
+        try:
+            out_path.unlink()
+        except Exception:
+            pass
+        return (
+            jsonify({"status": "fail", "task_id": tid, "error": f"artifact_pack_failed: {type(exc).__name__}: {exc}"}),
+            500,
+        )
 
 
 @app.get("/api/task/<task_id>/bundle")

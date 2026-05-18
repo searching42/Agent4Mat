@@ -50,8 +50,8 @@ Open: `http://127.0.0.1:8787`
   - supports step mode in chat via `/step <operation> {args_json}` or JSON (`{"operation":"clean_dataset","args":{...}}`)
   - includes a built-in step panel (operation dropdown + args JSON) that sends step requests into chat
   - includes an in-chat `Execution Timeline Panel` with status/sort filters for step durations and failure context
-  - timeline panel supports `tool` filtering and quick retry args prefill
-  - includes an in-chat `Agent Output Export Entry` for artifact-links preview/copy, artifact JSON export, and artifact-pack zip export
+  - timeline panel supports `tool` filtering, quick retry args prefill, and one-click failed-artifact preview jump
+  - includes an in-chat `Agent Output Export Entry` for artifact-links preview/copy, artifact JSON export, and artifact-pack export (`zip` / `tar.gz`)
   - file input drawer supports `Use As candidate_data + Send` for direct path-to-chat execution
 - project/session memory:
   - each project persists independent chat history and runtime pointers
@@ -168,6 +168,7 @@ Open: `http://127.0.0.1:8787`
   - `GET /api/task/<task_id>/artifact/<artifact_name>`
   - `GET /api/task/<task_id>/bundle` (download `.tar.gz` bundle of current task outputs)
   - `GET /api/task/<task_id>/timeline`
+  - `GET /api/task/<task_id>/failed-artifact-hint`
   - `GET /api/timeline-groups` (`scope=recent_tasks&limit=N`)
   - `GET /api/task/<task_id>/compare`
   - `GET /api/task/<task_id>/artifact-diff`

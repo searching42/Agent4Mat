@@ -10577,12 +10577,15 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("chat_timeline_status_filter", html)
         self.assertIn("chat_timeline_tool_filter", html)
         self.assertIn("chat_timeline_sort", html)
+        self.assertIn("chat_timeline_preview_failed_btn", html)
+        self.assertIn("previewLikelyFailedArtifact()", html)
         self.assertIn("refreshChatTimelinePanel()", html)
         self.assertIn("chat_timeline_meta", html)
         self.assertIn("chat_timeline_out", html)
         self.assertIn("chat_output_export_drawer", html)
         self.assertIn("output_export_links_out", html)
         self.assertIn("output_export_artifact_pack_list", html)
+        self.assertIn("output_export_artifact_pack_format", html)
         self.assertIn("loadCurrentArtifactLinksForExport()", html)
         self.assertIn("copyCurrentArtifactLinksForExport()", html)
         self.assertIn("exportTaskArtifactJson('decision_summary')", html)
@@ -10591,6 +10594,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("setCandidateDataFromPathAndSend()", html)
         self.assertIn("/api/task/${encodeURIComponent(tid)}/artifact-export/${encodeURIComponent(name)}", html)
         self.assertIn("/api/task/${encodeURIComponent(tid)}/artifact-pack?", html)
+        self.assertIn("/api/task/${encodeURIComponent(tid)}/failed-artifact-hint", html)
+        self.assertIn("q.set('format', format)", html)
         self.assertIn("syncChatRuntimeActions(", html)
         self.assertIn("formatRuntimeDurationMs(", html)
         self.assertIn("quick_candidate_data_path", html)
@@ -13598,6 +13603,7 @@ class UiPrototypeTests(unittest.TestCase):
                 manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
                 self.assertEqual(manifest.get("task_id"), task_id)
                 self.assertEqual(int(manifest.get("included_count") or 0), 3)
+                self.assertEqual(str(manifest.get("format") or ""), "zip")
 
     def test_ui_task_artifact_pack_rejects_invalid_artifact_name(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -13613,6 +13619,81 @@ class UiPrototypeTests(unittest.TestCase):
             payload = resp.get_json()
             self.assertEqual(payload.get("status"), "fail")
             self.assertEqual(payload.get("error"), "invalid_artifact_names")
+
+    def test_ui_task_artifact_pack_rejects_invalid_format(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_artifact_pack_invalid_format_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/artifact-pack?artifacts=decision_summary&format=rar")
+            self.assertEqual(resp.status_code, 400)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "fail")
+            self.assertEqual(payload.get("error"), "invalid_format")
+
+    def test_ui_task_artifact_pack_downloads_tar_gz(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_artifact_pack_targz_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "execution.json").write_text(
+                json.dumps({"status": "success", "records": []}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "decision_summary.json").write_text(
+                json.dumps({"status": "success", "artifacts": {}}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/artifact-pack?artifacts=decision_summary,execution&format=tar.gz")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("application/gzip", str(resp.content_type or ""))
+            disp = str(resp.headers.get("Content-Disposition") or "")
+            self.assertIn("attachment;", disp)
+            self.assertIn(".tar.gz", disp)
+            self.assertEqual(str(resp.headers.get("X-Agent4Mat-Pack-Format") or ""), "tar.gz")
+            buf = io.BytesIO(resp.get_data())
+            with tarfile.open(fileobj=buf, mode="r:gz") as tf:
+                names = tf.getnames()
+                self.assertIn("manifest.json", names)
+                self.assertTrue(any(name.endswith("artifacts/decision_summary/decision_summary.json") for name in names))
+                self.assertTrue(any(name.endswith("artifacts/execution/execution.json") for name in names))
+                manifest_file = tf.extractfile("manifest.json")
+                self.assertIsNotNone(manifest_file)
+                manifest = json.loads(manifest_file.read().decode("utf-8"))
+                self.assertEqual(manifest.get("task_id"), task_id)
+                self.assertEqual(str(manifest.get("format") or ""), "tar.gz")
+                self.assertEqual(int(manifest.get("included_count") or 0), 2)
+
+    def test_ui_task_artifact_pack_keeps_manifest_when_partial_missing(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_artifact_pack_partial_missing_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "decision_summary.json").write_text(
+                json.dumps({"status": "success", "artifacts": {}}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/artifact-pack?artifacts=decision_summary,execution")
+            self.assertEqual(resp.status_code, 200)
+            buf = io.BytesIO(resp.get_data())
+            with zipfile.ZipFile(buf, mode="r") as zf:
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                self.assertEqual(int(manifest.get("included_count") or 0), 1)
+                self.assertEqual(int(manifest.get("missing_count") or 0), 1)
+                missing = manifest.get("missing") if isinstance(manifest.get("missing"), list) else []
+                self.assertTrue(any(str(row.get("artifact") or "") == "execution" for row in missing))
 
     def test_ui_task_artifact_rejects_invalid_artifact_name(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -13759,6 +13840,76 @@ class UiPrototypeTests(unittest.TestCase):
         payload2 = resp2.get_json()
         self.assertEqual(payload2.get("status"), "fail")
         self.assertEqual(payload2.get("error"), "invalid sort")
+
+    def test_ui_task_failed_artifact_hint_returns_step_and_artifact(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_failed_hint_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            execution_payload = {
+                "task_id": task_id,
+                "status": "failed",
+                "started_at": "2026-05-14T00:00:00+00:00",
+                "ended_at": "2026-05-14T00:00:10+00:00",
+                "records": [
+                    {
+                        "name": "search_web_evidence",
+                        "status": "success",
+                        "started_at": "2026-05-14T00:00:00+00:00",
+                        "ended_at": "2026-05-14T00:00:02+00:00",
+                        "error": "",
+                    },
+                    {
+                        "name": "clean_dataset",
+                        "status": "failed",
+                        "started_at": "2026-05-14T00:00:02+00:00",
+                        "ended_at": "2026-05-14T00:00:04+00:00",
+                        "error": "csv_parse_failed",
+                    },
+                ],
+            }
+            (run_dir / "execution.json").write_text(json.dumps(execution_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            (run_dir / "decision_summary.json").write_text(
+                json.dumps({"status": "failed", "detail": "x"}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/failed-artifact-hint")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertTrue(bool(payload.get("has_failed_step")))
+            self.assertEqual(str(payload.get("failed_step") or ""), "clean_dataset")
+            self.assertEqual(str(payload.get("artifact_hint") or ""), "execution")
+            self.assertIn(f"/api/task/{task_id}/artifact/execution", str(payload.get("artifact_preview_api") or ""))
+
+    def test_ui_task_failed_artifact_hint_returns_no_failed_when_clean(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_failed_hint_clean_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            execution_payload = {
+                "task_id": task_id,
+                "status": "success",
+                "records": [
+                    {"name": "search_dataset", "status": "success"},
+                    {"name": "score_candidates", "status": "success"},
+                ],
+            }
+            (run_dir / "execution.json").write_text(json.dumps(execution_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/failed-artifact-hint")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertFalse(bool(payload.get("has_failed_step")))
+            self.assertEqual(str(payload.get("artifact_hint") or ""), "execution")
 
     def test_ui_task_compare_returns_diff(self) -> None:
         ui_app_mod = self._load_ui_module()

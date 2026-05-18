@@ -1710,6 +1710,7 @@ HTML = """
                   <option value=\"original\">original</option>
                 </select>
                 <button type=\"button\" onclick=\"loadSuggestedRetryArgs()\">Prefill Retry</button>
+                <button type=\"button\" id=\"chat_timeline_preview_failed_btn\" onclick=\"previewLikelyFailedArtifact()\">Preview Failed Artifact</button>
                 <button type=\"button\" onclick=\"refreshChatTimelinePanel()\">Refresh</button>
               </div>
               <div class=\"muted\" id=\"chat_timeline_meta\">timeline: (not loaded)</div>
@@ -1725,11 +1726,16 @@ HTML = """
                 <button type=\"button\" onclick=\"copyCurrentArtifactLinksForExport()\">Copy Links JSON</button>
                 <button type=\"button\" onclick=\"exportTaskArtifactJson('decision_summary')\">Export decision_summary</button>
                 <button type=\"button\" onclick=\"exportTaskArtifactJson('web_evidence')\">Export web_evidence</button>
-                <button type=\"button\" onclick=\"downloadTaskArtifactPack()\">Download Artifact Pack (zip)</button>
+                <button type=\"button\" onclick=\"downloadTaskArtifactPack()\">Download Artifact Pack</button>
                 <button type=\"button\" onclick=\"downloadTaskBundle()\">Download Bundle</button>
               </div>
               <label>Artifact pack list (comma-separated)</label>
               <input id=\"output_export_artifact_pack_list\" value=\"decision_summary,execution,web_evidence\" />
+              <label>Artifact pack format</label>
+              <select id=\"output_export_artifact_pack_format\" style=\"max-width: 180px;\">
+                <option value=\"zip\" selected>zip</option>
+                <option value=\"tar.gz\">tar.gz</option>
+              </select>
               <pre id=\"output_export_links_out\">(artifact links not loaded)</pre>
             </div>
           </details>
@@ -7693,6 +7699,59 @@ HTML = """
         }
       }
 
+      function _guessFailedArtifactFromStep(stepName) {
+        const s = String(stepName || '').trim().toLowerCase();
+        if (!s) return 'execution';
+        if (s.includes('web')) return 'web_evidence';
+        if (s.includes('memory')) return 'memory_context';
+        if (s.includes('guardrail')) return 'guardrails_report';
+        if (s.includes('evaluat')) return 'evaluation_report';
+        if (s.includes('filter') || s.includes('report') || s.includes('rank')) return 'decision_summary';
+        return 'execution';
+      }
+
+      async function previewLikelyFailedArtifact() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const hintResp = await apiGet(`/api/task/${encodeURIComponent(tid)}/failed-artifact-hint`);
+        const hint = hintResp.data && typeof hintResp.data === 'object' ? hintResp.data : {};
+        const hasFailed = Boolean(hint.has_failed_step);
+        if (!hasFailed) {
+          renderJsonOut({status: 'fail', error: 'no failed step in timeline', hint: hint});
+          return;
+        }
+        const failedStep = String(hint.failed_step || '').trim();
+        const artifact = String(hint.artifact_hint || '').trim() || _guessFailedArtifactFromStep(failedStep);
+        const select = document.getElementById('artifact_name');
+        if (select && select.querySelector(`option[value="${artifact}"]`)) {
+          select.value = artifact;
+        }
+        const previewResp = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact/${encodeURIComponent(artifact)}?max_chars=20000`);
+        renderJsonOut({
+          status: 'pass',
+          action: 'preview_likely_failed_artifact',
+          task_id: tid,
+          failed_step: failedStep,
+          failed_index: Number(hint.failed_step_index || 0),
+          artifact: artifact,
+          hint: hint,
+          artifact_preview: previewResp.data,
+        });
+        renderEvents(
+          [
+            {
+              stage: 'preview_failed_artifact',
+              status: 'requested',
+              operation: failedStep || artifact,
+            },
+          ],
+          {project: state.project},
+        );
+      }
+
       async function downloadTaskArtifactPack() {
         const tid = taskId();
         if (!tid || tid === '-') {
@@ -7707,12 +7766,18 @@ HTML = """
           renderJsonOut({status: 'fail', error: 'artifact pack list is empty'});
           return;
         }
+        const format = String(document.getElementById('output_export_artifact_pack_format').value || 'zip').trim();
+        if (format !== 'zip' && format !== 'tar.gz') {
+          renderJsonOut({status: 'fail', error: 'invalid artifact pack format', format: format});
+          return;
+        }
         const q = new URLSearchParams();
         q.set('artifacts', parts.join(','));
+        q.set('format', format);
         const url = `/api/task/${encodeURIComponent(tid)}/artifact-pack?${q.toString()}`;
         window.open(url, '_blank', 'noopener,noreferrer');
-        renderEvents([{stage: 'artifact_pack_export', status: 'requested', operation: parts.join(',')}], {project: state.project});
-        renderJsonOut({status: 'pass', action: 'artifact_pack_export_requested', task_id: tid, artifacts: parts, url: url});
+        renderEvents([{stage: 'artifact_pack_export', status: 'requested', operation: `${parts.join(',')}|${format}`}], {project: state.project});
+        renderJsonOut({status: 'pass', action: 'artifact_pack_export_requested', task_id: tid, artifacts: parts, format: format, url: url});
       }
 
       async function showTimeline() {
@@ -9386,6 +9451,36 @@ def _events_from_execution(execution: Dict[str, Any]) -> List[Dict[str, Any]]:
         event["highlight"] = "fail" if bool(event.get("is_failed")) else "normal"
         events.append(event)
     return events
+
+
+def _latest_failed_event(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    latest: Optional[Dict[str, Any]] = None
+    latest_idx = -1
+    for ev in events:
+        if not isinstance(ev, dict) or not bool(ev.get("is_failed")):
+            continue
+        idx = int(ev.get("index") or 0)
+        if latest is None or idx >= latest_idx:
+            latest = ev
+            latest_idx = idx
+    return latest
+
+
+def _guess_artifact_for_failed_step(step_name: str) -> str:
+    lower_name = str(step_name or "").strip().lower()
+    if not lower_name:
+        return "execution"
+    if "web" in lower_name:
+        return "web_evidence"
+    if "memory" in lower_name:
+        return "memory_context"
+    if "guardrail" in lower_name:
+        return "guardrails_report"
+    if "evaluat" in lower_name:
+        return "evaluation_report"
+    if "filter" in lower_name or "report" in lower_name or "rank" in lower_name:
+        return "decision_summary"
+    return "execution"
 
 
 def _timeline_groups_recent_tasks(*, limit: int, release_gate_status: str = "all") -> Dict[str, Any]:
@@ -14110,38 +14205,68 @@ def api_task_artifact_pack(task_id: str):
         else ["decision_summary", "execution", "web_evidence"]
     )
     selected = selected[:20]
+    format_raw = str(request.args.get("format") or "zip").strip().lower()
+    pack_format = "tar.gz" if format_raw == "tgz" else format_raw
+    if pack_format not in {"zip", "tar.gz"}:
+        return (
+            jsonify(
+                {
+                    "status": "fail",
+                    "error": "invalid_format",
+                    "format": format_raw,
+                    "allowed_formats": ["zip", "tar.gz"],
+                }
+            ),
+            400,
+        )
     invalid = [name for name in selected if name not in ARTIFACT_NAME_TO_FILE]
     if invalid:
         return jsonify({"status": "fail", "error": "invalid_artifact_names", "invalid_artifacts": invalid}), 400
 
     by_name = _task_artifact_paths(tid)
-    fd, tmp_name = tempfile.mkstemp(prefix=f"agent4mat_artifact_pack_{tid}_", suffix=".zip")
+    suffix = ".zip" if pack_format == "zip" else ".tar.gz"
+    fd, tmp_name = tempfile.mkstemp(prefix=f"agent4mat_artifact_pack_{tid}_", suffix=suffix)
     os.close(fd)
     out_path = Path(tmp_name).resolve()
     included: List[Dict[str, Any]] = []
     missing: List[Dict[str, Any]] = []
     try:
-        with zipfile.ZipFile(out_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for name in selected:
-                src = by_name.get(name)
-                if not isinstance(src, Path) or not src.exists() or not src.is_file():
-                    missing.append({"artifact": name, "path": str(src) if isinstance(src, Path) else ""})
-                    continue
-                rel_name = Path(str(ARTIFACT_NAME_TO_FILE.get(name) or "")).name or f"{name}.json"
-                arcname = f"artifacts/{name}/{rel_name}"
-                zf.write(str(src), arcname=arcname)
-                included.append({"artifact": name, "path": str(src), "archive_path": arcname})
+        file_entries: List[Dict[str, Any]] = []
+        for name in selected:
+            src = by_name.get(name)
+            if not isinstance(src, Path) or not src.exists() or not src.is_file():
+                missing.append({"artifact": name, "path": str(src) if isinstance(src, Path) else ""})
+                continue
+            rel_name = Path(str(ARTIFACT_NAME_TO_FILE.get(name) or "")).name or f"{name}.json"
+            arcname = f"artifacts/{name}/{rel_name}"
+            included.append({"artifact": name, "path": str(src), "archive_path": arcname})
+            file_entries.append({"source": str(src), "archive_path": arcname})
 
-            manifest = {
-                "task_id": tid,
-                "generated_at": _now_iso(),
-                "selected_artifacts": selected,
-                "included": included,
-                "missing": missing,
-                "included_count": len(included),
-                "missing_count": len(missing),
-            }
-            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        manifest = {
+            "task_id": tid,
+            "generated_at": _now_iso(),
+            "format": pack_format,
+            "selected_artifacts": selected,
+            "included": included,
+            "missing": missing,
+            "included_count": len(included),
+            "missing_count": len(missing),
+        }
+
+        if pack_format == "zip":
+            with zipfile.ZipFile(out_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for entry in file_entries:
+                    zf.write(str(entry["source"]), arcname=str(entry["archive_path"]))
+                zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        else:
+            with tarfile.open(out_path, mode="w:gz") as tf:
+                for entry in file_entries:
+                    tf.add(str(entry["source"]), arcname=str(entry["archive_path"]))
+                manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+                info = tarfile.TarInfo(name="manifest.json")
+                info.size = len(manifest_bytes)
+                info.mtime = int(time.time())
+                tf.addfile(info, io.BytesIO(manifest_bytes))
 
         if len(included) < 1:
             try:
@@ -14156,31 +14281,43 @@ def api_task_artifact_pack(task_id: str):
                         "error": "no_selected_artifacts_found",
                         "selected_artifacts": selected,
                         "missing": missing,
+                        "format": pack_format,
                     }
                 ),
                 404,
             )
 
-        filename = f"agent4mat-task-{tid}-artifact-pack-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+        ext = ".zip" if pack_format == "zip" else ".tar.gz"
+        filename = f"agent4mat-task-{tid}-artifact-pack-{datetime.now().strftime('%Y%m%d-%H%M%S')}{ext}"
+        mime = "application/zip" if pack_format == "zip" else "application/gzip"
         size = int(out_path.stat().st_size) if out_path.exists() else 0
         headers = {
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(size),
             "X-Agent4Mat-Pack-Task": tid,
+            "X-Agent4Mat-Pack-Format": pack_format,
             "X-Agent4Mat-Pack-Included": str(len(included)),
         }
         return Response(
             _stream_file_and_cleanup(out_path),
-            mimetype="application/zip",
+            mimetype=mime,
             headers=headers,
         )
+
     except Exception as exc:
         try:
             out_path.unlink()
         except Exception:
             pass
         return (
-            jsonify({"status": "fail", "task_id": tid, "error": f"artifact_pack_failed: {type(exc).__name__}: {exc}"}),
+            jsonify(
+                {
+                    "status": "fail",
+                    "task_id": tid,
+                    "error": f"artifact_pack_failed: {type(exc).__name__}: {exc}",
+                    "format": pack_format,
+                }
+            ),
             500,
         )
 
@@ -14311,6 +14448,51 @@ def api_task_timeline(task_id: str):
             "timeline_lines": timeline_lines,
         }
     )
+
+
+@app.get("/api/task/<task_id>/failed-artifact-hint")
+def api_task_failed_artifact_hint(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
+    if not run_dir.exists():
+        return jsonify({"status": "missing", "task_id": tid, "error": "run_dir_missing"}), 200
+    execution_path = _task_artifact_path(tid, "execution.json")
+    if not execution_path.exists():
+        return jsonify({"status": "fail", "task_id": tid, "error": "missing_execution_json"}), 200
+    try:
+        execution = json.loads(execution_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return jsonify({"status": "fail", "task_id": tid, "error": f"invalid_execution_json: {type(exc).__name__}: {exc}"}), 200
+    if not isinstance(execution, dict):
+        return jsonify({"status": "fail", "task_id": tid, "error": "invalid_execution_payload"}), 200
+
+    events = _events_from_execution(execution)
+    failed = _latest_failed_event(events)
+    if not isinstance(failed, dict):
+        return jsonify({"status": "pass", "task_id": tid, "has_failed_step": False, "artifact_hint": "execution"}), 200
+
+    failed_step = str(failed.get("name") or "").strip()
+    artifact = _guess_artifact_for_failed_step(failed_step)
+    artifact_path = _task_artifact_paths(tid).get(artifact)
+    return jsonify(
+        {
+            "status": "pass",
+            "task_id": tid,
+            "has_failed_step": True,
+            "failed_step": failed_step,
+            "failed_step_index": int(failed.get("index") or 0),
+            "failed_step_status": str(failed.get("status") or ""),
+            "failed_step_error": str(failed.get("error") or ""),
+            "artifact_hint": artifact,
+            "artifact_exists": bool(isinstance(artifact_path, Path) and artifact_path.exists()),
+            "artifact_path": str(artifact_path) if isinstance(artifact_path, Path) else "",
+            "artifact_preview_api": f"/api/task/{tid}/artifact/{artifact}?max_chars=20000",
+        }
+    ), 200
 
 
 @app.get("/api/task/<task_id>/compare")

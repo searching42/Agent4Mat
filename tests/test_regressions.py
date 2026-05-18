@@ -7204,6 +7204,8 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("make ui-freeze-acceptance WORKSPACE_ROOT=.", content)
         self.assertIn("ui-freeze-acceptance-artifacts", content)
         self.assertIn("runs/ci/ui_freeze_acceptance.json", content)
+        self.assertIn("Publish ui-freeze acceptance summary", content)
+        self.assertIn("### UI Freeze Acceptance", content)
 
     def test_oled_agent_ci_has_manual_ui_audit_acceptance_job(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -7217,6 +7219,8 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("make ui-audit-acceptance WORKSPACE_ROOT=.", content)
         self.assertIn("ui-audit-acceptance-artifacts", content)
         self.assertIn("runs/ci/ui_audit_acceptance.json", content)
+        self.assertIn("Publish ui-audit acceptance summary", content)
+        self.assertIn("### UI Audit Acceptance", content)
 
     def test_oled_agent_ci_validates_structured_reports_schema(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

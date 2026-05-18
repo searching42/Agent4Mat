@@ -472,6 +472,17 @@ jobs:
           path: runs/ci/ui_freeze_acceptance.json
           if-no-files-found: warn
 
+      - name: Publish ui-freeze acceptance summary
+        if: always()
+        run: |
+          echo "### UI Freeze Acceptance" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f runs/ci/ui_freeze_acceptance.json ]; then
+            cat runs/ci/ui_freeze_acceptance.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui-freeze acceptance output file is missing (likely upstream step failed)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   ui-audit-acceptance:
     name: acceptance ui-audit (manual)
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_ui_audit_acceptance == 'true'
@@ -498,3 +509,14 @@ jobs:
           name: ui-audit-acceptance-artifacts
           path: runs/ci/ui_audit_acceptance.json
           if-no-files-found: warn
+
+      - name: Publish ui-audit acceptance summary
+        if: always()
+        run: |
+          echo "### UI Audit Acceptance" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f runs/ci/ui_audit_acceptance.json ]; then
+            cat runs/ci/ui_audit_acceptance.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui-audit acceptance output file is missing (likely upstream step failed)." >> "$GITHUB_STEP_SUMMARY"
+          fi

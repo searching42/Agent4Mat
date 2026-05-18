@@ -7244,7 +7244,9 @@ class WorkflowPolicyTests(unittest.TestCase):
         content = workflow.read_text(encoding="utf-8")
         self.assertIn("run_ui_acceptance_bundle:", content)
         self.assertIn("ui-acceptance-bundle-summary:", content)
+        self.assertIn("ui-acceptance-bundle-verify:", content)
         self.assertIn("acceptance ui-bundle-summary (manual)", content)
+        self.assertIn("acceptance ui-bundle-verify (manual)", content)
         self.assertIn("github.event.inputs.run_ui_acceptance_bundle == 'true'", content)
         self.assertIn("Download ui-freeze acceptance artifacts", content)
         self.assertIn("Download ui-audit acceptance artifacts", content)
@@ -7262,6 +7264,11 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("steps.build_bundle_verdict.outcome", content)
         self.assertIn("runs/ci/ui_acceptance_bundle_summary.json", content)
         self.assertIn("runs/ci/ui_acceptance_bundle_summary.md", content)
+        self.assertIn("Download ui acceptance bundle summary artifacts", content)
+        self.assertIn("Verify ui acceptance bundle artifact schema", content)
+        self.assertIn("verify_bundle_artifact_step", content)
+        self.assertIn("ui acceptance bundle summary artifact schema: PASS", content)
+        self.assertIn("UI Acceptance Bundle Verify", content)
 
     def test_oled_agent_ci_ui_manual_jobs_support_bundle_trigger(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

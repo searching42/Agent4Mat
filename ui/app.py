@@ -844,6 +844,17 @@ HTML = """
         padding: 8px;
         background: #f7faff;
       }
+      #chat_timeline_out,
+      #output_export_links_out {
+        max-height: 220px;
+        overflow: auto;
+        background: #f7faff;
+        border: 1px solid #d6dfef;
+        border-radius: 8px;
+        padding: 8px;
+        margin: 8px 0 0 0;
+        font-size: 0.75rem;
+      }
       .tg-head {
         font-size: 0.78rem;
         color: #39465c;
@@ -1546,6 +1557,7 @@ HTML = """
           <div class=\"status-actions\">
             <button id=\"chat_summary_btn\" onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
             <button id=\"chat_timeline_btn\" onclick=\"showTimeline()\">Timeline</button>
+            <button id=\"chat_exports_btn\" onclick=\"loadCurrentArtifactLinksForExport()\">Exports</button>
             <button id=\"chat_memory_btn\" onclick=\"loadCurrentMemoryContext()\">Memory</button>
             <button id=\"chat_retry_failed_btn\" onclick=\"retryFailedStep()\">Retry Failed</button>
             <button id=\"chat_resume_btn\" onclick=\"retryCurrentTask()\">Resume</button>
@@ -1676,6 +1688,45 @@ HTML = """
           </div>
           <div class=\"chat-quick-status\" id=\"quick_candidate_status\">quick path: idle</div>
 
+          <details class=\"drawer\" open id=\"chat_timeline_panel_drawer\">
+            <summary>Execution Timeline Panel</summary>
+            <div class=\"drawer-body\">
+              <div class=\"btn-row\">
+                <label style=\"margin-top:0; font-weight:600;\">Status</label>
+                <select id=\"chat_timeline_status_filter\" style=\"max-width: 160px;\">
+                  <option value=\"all\" selected>all</option>
+                  <option value=\"running\">running</option>
+                  <option value=\"success\">success</option>
+                  <option value=\"failed\">failed</option>
+                </select>
+                <label style=\"margin-top:0; font-weight:600;\">Sort</label>
+                <select id=\"chat_timeline_sort\" style=\"max-width: 170px;\">
+                  <option value=\"duration_desc\" selected>duration_desc</option>
+                  <option value=\"duration_asc\">duration_asc</option>
+                  <option value=\"name_asc\">name_asc</option>
+                  <option value=\"original\">original</option>
+                </select>
+                <button type=\"button\" onclick=\"refreshChatTimelinePanel()\">Refresh</button>
+              </div>
+              <div class=\"muted\" id=\"chat_timeline_meta\">timeline: (not loaded)</div>
+              <pre id=\"chat_timeline_out\">(timeline not loaded)</pre>
+            </div>
+          </details>
+
+          <details class=\"drawer\" open id=\"chat_output_export_drawer\">
+            <summary>Agent Output Export Entry</summary>
+            <div class=\"drawer-body\">
+              <div class=\"btn-row\">
+                <button type=\"button\" onclick=\"loadCurrentArtifactLinksForExport()\">Load Artifact Links</button>
+                <button type=\"button\" onclick=\"copyCurrentArtifactLinksForExport()\">Copy Links JSON</button>
+                <button type=\"button\" onclick=\"exportTaskArtifactJson('decision_summary')\">Export decision_summary</button>
+                <button type=\"button\" onclick=\"exportTaskArtifactJson('web_evidence')\">Export web_evidence</button>
+                <button type=\"button\" onclick=\"downloadTaskBundle()\">Download Bundle</button>
+              </div>
+              <pre id=\"output_export_links_out\">(artifact links not loaded)</pre>
+            </div>
+          </details>
+
           <div class=\"tool-box\" id=\"pending_input_box\" style=\"display:none;\">
             <h3>Need Input</h3>
             <div class=\"pending-state-card\" id=\"pending_state_card\" style=\"display:none;\">
@@ -1727,6 +1778,7 @@ HTML = """
               <div class=\"btn-row\">
                 <button onclick=\"attachPath()\">Attach Path</button>
                 <button onclick=\"setCandidateDataFromPath()\">Use As candidate_data</button>
+                <button onclick=\"setCandidateDataFromPathAndSend()\">Use As candidate_data + Send</button>
               </div>
               <label>Upload file copy (optional)</label>
               <input id=\"attachment_file\" type=\"file\" />
@@ -1926,6 +1978,8 @@ HTML = """
         },
         sessionAutoRefreshTimer: null,
         releaseReadiness: null,
+        currentArtifactLinks: null,
+        latestChatTimeline: null,
       };
 
       const PROMPT_HISTORY_LIMIT = 8;
@@ -3830,6 +3884,7 @@ HTML = """
         const noTaskMsg = 'No current task';
         _setButtonDisabled('chat_summary_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
         _setButtonDisabled('chat_timeline_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
+        _setButtonDisabled('chat_exports_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
         _setButtonDisabled('chat_memory_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
         _setButtonDisabled('chat_bundle_btn', !canGeneral, canGeneral ? '' : noTaskMsg);
         _setButtonDisabled('chat_retry_failed_btn', !canRetryFailed, canRetryFailed ? '' : 'No failed step to retry');
@@ -7322,6 +7377,13 @@ HTML = """
         setBatchCompareDetailsVisible(false);
         applyBatchComparePathFilterToUi();
         renderFailedReplayQueue(state.failedReplayQueue);
+        state.currentArtifactLinks = null;
+        renderArtifactLinksForExport(null);
+        state.latestChatTimeline = null;
+        const timelineOut = document.getElementById('chat_timeline_out');
+        if (timelineOut) timelineOut.textContent = '(timeline not loaded)';
+        const timelineMeta = document.getElementById('chat_timeline_meta');
+        if (timelineMeta) timelineMeta.textContent = 'timeline: (not loaded)';
         return r;
       }
 
@@ -7520,14 +7582,108 @@ HTML = """
         renderEvents([{stage: 'bundle_download', status: 'requested'}]);
       }
 
-      async function showTimeline() {
+      function renderArtifactLinksForExport(payload) {
+        const box = document.getElementById('output_export_links_out');
+        if (!box) return;
+        if (!payload || typeof payload !== 'object') {
+          box.textContent = '(artifact links not loaded)';
+          return;
+        }
+        box.textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function _safeExportToken(value) {
+        return String(value || '').trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown';
+      }
+
+      async function loadCurrentArtifactLinksForExport() {
         const tid = taskId();
         if (!tid || tid === '-') {
           renderJsonOut({status: 'fail', error: 'no current_task_id'});
           return;
         }
-        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/timeline?sort=duration_desc`);
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/artifact-links`);
         renderJsonOut(r.data);
+        if (r.data && typeof r.data === 'object') {
+          state.currentArtifactLinks = r.data;
+          renderArtifactLinksForExport(r.data);
+        }
+      }
+
+      async function copyCurrentArtifactLinksForExport() {
+        const payload = state.currentArtifactLinks && typeof state.currentArtifactLinks === 'object'
+          ? state.currentArtifactLinks
+          : null;
+        if (!payload) {
+          renderJsonOut({status: 'fail', error: 'artifact links not loaded'});
+          return;
+        }
+        const text = JSON.stringify(payload, null, 2);
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            renderJsonOut({status: 'pass', action: 'copy_artifact_links', chars: text.length});
+            return;
+          }
+        } catch (e) {
+          // fall through
+        }
+        const tid = String(payload.task_id || taskId() || 'task').trim() || 'task';
+        triggerTextDownload(`artifact_links_${_safeExportToken(tid)}.json`, `${text}\n`, 'application/json;charset=utf-8');
+        renderJsonOut({status: 'pass', action: 'download_artifact_links_fallback', chars: text.length});
+      }
+
+      async function exportTaskArtifactJson(artifactName) {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const name = String(artifactName || '').trim();
+        if (!name) {
+          renderJsonOut({status: 'fail', error: 'missing artifact name'});
+          return;
+        }
+        const url = `/api/task/${encodeURIComponent(tid)}/artifact-export/${encodeURIComponent(name)}?max_chars=200000`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        renderEvents([{stage: 'artifact_export', status: 'requested', operation: name}], {project: state.project});
+        renderJsonOut({status: 'pass', action: 'artifact_export_requested', task_id: tid, artifact: name, url: url});
+      }
+
+      async function refreshChatTimelinePanel() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const statusFilter = String(document.getElementById('chat_timeline_status_filter').value || 'all').trim();
+        const sort = String(document.getElementById('chat_timeline_sort').value || 'duration_desc').trim();
+        const q = new URLSearchParams();
+        if (statusFilter && statusFilter !== 'all') {
+          q.set('status_filter', statusFilter);
+        }
+        if (sort) {
+          q.set('sort', sort);
+        }
+        const r = await apiGet(`/api/task/${encodeURIComponent(tid)}/timeline?${q.toString()}`);
+        renderJsonOut(r.data);
+        const data = r.data && typeof r.data === 'object' ? r.data : {};
+        state.latestChatTimeline = data;
+        const lines = Array.isArray(data.timeline_lines) ? data.timeline_lines : [];
+        const out = document.getElementById('chat_timeline_out');
+        const meta = document.getElementById('chat_timeline_meta');
+        if (meta) {
+          const total = Number(data.total_duration_ms || 0);
+          const failed = Number((data.summary && data.summary.failed_count) || 0);
+          meta.textContent = `timeline: events=${lines.length} | failed=${failed} | total=${formatRuntimeDurationMs(total)}`;
+        }
+        if (out) {
+          out.textContent = lines.length > 0 ? lines.join('\n') : '(no timeline events)';
+        }
+      }
+
+      async function showTimeline() {
+        await refreshChatTimelinePanel();
       }
 
       async function validateTask() {
@@ -7751,6 +7907,22 @@ HTML = """
         syncQuickCandidatePathFromAttachment();
         setQuickCandidateStatus('candidate_data patch prepared from attachment path', 'pass');
         setMessageInput(JSON.stringify({candidate_data: p}, null, 2));
+      }
+
+      async function setCandidateDataFromPathAndSend() {
+        const p = (document.getElementById('attachment_path').value || '').trim();
+        if (!p) {
+          renderJsonOut({status: 'fail', error: 'empty attachment_path'});
+          return;
+        }
+        syncQuickCandidatePathFromAttachment();
+        setMessageInput(JSON.stringify({candidate_data: p}, null, 2));
+        const out = await sendChat(false);
+        const st = String((out && out.status) || 'unknown');
+        setQuickCandidateStatus(
+          `candidate_data send status=${st}`,
+          st === 'pass' ? 'pass' : (st === 'need_user_input' ? 'warn' : 'fail')
+        );
       }
 
       async function uploadFileRef() {
@@ -8329,6 +8501,7 @@ def _task_artifact_links_payload(task_id: str) -> Dict[str, Any]:
         "experiment_trace_path": _path_meta(by_name["experiment_trace"]),
         "summary_api": f"/api/task/{tid}/summary",
         "decision_summary_api": f"/api/task/{tid}/artifact/decision_summary",
+        "artifact_export_api": f"/api/task/{tid}/artifact-export",
         "bundle_api": f"/api/task/{tid}/bundle",
     }
 
@@ -13857,6 +14030,31 @@ def api_task_artifact(task_id: str, artifact_name: str):
     paths = _task_artifact_paths(tid)
     payload = _artifact_preview(artifact_name=name, path=paths[name], max_chars=max_chars)
     return jsonify(payload)
+
+
+@app.get("/api/task/<task_id>/artifact-export/<artifact_name>")
+def api_task_artifact_export(task_id: str, artifact_name: str):
+    tid = str(task_id or "").strip()
+    name = str(artifact_name or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    if name not in ARTIFACT_NAME_TO_FILE:
+        return jsonify({"status": "fail", "error": "invalid artifact_name"}), 400
+
+    max_chars = max(2000, min(_as_int(request.args.get("max_chars"), 200000), 400000))
+    payload = _artifact_preview(artifact_name=name, path=_task_artifact_paths(tid)[name], max_chars=max_chars)
+    status = str(payload.get("status") or "").strip().lower()
+    if status == "missing":
+        return jsonify(payload), 404
+    if status and status != "pass":
+        return jsonify(payload), 500
+
+    filename = f"agent4mat-{tid}-{name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(text, mimetype="application/json", headers=headers)
 
 
 @app.get("/api/task/<task_id>/bundle")

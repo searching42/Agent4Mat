@@ -62,6 +62,11 @@
   - `ui-audit-acceptance` result
   - `ui-release-readiness` result
   - `build_bundle_verdict_step` result
+  - structured outputs for downstream jobs:
+    - `bundle_status`
+    - `bundle_check_count`
+    - `bundle_failure_count`
+    - `bundle_artifact_ready`
 - bundle verify job prints:
   - `verify_status`
   - `summary_status`

@@ -7255,6 +7255,11 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("actions/download-artifact@v4", content)
         self.assertIn("Build ui acceptance bundle verdict", content)
         self.assertIn("continue-on-error: true", content)
+        self.assertIn("Expose ui acceptance bundle outputs", content)
+        self.assertIn("id: bundle_outputs", content)
+        self.assertIn("outputs:", content)
+        self.assertIn("bundle_status: ${{ steps.bundle_outputs.outputs.bundle_status }}", content)
+        self.assertIn("bundle_artifact_ready: ${{ steps.bundle_outputs.outputs.bundle_artifact_ready }}", content)
         self.assertIn("python scripts/check_ui_acceptance_bundle.py", content)
         self.assertIn("Upload ui acceptance bundle summary artifacts", content)
         self.assertIn("ui-acceptance-bundle-summary-artifacts", content)
@@ -7266,6 +7271,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("steps.build_bundle_verdict.outcome", content)
         self.assertIn("runs/ci/ui_acceptance_bundle_summary.json", content)
         self.assertIn("runs/ci/ui_acceptance_bundle_summary.md", content)
+        self.assertIn("needs['ui-acceptance-bundle-summary'].outputs.bundle_artifact_ready == 'true'", content)
         self.assertIn("all upstream UI jobs were skipped; bundle verdict build was skipped.", content)
         self.assertIn("Download ui acceptance bundle summary artifacts", content)
         self.assertIn("Verify ui acceptance bundle artifact schema", content)
@@ -7273,6 +7279,9 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("Upload ui acceptance bundle verify artifacts", content)
         self.assertIn("ui-acceptance-bundle-verify-artifacts", content)
         self.assertIn("verify_bundle_artifact_step", content)
+        self.assertIn("summary_bundle_status", content)
+        self.assertIn("summary_bundle_check_count", content)
+        self.assertIn("summary_bundle_failure_count", content)
         self.assertIn("summary_check_count", content)
         self.assertIn("summary_failure_count", content)
         self.assertIn("failure_categories", content)
@@ -10555,10 +10564,25 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("/api/release/readiness", html)
         self.assertIn("chat_summary_btn", html)
         self.assertIn("chat_timeline_btn", html)
+        self.assertIn("chat_exports_btn", html)
         self.assertIn("chat_memory_btn", html)
         self.assertIn("chat_retry_failed_btn", html)
         self.assertIn("chat_resume_btn", html)
         self.assertIn("chat_bundle_btn", html)
+        self.assertIn("chat_timeline_panel_drawer", html)
+        self.assertIn("chat_timeline_status_filter", html)
+        self.assertIn("chat_timeline_sort", html)
+        self.assertIn("refreshChatTimelinePanel()", html)
+        self.assertIn("chat_timeline_meta", html)
+        self.assertIn("chat_timeline_out", html)
+        self.assertIn("chat_output_export_drawer", html)
+        self.assertIn("output_export_links_out", html)
+        self.assertIn("loadCurrentArtifactLinksForExport()", html)
+        self.assertIn("copyCurrentArtifactLinksForExport()", html)
+        self.assertIn("exportTaskArtifactJson('decision_summary')", html)
+        self.assertIn("exportTaskArtifactJson('web_evidence')", html)
+        self.assertIn("setCandidateDataFromPathAndSend()", html)
+        self.assertIn("/api/task/${encodeURIComponent(tid)}/artifact-export/${encodeURIComponent(name)}", html)
         self.assertIn("syncChatRuntimeActions(", html)
         self.assertIn("formatRuntimeDurationMs(", html)
         self.assertIn("quick_candidate_data_path", html)
@@ -13301,6 +13325,7 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(decision_meta.get("exists"), True)
             self.assertEqual(str(payload.get("summary_api") or ""), f"/api/task/{task_id}/summary")
             self.assertEqual(str(payload.get("decision_summary_api") or ""), f"/api/task/{task_id}/artifact/decision_summary")
+            self.assertEqual(str(payload.get("artifact_export_api") or ""), f"/api/task/{task_id}/artifact-export")
 
     def test_ui_task_artifact_links_rejects_invalid_task_id(self) -> None:
         ui_app_mod = self._load_ui_module()
@@ -13487,6 +13512,44 @@ class UiPrototypeTests(unittest.TestCase):
             self.assertEqual(payload.get("artifact"), "plan")
             preview = payload.get("json_preview") if isinstance(payload.get("json_preview"), dict) else {}
             self.assertEqual(preview.get("summary"), "demo")
+
+    def test_ui_task_artifact_export_downloads_json(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_artifact_export_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "plan.json").write_text(
+                json.dumps({"summary": "export demo", "steps": ["a", "b"]}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/artifact-export/plan")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("application/json", str(resp.content_type or ""))
+            disp = str(resp.headers.get("Content-Disposition") or "")
+            self.assertIn("attachment;", disp)
+            self.assertIn(f"agent4mat-{task_id}-plan-", disp)
+            payload = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(payload.get("status"), "pass")
+            self.assertEqual(payload.get("artifact"), "plan")
+
+    def test_ui_task_artifact_export_returns_missing_when_artifact_absent(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_artifact_export_missing_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/artifact-export/plan")
+            self.assertEqual(resp.status_code, 404)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "missing")
+            self.assertEqual(payload.get("artifact"), "plan")
 
     def test_ui_task_artifact_rejects_invalid_artifact_name(self) -> None:
         ui_app_mod = self._load_ui_module()

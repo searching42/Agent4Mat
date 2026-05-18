@@ -608,6 +608,12 @@ jobs:
       - ui-freeze-acceptance
       - ui-audit-acceptance
       - ui-release-readiness
+    outputs:
+      bundle_status: ${{ steps.bundle_outputs.outputs.bundle_status }}
+      bundle_check_count: ${{ steps.bundle_outputs.outputs.bundle_check_count }}
+      bundle_failure_count: ${{ steps.bundle_outputs.outputs.bundle_failure_count }}
+      bundle_artifact_ready: ${{ steps.bundle_outputs.outputs.bundle_artifact_ready }}
+      bundle_build_outcome: ${{ steps.build_bundle_verdict.outcome }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -663,6 +669,61 @@ jobs:
             runs/ci/ui_acceptance_bundle_summary.md
           if-no-files-found: warn
 
+      - name: Expose ui acceptance bundle outputs
+        id: bundle_outputs
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path("runs/ci/ui_acceptance_bundle_summary.json")
+          out_path = os.environ.get("GITHUB_OUTPUT", "")
+          payload = {}
+          status = "missing"
+          check_count = -1
+          failure_count = -1
+          artifact_ready = "false"
+
+          if summary_path.exists():
+              artifact_ready = "true"
+              try:
+                  loaded = json.loads(summary_path.read_text(encoding="utf-8"))
+                  if isinstance(loaded, dict):
+                      payload = loaded
+                      status = str(payload.get("status") or "unknown")
+                      try:
+                          check_count = int(payload.get("check_count"))
+                      except Exception:
+                          check_count = -1
+                      try:
+                          failure_count = int(payload.get("failure_count"))
+                      except Exception:
+                          failure_count = -1
+                  else:
+                      status = "invalid_payload"
+              except Exception:
+                  status = "parse_error"
+          if out_path:
+              with open(out_path, "a", encoding="utf-8") as fh:
+                  fh.write(f"bundle_status={status}\n")
+                  fh.write(f"bundle_check_count={check_count}\n")
+                  fh.write(f"bundle_failure_count={failure_count}\n")
+                  fh.write(f"bundle_artifact_ready={artifact_ready}\n")
+          print(
+              json.dumps(
+                  {
+                      "bundle_status": status,
+                      "bundle_check_count": check_count,
+                      "bundle_failure_count": failure_count,
+                      "bundle_artifact_ready": artifact_ready,
+                  },
+                  ensure_ascii=False,
+              )
+          )
+          PY
+
       - name: Publish ui acceptance bundle summary
         if: always()
         run: |
@@ -672,6 +733,9 @@ jobs:
           echo "- ui-audit-acceptance: ${{ needs['ui-audit-acceptance'].result }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- ui-release-readiness: ${{ needs['ui-release-readiness'].result }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- build_bundle_verdict_step: ${{ steps.build_bundle_verdict.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- bundle_status: ${{ steps.bundle_outputs.outputs.bundle_status }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- bundle_check_count: ${{ steps.bundle_outputs.outputs.bundle_check_count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- bundle_failure_count: ${{ steps.bundle_outputs.outputs.bundle_failure_count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ needs['ui-freeze-acceptance'].result }}" = "skipped" ] && [ "${{ needs['ui-audit-acceptance'].result }}" = "skipped" ] && [ "${{ needs['ui-release-readiness'].result }}" = "skipped" ]; then
             echo "- note: all upstream UI jobs were skipped; bundle verdict build was skipped." >> "$GITHUB_STEP_SUMMARY"
@@ -706,7 +770,7 @@ jobs:
           python-version: "3.10"
 
       - name: Download ui acceptance bundle summary artifacts
-        if: always() && needs['ui-acceptance-bundle-summary'].result != 'skipped'
+        if: always() && needs['ui-acceptance-bundle-summary'].outputs.bundle_artifact_ready == 'true'
         uses: actions/download-artifact@v4
         with:
           name: ui-acceptance-bundle-summary-artifacts
@@ -714,7 +778,7 @@ jobs:
 
       - name: Verify ui acceptance bundle artifact schema
         id: verify_bundle_artifact
-        if: always() && needs['ui-acceptance-bundle-summary'].result != 'skipped'
+        if: always() && needs['ui-acceptance-bundle-summary'].outputs.bundle_artifact_ready == 'true'
         run: |
           python scripts/check_ui_acceptance_bundle_artifact.py --workspace-root . --summary-json runs/ci/ui_acceptance_bundle_summary.json --summary-md runs/ci/ui_acceptance_bundle_summary.md --out-json runs/ci/ui_acceptance_bundle_artifact_verify.json
 
@@ -732,6 +796,9 @@ jobs:
           echo "### UI Acceptance Bundle Verify" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- ui-acceptance-bundle-summary: ${{ needs['ui-acceptance-bundle-summary'].result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- summary_bundle_status: ${{ needs['ui-acceptance-bundle-summary'].outputs.bundle_status }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- summary_bundle_check_count: ${{ needs['ui-acceptance-bundle-summary'].outputs.bundle_check_count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- summary_bundle_failure_count: ${{ needs['ui-acceptance-bundle-summary'].outputs.bundle_failure_count }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- verify_bundle_artifact_step: ${{ steps.verify_bundle_artifact.outcome }}" >> "$GITHUB_STEP_SUMMARY"
           if [ -f runs/ci/ui_acceptance_bundle_artifact_verify.json ]; then
             python - <<'PY' >> "$GITHUB_STEP_SUMMARY"

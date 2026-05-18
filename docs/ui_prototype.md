@@ -49,6 +49,9 @@ Open: `http://127.0.0.1:8787`
   - recent prompts are stored per project (local browser storage) and shown as reusable chips
   - supports step mode in chat via `/step <operation> {args_json}` or JSON (`{"operation":"clean_dataset","args":{...}}`)
   - includes a built-in step panel (operation dropdown + args JSON) that sends step requests into chat
+  - includes an in-chat `Execution Timeline Panel` with status/sort filters for step durations and failure context
+  - includes an in-chat `Agent Output Export Entry` for artifact-links preview/copy and one-click artifact export
+  - file input drawer supports `Use As candidate_data + Send` for direct path-to-chat execution
 - project/session memory:
   - each project persists independent chat history and runtime pointers
   - supports editable `Project memory notes` with `Enable project memory injection` toggle

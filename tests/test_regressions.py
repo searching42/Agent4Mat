@@ -1594,6 +1594,57 @@ class RegressionTests(unittest.TestCase):
             self.assertIsNone(validated.get("train_data"))
             self.assertIsNone(validated.get("candidate_data"))
 
+    def test_request_schema_accepts_budget_runtime_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "task_id": "task_budget_runtime_1",
+                "request_text": "design molecule with budget guardrails",
+                "mode": "fast_screen",
+                "targets": [{"property": "plqy", "objective": "maximize"}],
+                "budget": {
+                    "max_candidates": 10,
+                    "timeout_sec": 120,
+                    "max_tool_calls": 7,
+                    "max_external_calls": 2,
+                    "on_limit": "need_approval",
+                },
+            }
+            validated = validate_request_payload(payload, workspace_root=td_path)
+            budget = validated.get("budget") if isinstance(validated.get("budget"), dict) else {}
+            self.assertEqual(int(budget.get("timeout_sec") or 0), 120)
+            self.assertEqual(int(budget.get("max_tool_calls") or 0), 7)
+            self.assertEqual(int(budget.get("max_external_calls") or 0), 2)
+            self.assertEqual(str(budget.get("on_limit") or ""), "need_approval")
+
+    def test_task_v2_schema_accepts_runtime_budget_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            payload = {
+                "version": "2.0",
+                "task_id": "task_v2_runtime_budget",
+                "request_text": "design molecule",
+                "execution_mode": "full_pipeline",
+                "operation": "full_pipeline",
+                "property": "plqy",
+                "range": "60-100",
+                "n_structures": 20,
+                "constraints": {},
+                "runtime_budget": {
+                    "timeout_sec": 100,
+                    "max_tool_calls": 8,
+                    "max_external_calls": 3,
+                    "on_limit": "fail",
+                },
+                "prediction_model": "unimol_lambda_plqy_v1",
+            }
+            validated = validate_task_v2_payload(payload, workspace_root=td_path)
+            runtime_budget = validated.get("runtime_budget") if isinstance(validated.get("runtime_budget"), dict) else {}
+            self.assertEqual(int(runtime_budget.get("timeout_sec") or 0), 100)
+            self.assertEqual(int(runtime_budget.get("max_tool_calls") or 0), 8)
+            self.assertEqual(int(runtime_budget.get("max_external_calls") or 0), 3)
+            self.assertEqual(str(runtime_budget.get("on_limit") or ""), "fail")
+
     def test_step_request_schema_rejects_invalid_operation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
@@ -1644,7 +1695,7 @@ class RegressionTests(unittest.TestCase):
             "mode": "fast_screen",
             "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
             "constraints": {"candidate_data": "candidates.csv"},
-            "budget": {"max_candidates": 77},
+            "budget": {"max_candidates": 77, "timeout_sec": 300, "max_tool_calls": 9, "max_external_calls": 4, "on_limit": "need_approval"},
             "model_preferences": {
                 "predictor_id": "unimol_lambda_plqy_v1",
                 "generator_id": "reinvent4_lambda_em_v2",
@@ -1657,6 +1708,11 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(task_v2["operation"], "full_pipeline")
         self.assertEqual(task_v2["n_structures"], 77)
         self.assertEqual(task_v2["candidate_data"], "candidates.csv")
+        runtime_budget = task_v2.get("runtime_budget") if isinstance(task_v2.get("runtime_budget"), dict) else {}
+        self.assertEqual(int(runtime_budget.get("timeout_sec") or 0), 300)
+        self.assertEqual(int(runtime_budget.get("max_tool_calls") or 0), 9)
+        self.assertEqual(int(runtime_budget.get("max_external_calls") or 0), 4)
+        self.assertEqual(str(runtime_budget.get("on_limit") or ""), "need_approval")
         self.assertIn("legacy request payload auto-mapped to task.v2", task_v2["compatibility_warnings"])
 
     def test_request_minimal_does_not_enforce_decision_only_fields(self) -> None:
@@ -2334,6 +2390,235 @@ class RegressionTests(unittest.TestCase):
             self.assertTrue(Path(payload["logging_evaluation_report_path"]).exists())
             self.assertTrue(Path(payload["logging_guardrails_report_path"]).exists())
             self.assertTrue(Path(payload["logging_memory_context_path"]).exists())
+
+    def test_agent_run_json_budget_max_tool_calls_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            request_json = td_path / "request_budget_tool_calls_fail.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_budget_tool_calls_fail",
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 5, "max_tool_calls": 2, "on_limit": "fail"},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_v1",
+                            "generator_id": "reinvent4_lambda_em_v2",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "failed")
+            execution = json.loads(Path(payload["execution_path"]).read_text(encoding="utf-8"))
+            budget_control = execution.get("budget_control") if isinstance(execution.get("budget_control"), dict) else {}
+            self.assertEqual(str(budget_control.get("check") or ""), "max_tool_calls")
+            self.assertEqual(str(budget_control.get("action") or ""), "fail")
+            self.assertTrue(bool(budget_control.get("limit_triggered")))
+            records = execution.get("records") if isinstance(execution.get("records"), list) else []
+            self.assertGreaterEqual(len(records), 3)
+            self.assertEqual(str(records[-1].get("name") or ""), "search_dataset")
+            self.assertEqual(str(records[-1].get("status") or ""), "failed")
+            decision = json.loads(Path(payload["decision_summary_path"]).read_text(encoding="utf-8"))
+            dec_budget = decision.get("budget_control") if isinstance(decision.get("budget_control"), dict) else {}
+            self.assertEqual(str(dec_budget.get("check") or ""), "max_tool_calls")
+            task_state = json.loads(Path(payload["task_state_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(str(task_state.get("current_state") or ""), "FAILED")
+
+    def test_agent_run_json_budget_max_tool_calls_need_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+            request_json = td_path / "request_budget_tool_calls_need_approval.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_budget_tool_calls_need_approval",
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 5, "max_tool_calls": 2, "on_limit": "need_approval"},
+                        "model_preferences": {
+                            "predictor_id": "unimol_lambda_plqy_v1",
+                            "generator_id": "reinvent4_lambda_em_v2",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(repo_root / "configs" / "models" / "catalog.json"),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "failed")
+            execution = json.loads(Path(payload["execution_path"]).read_text(encoding="utf-8"))
+            budget_control = execution.get("budget_control") if isinstance(execution.get("budget_control"), dict) else {}
+            self.assertEqual(str(budget_control.get("check") or ""), "max_tool_calls")
+            self.assertEqual(str(budget_control.get("action") or ""), "need_approval")
+            self.assertEqual(str(budget_control.get("workflow_state") or ""), "WAITING_APPROVAL")
+            task_state = json.loads(Path(payload["task_state_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(str(task_state.get("current_state") or ""), "WAITING_APPROVAL")
+            guardrails = json.loads(Path(payload["guardrails_report_path"]).read_text(encoding="utf-8"))
+            checks = guardrails.get("checks") if isinstance(guardrails.get("checks"), list) else []
+            budget_check = next((c for c in checks if isinstance(c, dict) and str(c.get("name") or "") == "budget_limit"), {})
+            self.assertEqual(str(budget_check.get("status") or ""), "warn")
+
+    def test_agent_run_json_budget_timeout_sec_blocks_late_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(__file__).resolve().parents[1]
+            td_path = Path(td)
+
+            generate_sleep_script = td_path / "generate_sleep.py"
+            generate_sleep_script.write_text(
+                (
+                    "import csv, json, time, sys\n"
+                    "payload = json.loads(sys.stdin.read())\n"
+                    "out = payload['output_csv']\n"
+                    "time.sleep(2.1)\n"
+                    "with open(out, 'w', encoding='utf-8', newline='') as f:\n"
+                    "  w = csv.DictWriter(f, fieldnames=['candidate_id','smiles'])\n"
+                    "  w.writeheader(); w.writerow({'candidate_id':'c1','smiles':'c1ccccc1'})\n"
+                    "print(json.dumps({'status':'success','adapter':'budget_timeout_generate','output_csv':out,'rows':1}))\n"
+                ),
+                encoding="utf-8",
+            )
+            score_script = td_path / "score_stub.py"
+            score_script.write_text(
+                (
+                    "import csv, json, sys\n"
+                    "payload = json.loads(sys.stdin.read())\n"
+                    "inp = payload['input_csv']; out = payload['output_csv']\n"
+                    "rows = list(csv.DictReader(open(inp, 'r', encoding='utf-8')))\n"
+                    "for r in rows:\n"
+                    "  r['plqy_pred'] = '0.8'; r['plqy_score'] = '0.8'\n"
+                    "with open(out, 'w', encoding='utf-8', newline='') as f:\n"
+                    "  w = csv.DictWriter(f, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)\n"
+                    "print(json.dumps({'status':'success','adapter':'budget_timeout_score','output_csv':out}))\n"
+                ),
+                encoding="utf-8",
+            )
+            catalog_json = td_path / "catalog_budget_timeout.json"
+            catalog_json.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "pred_budget_timeout",
+                                "kind": "predictor",
+                                "backend": "mock_predictor",
+                                "task_types": ["plqy"],
+                                "runtime_profile": "cpu",
+                                "params": {"adapters": {"score_candidates_cmd": f"{sys.executable} {score_script}"}},
+                            },
+                            {
+                                "id": "gen_budget_timeout",
+                                "kind": "generator",
+                                "backend": "mock_generator",
+                                "task_types": ["molecule_generation"],
+                                "runtime_profile": "cpu",
+                                "params": {"adapters": {"generate_candidates_cmd": f"{sys.executable} {generate_sleep_script}"}},
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            request_json = td_path / "request_budget_timeout.json"
+            request_json.write_text(
+                json.dumps(
+                    {
+                        "task_id": "task_budget_timeout",
+                        "request_text": "设计470nm附近且高PLQY分子",
+                        "mode": "fast_screen",
+                        "targets": [{"property": "plqy", "objective": "maximize", "target_value": 0.6}],
+                        "budget": {"max_candidates": 5, "timeout_sec": 1, "on_limit": "fail"},
+                        "model_preferences": {
+                            "predictor_id": "pred_budget_timeout",
+                            "generator_id": "gen_budget_timeout",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "oled_agent.cli",
+                    "agent-run-json",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--catalog",
+                    str(catalog_json),
+                    "--request-json",
+                    str(request_json),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src"), "OLED_AGENT_ENABLE_WEB_EVIDENCE": "0"},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            execution = json.loads(Path(payload["execution_path"]).read_text(encoding="utf-8"))
+            budget_control = execution.get("budget_control") if isinstance(execution.get("budget_control"), dict) else {}
+            self.assertEqual(str(budget_control.get("check") or ""), "timeout_sec")
+            self.assertTrue(bool(budget_control.get("limit_triggered")))
+            self.assertGreaterEqual(int(budget_control.get("observed") or 0), 1)
+            records = execution.get("records") if isinstance(execution.get("records"), list) else []
+            self.assertTrue(any(isinstance(r, dict) and str(r.get("name") or "") == "generate_candidates" for r in records))
+            self.assertEqual(str(records[-1].get("status") or ""), "failed")
 
     def test_agent_run_json_molscribe_smoke_uses_generation_input_source_image(self) -> None:
         with tempfile.TemporaryDirectory() as td:

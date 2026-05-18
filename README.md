@@ -176,6 +176,15 @@ Web evidence notes:
 - `search_web_evidence` supports `time_range` values like `7d`, `30d`, `12m`, `1y`, or `YYYY-MM-DD..YYYY-MM-DD`.
 - non-public sources (`file://`, localhost, private-IP URLs) are filtered before evidence is persisted.
 
+Budget guardrails notes:
+- `request.json` budget supports runtime controls:
+  - `timeout_sec`
+  - `max_tool_calls`
+  - `max_external_calls`
+  - `on_limit` (`fail` | `need_approval`)
+- `task.v2` supports the same controls under `runtime_budget`; `agent-approve` will map them into `request_from_task.json`.
+- when `on_limit=need_approval`, execution stops with `task_state.current_state=WAITING_APPROVAL` and can be resumed after budget adjustment.
+
 ### Path D: strict real-chain release evidence bundle
 ```bash
 make real-chain-baseline TASK_ID=<base_task_id>

@@ -31,6 +31,10 @@ class BudgetSpec:
     max_wallclock_hours: float = 4.0
     max_gpu_hours: float = 2.0
     max_candidates: int = 500
+    timeout_sec: Optional[int] = None
+    max_tool_calls: Optional[int] = None
+    max_external_calls: Optional[int] = None
+    on_limit: str = "fail"
 
 
 @dataclass

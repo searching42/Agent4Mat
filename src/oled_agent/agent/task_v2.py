@@ -154,6 +154,18 @@ def task_v2_to_request_payload(task_payload: Dict[str, Any]) -> Dict[str, Any]:
     predictor_id = str(model_prefs.get("predictor_id") or task_payload.get("prediction_model") or "").strip()
     generator_id = str(model_prefs.get("generator_id") or "reinvent4_lambda_em_v2").strip()
 
+    budget_payload: Dict[str, Any] = {"max_candidates": budget_max}
+    runtime_budget = task_payload.get("runtime_budget") if isinstance(task_payload.get("runtime_budget"), dict) else {}
+    if isinstance(runtime_budget.get("timeout_sec"), int) and int(runtime_budget.get("timeout_sec")) >= 1:
+        budget_payload["timeout_sec"] = int(runtime_budget.get("timeout_sec"))
+    if isinstance(runtime_budget.get("max_tool_calls"), int) and int(runtime_budget.get("max_tool_calls")) >= 1:
+        budget_payload["max_tool_calls"] = int(runtime_budget.get("max_tool_calls"))
+    if isinstance(runtime_budget.get("max_external_calls"), int) and int(runtime_budget.get("max_external_calls")) >= 0:
+        budget_payload["max_external_calls"] = int(runtime_budget.get("max_external_calls"))
+    on_limit = str(runtime_budget.get("on_limit") or "").strip().lower()
+    if on_limit in {"fail", "need_approval"}:
+        budget_payload["on_limit"] = on_limit
+
     payload: Dict[str, Any] = {
         "task_id": str(task_payload.get("task_id") or "task_default"),
         "request_text": str(task_payload.get("request_text") or ""),
@@ -162,7 +174,7 @@ def task_v2_to_request_payload(task_payload: Dict[str, Any]) -> Dict[str, Any]:
         else "fast_screen",
         "targets": [target],
         "constraints": constraints,
-        "budget": {"max_candidates": budget_max},
+        "budget": budget_payload,
         "model_preferences": {
             "predictor_id": predictor_id,
             "generator_id": generator_id,
@@ -201,6 +213,17 @@ def legacy_request_to_task_v2(request_payload: Dict[str, Any]) -> Dict[str, Any]
     budget = request_payload.get("budget") if isinstance(request_payload.get("budget"), dict) else {}
     model_prefs = request_payload.get("model_preferences") if isinstance(request_payload.get("model_preferences"), dict) else {}
 
+    runtime_budget: Dict[str, Any] = {}
+    if isinstance(budget.get("timeout_sec"), int) and int(budget.get("timeout_sec")) >= 1:
+        runtime_budget["timeout_sec"] = int(budget.get("timeout_sec"))
+    if isinstance(budget.get("max_tool_calls"), int) and int(budget.get("max_tool_calls")) >= 1:
+        runtime_budget["max_tool_calls"] = int(budget.get("max_tool_calls"))
+    if isinstance(budget.get("max_external_calls"), int) and int(budget.get("max_external_calls")) >= 0:
+        runtime_budget["max_external_calls"] = int(budget.get("max_external_calls"))
+    on_limit = str(budget.get("on_limit") or "").strip().lower()
+    if on_limit in {"fail", "need_approval"}:
+        runtime_budget["on_limit"] = on_limit
+
     task = {
         "version": "2.0",
         "task_id": task_id,
@@ -221,6 +244,7 @@ def legacy_request_to_task_v2(request_payload: Dict[str, Any]) -> Dict[str, Any]
             if isinstance(request_payload.get("constraints"), dict)
             else None
         ),
+        "runtime_budget": runtime_budget if runtime_budget else {},
         "prediction_model": str(model_prefs.get("predictor_id") or ""),
         "model_preferences": {
             "predictor_id": str(model_prefs.get("predictor_id") or ""),

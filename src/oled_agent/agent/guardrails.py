@@ -171,6 +171,30 @@ def build_guardrails_report(
     else:
         _check("failure_diagnostics", "pass", "execution succeeded; no failure diagnostics required", strict_blocking=False)
 
+    budget_control = execution_payload.get("budget_control") if isinstance(execution_payload.get("budget_control"), dict) else {}
+    if bool(budget_control.get("limit_triggered")):
+        action = str(budget_control.get("action") or "fail").strip().lower() or "fail"
+        limit_name = str(budget_control.get("check") or "").strip()
+        message = str(budget_control.get("message") or "").strip() or f"budget limit triggered ({limit_name})"
+        if action == "need_approval":
+            _check(
+                "budget_limit",
+                "warn",
+                message,
+                strict_blocking=False,
+                details=budget_control,
+            )
+        else:
+            _check(
+                "budget_limit",
+                "fail",
+                message,
+                strict_blocking=True,
+                details=budget_control,
+            )
+    else:
+        _check("budget_limit", "pass", "no budget limit triggered", strict_blocking=False)
+
     adapters = []
     stub_adapters = set()
     fallback_adapters = set()

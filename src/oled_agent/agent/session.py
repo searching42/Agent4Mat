@@ -136,7 +136,10 @@ def _build_task_state(
     plan: Dict[str, Any],
     execution: Dict[str, Any],
 ) -> Dict[str, Any]:
-    execution_status = "success" if str(execution.get("status") or "").strip() == "success" else "failed"
+    raw_status = str(execution.get("status") or "").strip()
+    execution_status = "success" if raw_status == "success" else "failed"
+    budget_control = execution.get("budget_control") if isinstance(execution.get("budget_control"), dict) else {}
+    waiting_approval = bool(budget_control.get("limit_triggered")) and str(budget_control.get("action") or "") == "need_approval"
     history = []
     for state in _EARLY_STATES:
         history.append(
@@ -163,27 +166,25 @@ def _build_task_state(
             }
         )
 
-    history.append(
-        {
-            "state": "SAVING",
-            "status": "completed",
-            "at": _now_iso(),
-        }
-    )
-    history.append(
-        {
-            "state": "QA",
-            "status": "completed" if execution_status == "success" else "failed",
-            "at": _now_iso(),
-        }
-    )
-    history.append(
-        {
-            "state": "DONE" if execution_status == "success" else "FAILED",
-            "status": execution_status,
-            "at": _now_iso(),
-        }
-    )
+    history.append({"state": "SAVING", "status": "completed", "at": _now_iso()})
+    if waiting_approval:
+        history.append({"state": "PAUSED", "status": "unknown", "at": _now_iso()})
+        history.append({"state": "WAITING_APPROVAL", "status": "unknown", "at": _now_iso()})
+    else:
+        history.append(
+            {
+                "state": "QA",
+                "status": "completed" if execution_status == "success" else "failed",
+                "at": _now_iso(),
+            }
+        )
+        history.append(
+            {
+                "state": "DONE" if execution_status == "success" else "FAILED",
+                "status": execution_status,
+                "at": _now_iso(),
+            }
+        )
 
     design = plan.get("design_spec", {}) if isinstance(plan, dict) else {}
     return {
@@ -191,7 +192,7 @@ def _build_task_state(
         "generated_at": _now_iso(),
         "task_id": design.get("task_id", ""),
         "status": execution_status,
-        "current_state": history[-1]["state"] if history else "UNKNOWN",
+        "current_state": "WAITING_APPROVAL" if waiting_approval else (history[-1]["state"] if history else "UNKNOWN"),
         "history": history,
     }
 
@@ -667,6 +668,7 @@ def _build_decision_summary(
         "generated_at": _now_iso(),
         "task_id": plan.get("design_spec", {}).get("task_id", ""),
         "status": execution.get("status", ""),
+        "budget_control": execution.get("budget_control") if isinstance(execution.get("budget_control"), dict) else {},
         "model_choice": plan.get("design_spec", {}).get("model_choice", {}),
         "score_step": {
             "adapter": adapter,

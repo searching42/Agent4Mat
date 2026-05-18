@@ -70,6 +70,16 @@
     "candidate_data": {
       "type": ["string", "null"]
     },
+    "runtime_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeout_sec": {"type": "integer", "minimum": 1},
+        "max_tool_calls": {"type": "integer", "minimum": 1},
+        "max_external_calls": {"type": "integer", "minimum": 0},
+        "on_limit": {"type": "string", "enum": ["fail", "need_approval"]}
+      }
+    },
     "prediction_model": {
       "type": "string",
       "minLength": 1

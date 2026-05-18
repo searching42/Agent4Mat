@@ -387,7 +387,25 @@ def _budget_from_payload(payload: Dict[str, Any]) -> BudgetSpec:
     max_candidates = b.get("max_candidates")
     if not isinstance(max_candidates, int):
         max_candidates = 500
-    return BudgetSpec(max_candidates=max_candidates)
+    timeout_sec = b.get("timeout_sec") if isinstance(b.get("timeout_sec"), int) and int(b.get("timeout_sec")) >= 1 else None
+    max_tool_calls = (
+        b.get("max_tool_calls") if isinstance(b.get("max_tool_calls"), int) and int(b.get("max_tool_calls")) >= 1 else None
+    )
+    max_external_calls = (
+        b.get("max_external_calls")
+        if isinstance(b.get("max_external_calls"), int) and int(b.get("max_external_calls")) >= 0
+        else None
+    )
+    on_limit = str(b.get("on_limit") or "fail").strip().lower()
+    if on_limit not in {"fail", "need_approval"}:
+        on_limit = "fail"
+    return BudgetSpec(
+        max_candidates=max_candidates,
+        timeout_sec=timeout_sec,
+        max_tool_calls=max_tool_calls,
+        max_external_calls=max_external_calls,
+        on_limit=on_limit,
+    )
 
 
 def _collect_generation_inputs(payload: Dict[str, Any]) -> Dict[str, Any]:

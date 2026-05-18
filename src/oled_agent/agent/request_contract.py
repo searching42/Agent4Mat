@@ -159,6 +159,22 @@ def _validate_request_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) 
 
     if "budget" in instance and not isinstance(instance["budget"], dict):
         raise RequestValidationError("$.budget: must be object")
+    if isinstance(instance.get("budget"), dict):
+        budget = instance["budget"]
+        if "max_candidates" in budget and (not isinstance(budget.get("max_candidates"), int) or int(budget.get("max_candidates")) < 1):
+            raise RequestValidationError("$.budget.max_candidates: must be integer >= 1")
+        if "timeout_sec" in budget and (not isinstance(budget.get("timeout_sec"), int) or int(budget.get("timeout_sec")) < 1):
+            raise RequestValidationError("$.budget.timeout_sec: must be integer >= 1")
+        if "max_tool_calls" in budget and (not isinstance(budget.get("max_tool_calls"), int) or int(budget.get("max_tool_calls")) < 1):
+            raise RequestValidationError("$.budget.max_tool_calls: must be integer >= 1")
+        if "max_external_calls" in budget and (
+            not isinstance(budget.get("max_external_calls"), int) or int(budget.get("max_external_calls")) < 0
+        ):
+            raise RequestValidationError("$.budget.max_external_calls: must be integer >= 0")
+        if "on_limit" in budget:
+            on_limit = str(budget.get("on_limit") or "").strip()
+            if on_limit not in {"fail", "need_approval"}:
+                raise RequestValidationError("$.budget.on_limit: must be one of: ['fail', 'need_approval']")
 
     if "generation_input" in instance:
         generation_input = instance["generation_input"]
@@ -221,6 +237,27 @@ def _validate_task_v2_minimal(instance: Dict[str, Any], schema: Dict[str, Any]) 
         val = instance.get(key)
         if val is not None and not isinstance(val, str):
             raise RequestValidationError(f"$.{key}: must be string|null")
+
+    runtime_budget = instance.get("runtime_budget")
+    if runtime_budget is not None:
+        if not isinstance(runtime_budget, dict):
+            raise RequestValidationError("$.runtime_budget: must be object")
+        if "timeout_sec" in runtime_budget and (
+            not isinstance(runtime_budget.get("timeout_sec"), int) or int(runtime_budget.get("timeout_sec")) < 1
+        ):
+            raise RequestValidationError("$.runtime_budget.timeout_sec: must be integer >= 1")
+        if "max_tool_calls" in runtime_budget and (
+            not isinstance(runtime_budget.get("max_tool_calls"), int) or int(runtime_budget.get("max_tool_calls")) < 1
+        ):
+            raise RequestValidationError("$.runtime_budget.max_tool_calls: must be integer >= 1")
+        if "max_external_calls" in runtime_budget and (
+            not isinstance(runtime_budget.get("max_external_calls"), int) or int(runtime_budget.get("max_external_calls")) < 0
+        ):
+            raise RequestValidationError("$.runtime_budget.max_external_calls: must be integer >= 0")
+        if "on_limit" in runtime_budget:
+            on_limit = str(runtime_budget.get("on_limit") or "").strip()
+            if on_limit not in {"fail", "need_approval"}:
+                raise RequestValidationError("$.runtime_budget.on_limit: must be one of: ['fail', 'need_approval']")
 
     for key in ("model_preferences", "generation_input", "provenance"):
         if key in instance and not isinstance(instance.get(key), dict):

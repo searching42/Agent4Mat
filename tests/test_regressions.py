@@ -7345,6 +7345,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("real-no-fallback-gate:", content)
         self.assertIn("ui-freeze-acceptance:", content)
         self.assertIn("ui-audit-acceptance:", content)
+        self.assertIn("ui-acceptance-bundle:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("ui-stability-smoke:", content)
         self.assertIn("ui-release-readiness:", content)
@@ -7354,10 +7355,13 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/check_ui_freeze_acceptance.py", content)
         self.assertIn("scripts/check_ui_audit_acceptance.py", content)
         self.assertIn("scripts/check_ui_release_readiness.py", content)
+        self.assertIn("scripts/check_ui_acceptance_bundle.py", content)
         self.assertIn("runs/ci/ui_stability_smoke.json", content)
         self.assertIn("runs/ci/ui_audit_acceptance.json", content)
         self.assertIn("runs/ci/ui_release_readiness.json", content)
         self.assertIn("runs/ci/ui_release_readiness.md", content)
+        self.assertIn("runs/ci/ui_acceptance_bundle_summary.json", content)
+        self.assertIn("runs/ci/ui_acceptance_bundle_summary.md", content)
         self.assertIn("configs/acceptance/ui_freeze_acceptance_baseline.json", content)
         self.assertIn("configs/acceptance/ui_audit_acceptance_baseline.json", content)
         self.assertIn("scripts/collect_real_chain_evidence.py", content)
@@ -7370,6 +7374,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("archive_real_chain_baseline.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --tar-gz", content)
         self.assertIn("check_real_chain_release_bundle.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --require-tar-gz", content)
         self.assertIn("$(MAKE) ui-release-readiness WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("$(MAKE) ui-stability-smoke WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("--require-audit-report", content)
         self.assertIn("ui/app.py", content)
         self.assertIn("input-smoke:", content)
@@ -7408,6 +7413,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "check_ui_freeze_acceptance.py",
             repo_root / "scripts" / "check_ui_audit_acceptance.py",
             repo_root / "scripts" / "check_ui_release_readiness.py",
+            repo_root / "scripts" / "check_ui_acceptance_bundle.py",
             repo_root / "scripts" / "summarize_experiments.py",
             repo_root / "scripts" / "run_molscribe_input_smoke.sh",
             repo_root / "scripts" / "run_real_chain_acceptance_minimal.sh",
@@ -8803,6 +8809,115 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(str(report.get("status") or ""), "fail")
             failures = report.get("failures") if isinstance(report.get("failures"), list) else []
             self.assertTrue(any("ui_audit_report_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict)))
+
+    def test_check_ui_acceptance_bundle_script_reports_pass(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            freeze_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 8,
+                "failed_count": 0,
+            }
+            audit_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 6,
+                "failed_count": 0,
+            }
+            release_payload = {
+                "status": "pass",
+                "generated_at": now,
+                "check_count": 9,
+                "failure_count": 0,
+                "warning_count": 0,
+                "gate_reports": [
+                    {"name": "ui_stability_smoke", "status": "pass"},
+                    {"name": "ui_freeze_acceptance", "status": "pass"},
+                    {"name": "ui_audit_acceptance", "status": "pass"},
+                ],
+            }
+            (ci_dir / "ui_freeze_acceptance.json").write_text(
+                json.dumps(freeze_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (ci_dir / "ui_audit_acceptance.json").write_text(
+                json.dumps(audit_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (ci_dir / "ui_release_readiness.json").write_text(
+                json.dumps(release_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            out_json = ci_dir / "ui_acceptance_bundle_summary.json"
+            out_md = ci_dir / "ui_acceptance_bundle_summary.md"
+            script = repo_root / "scripts" / "check_ui_acceptance_bundle.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--out-json",
+                    str(out_json),
+                    "--out-md",
+                    str(out_md),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "pass")
+            self.assertEqual(int(payload.get("failure_count", -1)), 0)
+            self.assertTrue(out_json.exists())
+            self.assertTrue(out_md.exists())
+
+    def test_check_ui_acceptance_bundle_script_missing_component_fails(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            ci_dir = td_path / "runs" / "ci"
+            ci_dir.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            (ci_dir / "ui_audit_acceptance.json").write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "generated_at": now,
+                        "check_count": 6,
+                        "failed_count": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            script = repo_root / "scripts" / "check_ui_acceptance_bundle.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "fail")
+            failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
+            self.assertTrue(any("ui_freeze_acceptance_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict)))
 
 
 class ModelCatalogTests(unittest.TestCase):

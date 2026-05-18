@@ -11219,6 +11219,8 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("body.output-simple-mode #single_step_runner_drawer", html)
         self.assertIn("body.output-simple-mode #artifacts_validation_drawer", html)
         self.assertIn("body.output-simple-mode #file_input_drawer", html)
+        self.assertIn("body.output-simple-mode .chat-quick-strip", html)
+        self.assertIn("body.output-simple-mode #chat_status_ribbon .status-actions", html)
         self.assertIn("collectWebSearchPrefs(", html)
         self.assertIn("normalizeWebDomains(", html)
         self.assertIn("detectWebPresetName(", html)
@@ -11426,8 +11428,10 @@ class UiPrototypeTests(unittest.TestCase):
             r"body\.output-simple-mode #artifacts_validation_drawer,\s*"
             r"body\.output-simple-mode #file_input_drawer,\s*"
             r"body\.output-simple-mode \.chat-quick-chips,\s*"
+            r"body\.output-simple-mode \.chat-quick-strip,\s*"
             r"body\.output-simple-mode #prompt_history_box,\s*"
             r"body\.output-simple-mode \.web-preset-row\s*\{\s*display:\s*none !important;\s*\}",
+            r"body\.output-simple-mode #chat_status_ribbon \.status-actions\s*\{\s*display:\s*none !important;\s*\}",
         ]
         for pat in css_contract_patterns:
             self.assertRegex(html, re.compile(pat, re.S))
@@ -11443,6 +11447,22 @@ class UiPrototypeTests(unittest.TestCase):
         ]
         for pat in js_contract_patterns:
             self.assertRegex(html, re.compile(pat, re.S))
+
+    def test_ui_simple_mode_deduplicates_actions_between_chat_and_right_panel(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        start = html.find('<div class="right-simple-actions simple-only" id="right_simple_actions">')
+        self.assertGreaterEqual(start, 0)
+        end = html.find("</div>", start)
+        self.assertGreater(end, start)
+        block = html[start:end]
+        self.assertIn("Artifact Links", block)
+        self.assertIn("Timeline", block)
+        self.assertIn("Validate", block)
+        self.assertNotIn(">Summary<", block)
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()

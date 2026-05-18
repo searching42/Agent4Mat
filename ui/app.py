@@ -1048,9 +1048,16 @@ HTML = """
       body.output-simple-mode #artifacts_validation_drawer,
       body.output-simple-mode #file_input_drawer,
       body.output-simple-mode .chat-quick-chips,
+      body.output-simple-mode .chat-quick-strip,
       body.output-simple-mode #prompt_history_box,
       body.output-simple-mode .web-preset-row {
         display: none !important;
+      }
+      body.output-simple-mode #chat_status_ribbon .status-actions {
+        display: none !important;
+      }
+      body.output-simple-mode #chat_status_ribbon {
+        justify-content: flex-start;
       }
       .simple-only {
         display: none !important;
@@ -2048,7 +2055,6 @@ HTML = """
           <button onclick=\"loadCurrentArtifactLinksForExport()\">Artifact Links</button>
           <button onclick=\"showTimeline()\">Timeline</button>
           <button onclick=\"validateTask()\">Validate</button>
-          <button onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
           <button id=\"simple_retry_failed_btn\" onclick=\"retryFailedStep()\">Retry Failed</button>
           <button id=\"simple_resume_btn\" onclick=\"retryCurrentTask()\">Resume</button>
         </div>

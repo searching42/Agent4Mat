@@ -39,6 +39,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      run_ui_acceptance_bundle:
+        description: "Run UI acceptance bundle (freeze+audit+readiness)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
   push:
   pull_request:
 
@@ -453,7 +459,12 @@ jobs:
 
   ui-freeze-acceptance:
     name: acceptance ui-freeze (manual)
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_ui_freeze_acceptance == 'true'
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (
+        github.event.inputs.run_ui_freeze_acceptance == 'true' ||
+        github.event.inputs.run_ui_acceptance_bundle == 'true'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -491,7 +502,12 @@ jobs:
 
   ui-audit-acceptance:
     name: acceptance ui-audit (manual)
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_ui_audit_acceptance == 'true'
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (
+        github.event.inputs.run_ui_audit_acceptance == 'true' ||
+        github.event.inputs.run_ui_acceptance_bundle == 'true'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -529,7 +545,12 @@ jobs:
 
   ui-release-readiness:
     name: acceptance ui-release-readiness (manual)
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_ui_release_readiness == 'true'
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (
+        github.event.inputs.run_ui_release_readiness == 'true' ||
+        github.event.inputs.run_ui_acceptance_bundle == 'true'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -570,3 +591,28 @@ jobs:
           else
             echo "ui-release-readiness output file is missing (likely upstream step failed)." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  ui-acceptance-bundle-summary:
+    name: acceptance ui-bundle-summary (manual)
+    if: >
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      (
+        github.event.inputs.run_ui_acceptance_bundle == 'true' ||
+        github.event.inputs.run_ui_freeze_acceptance == 'true' ||
+        github.event.inputs.run_ui_audit_acceptance == 'true' ||
+        github.event.inputs.run_ui_release_readiness == 'true'
+      )
+    needs:
+      - ui-freeze-acceptance
+      - ui-audit-acceptance
+      - ui-release-readiness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish ui acceptance bundle summary
+        run: |
+          echo "### UI Acceptance Bundle Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ui-freeze-acceptance: ${{ needs['ui-freeze-acceptance'].result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ui-audit-acceptance: ${{ needs['ui-audit-acceptance'].result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ui-release-readiness: ${{ needs['ui-release-readiness'].result }}" >> "$GITHUB_STEP_SUMMARY"

@@ -7238,6 +7238,31 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("Publish ui-release-readiness summary", content)
         self.assertIn("### UI Release Readiness", content)
 
+    def test_oled_agent_ci_has_ui_acceptance_bundle_entry_and_summary_job(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("run_ui_acceptance_bundle:", content)
+        self.assertIn("ui-acceptance-bundle-summary:", content)
+        self.assertIn("acceptance ui-bundle-summary (manual)", content)
+        self.assertIn("github.event.inputs.run_ui_acceptance_bundle == 'true'", content)
+        self.assertIn("Publish ui acceptance bundle summary", content)
+        self.assertIn("### UI Acceptance Bundle Summary", content)
+        self.assertIn("needs['ui-freeze-acceptance'].result", content)
+        self.assertIn("needs['ui-audit-acceptance'].result", content)
+        self.assertIn("needs['ui-release-readiness'].result", content)
+
+    def test_oled_agent_ci_ui_manual_jobs_support_bundle_trigger(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        freeze_block = self._extract_job_block(content, "ui-freeze-acceptance")
+        audit_block = self._extract_job_block(content, "ui-audit-acceptance")
+        release_block = self._extract_job_block(content, "ui-release-readiness")
+        self.assertIn("run_ui_acceptance_bundle == 'true'", freeze_block)
+        self.assertIn("run_ui_acceptance_bundle == 'true'", audit_block)
+        self.assertIn("run_ui_acceptance_bundle == 'true'", release_block)
+
     def test_oled_agent_ci_validates_structured_reports_schema(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)

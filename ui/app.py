@@ -927,6 +927,46 @@ HTML = """
         background: #fff;
       }
       .chat-input textarea { min-height: 84px; }
+      .simple-input-hub {
+        margin-top: 8px;
+        border: 1px solid #d7e2f2;
+        border-radius: 10px;
+        padding: 8px;
+        background: #f7faff;
+        display: grid;
+        gap: 6px;
+      }
+      .simple-input-hub .si-head {
+        font-size: 0.77rem;
+        color: #334155;
+        font-weight: 700;
+      }
+      .simple-input-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto auto;
+        gap: 6px;
+        align-items: center;
+      }
+      .simple-input-row input,
+      .simple-input-row button {
+        margin-top: 0;
+      }
+      .simple-input-row.compact {
+        grid-template-columns: auto 100px auto auto auto;
+      }
+      .simple-input-row .si-check {
+        margin: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 0.76rem;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .simple-input-row .si-check input {
+        width: auto;
+        margin-top: 0;
+      }
       .chat-quick-strip {
         margin-top: 8px;
         display: grid;
@@ -982,6 +1022,7 @@ HTML = """
       body.output-simple-mode #chat_timeline_panel_drawer,
       body.output-simple-mode #single_step_runner_drawer,
       body.output-simple-mode #artifacts_validation_drawer,
+      body.output-simple-mode #file_input_drawer,
       body.output-simple-mode .chat-quick-chips,
       body.output-simple-mode #prompt_history_box,
       body.output-simple-mode .web-preset-row {
@@ -1304,6 +1345,10 @@ HTML = """
         .chat-wrap { min-height: 65vh; }
         .tg-cols { grid-template-columns: 1fr; }
         .chat-quick-strip { grid-template-columns: 1fr 1fr; }
+        .simple-input-row,
+        .simple-input-row.compact {
+          grid-template-columns: 1fr 1fr;
+        }
         .panel.left-drawer,
         .panel.right-drawer {
           position: static;
@@ -1776,6 +1821,23 @@ HTML = """
           </div>
           <div class=\"chat-quick-status\" id=\"quick_candidate_status\">quick path: idle</div>
 
+          <div class=\"simple-input-hub simple-only\" id=\"simple_input_hub\">
+            <div class=\"si-head\">Simple Input Hub</div>
+            <div class=\"simple-input-row\">
+              <input id=\"simple_attachment_path\" placeholder=\"/absolute/path/to/file.csv\" oninput=\"syncMainFromSimpleInputHub(true)\" />
+              <button type=\"button\" onclick=\"simpleAttachPath()\">Attach</button>
+              <button type=\"button\" onclick=\"simpleSetCandidateDataFromPath()\">Use candidate_data</button>
+              <button type=\"button\" onclick=\"simpleSetCandidateDataFromPathAndSend()\">Use + Send</button>
+            </div>
+            <div class=\"simple-input-row compact\">
+              <label class=\"si-check\"><input id=\"simple_web_enabled\" type=\"checkbox\" onchange=\"onSimpleWebPrefsChanged()\" />Web Evidence</label>
+              <input id=\"simple_web_topk\" value=\"5\" oninput=\"onSimpleWebPrefsChanged()\" />
+              <button type=\"button\" onclick=\"sendWebSearchHint()\">Web Search</button>
+              <button class=\"primary\" type=\"button\" onclick=\"simpleSendChat(false)\">Send</button>
+              <button type=\"button\" onclick=\"simpleSendChat(true)\">New Task</button>
+            </div>
+          </div>
+
           <details class=\"drawer\" open id=\"chat_timeline_panel_drawer\">
             <summary>Execution Timeline Panel</summary>
             <div class=\"drawer-body\">
@@ -1870,7 +1932,7 @@ HTML = """
             </div>
           </div>
 
-          <details class=\"drawer\" open>
+          <details class=\"drawer\" open id=\"file_input_drawer\">
             <summary>File Input Entry</summary>
             <div class=\"drawer-body\">
               <label>Local file path (recommended)</label>
@@ -5159,6 +5221,7 @@ HTML = """
 
       function updateWebSearchStatus() {
         const prefs = collectWebSearchPrefs();
+        syncSimpleInputHubFromMain();
         const customParsed = collectCustomWebPresets();
         const statusEle = document.getElementById('web_search_status');
         if (!statusEle) return;
@@ -8090,10 +8153,57 @@ HTML = """
         }
       }
 
+      function syncSimpleInputHubFromMain() {
+        const mainPath = document.getElementById('attachment_path');
+        const simplePath = document.getElementById('simple_attachment_path');
+        if (mainPath && simplePath && document.activeElement !== simplePath) {
+          simplePath.value = String(mainPath.value || '').trim();
+        }
+        const mainWebEnabled = document.getElementById('web_enabled');
+        const simpleWebEnabled = document.getElementById('simple_web_enabled');
+        if (mainWebEnabled && simpleWebEnabled) {
+          simpleWebEnabled.checked = Boolean(mainWebEnabled.checked);
+        }
+        const mainTopk = document.getElementById('web_topk');
+        const simpleTopk = document.getElementById('simple_web_topk');
+        if (mainTopk && simpleTopk && document.activeElement !== simpleTopk) {
+          simpleTopk.value = String(mainTopk.value || '5');
+        }
+      }
+
+      function syncMainFromSimpleInputHub(syncPath) {
+        const applyPath = syncPath !== false;
+        const simplePath = document.getElementById('simple_attachment_path');
+        const mainPath = document.getElementById('attachment_path');
+        if (applyPath && simplePath && mainPath) {
+          mainPath.value = String(simplePath.value || '').trim();
+          syncQuickCandidatePathFromAttachment();
+        }
+        const simpleWebEnabled = document.getElementById('simple_web_enabled');
+        const mainWebEnabled = document.getElementById('web_enabled');
+        if (simpleWebEnabled && mainWebEnabled) {
+          mainWebEnabled.checked = Boolean(simpleWebEnabled.checked);
+        }
+        const simpleTopk = document.getElementById('simple_web_topk');
+        const mainTopk = document.getElementById('web_topk');
+        if (simpleTopk && mainTopk) {
+          const raw = Number(simpleTopk.value || 5);
+          const topk = Number.isFinite(raw) ? Math.max(1, Math.min(20, Math.floor(raw))) : 5;
+          mainTopk.value = String(topk);
+          simpleTopk.value = String(topk);
+        }
+      }
+
+      function onSimpleWebPrefsChanged() {
+        syncMainFromSimpleInputHub(false);
+        updateWebSearchStatus();
+      }
+
       function syncQuickCandidatePathFromAttachment() {
         const p = String(document.getElementById('attachment_path').value || '').trim();
         const quick = document.getElementById('quick_candidate_data_path');
         if (quick) quick.value = p;
+        syncSimpleInputHubFromMain();
         renderPendingAutoActions(state.pendingInput || {});
       }
 
@@ -8155,6 +8265,32 @@ HTML = """
         }
         setQuickCandidateStatus('candidate_data patch prepared in chat input', 'pass');
         renderJsonOut({status: 'pass', mode: 'chat_patch', candidate_data: p});
+      }
+
+      async function simpleAttachPath() {
+        syncMainFromSimpleInputHub(true);
+        await attachPath();
+        syncSimpleInputHubFromMain();
+      }
+
+      async function simpleSetCandidateDataFromPath() {
+        syncMainFromSimpleInputHub(true);
+        await setCandidateDataFromPath();
+        syncSimpleInputHubFromMain();
+      }
+
+      async function simpleSetCandidateDataFromPathAndSend() {
+        syncMainFromSimpleInputHub(true);
+        const out = await setCandidateDataFromPathAndSend();
+        syncSimpleInputHubFromMain();
+        return out;
+      }
+
+      async function simpleSendChat(newTask) {
+        syncMainFromSimpleInputHub(true);
+        const out = await sendChat(Boolean(newTask));
+        syncSimpleInputHubFromMain();
+        return out;
       }
 
       async function attachPath() {

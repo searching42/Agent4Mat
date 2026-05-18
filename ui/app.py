@@ -425,6 +425,40 @@ HTML = """
       .hud-actions button {
         margin-top: 0;
       }
+      .hud-mode-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 6px;
+        border-radius: 999px;
+        border: 1px solid #d0dcf5;
+        background: #eef4ff;
+      }
+      .hud-mode-toggle .mode-label {
+        font-size: 0.73rem;
+        color: #46587a;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .mode-segment {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .mode-segment button {
+        margin-top: 0;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid #bfd0ef;
+        background: #f7faff;
+        color: #2b4d8b;
+        font-size: 0.72rem;
+      }
+      .mode-segment button.active {
+        border-color: #1d4ed8;
+        background: #1d4ed8;
+        color: #fff;
+      }
       .chat-status-ribbon {
         display: flex;
         justify-content: space-between;
@@ -938,6 +972,20 @@ HTML = """
       body.output-simple-mode .right-advanced {
         display: none !important;
       }
+      body.output-simple-mode .layout {
+        grid-template-columns: minmax(640px, 1fr) minmax(300px, 360px);
+      }
+      body.output-simple-mode .panel.left-drawer {
+        display: none !important;
+      }
+      body.output-simple-mode #control_center_drawer,
+      body.output-simple-mode #chat_timeline_panel_drawer,
+      body.output-simple-mode #single_step_runner_drawer,
+      body.output-simple-mode .chat-quick-chips,
+      body.output-simple-mode #prompt_history_box,
+      body.output-simple-mode .web-preset-row {
+        display: none !important;
+      }
       .simple-only {
         display: none !important;
       }
@@ -1250,6 +1298,10 @@ HTML = """
         .workspace-hud {
           flex-direction: column;
           align-items: flex-start;
+        }
+        .hud-mode-toggle {
+          width: 100%;
+          justify-content: space-between;
         }
       }
     </style>
@@ -1564,6 +1616,13 @@ HTML = """
             <button onclick=\"loadHistory()\">Reload History</button>
             <button onclick=\"loadRunRuntime()\">Refresh Runtime</button>
             <button id=\"focus_mode_btn\" onclick=\"toggleFocusMode()\">Enable Focus Mode</button>
+            <div class=\"hud-mode-toggle\" id=\"hud_mode_toggle\">
+              <span class=\"mode-label\">UI Mode</span>
+              <div class=\"mode-segment\">
+                <button type=\"button\" id=\"ui_mode_simple_btn\" onclick=\"setPrimaryUiMode('simple')\">Simple</button>
+                <button type=\"button\" id=\"ui_mode_advanced_btn\" onclick=\"setPrimaryUiMode('advanced')\">Advanced</button>
+              </div>
+            </div>
           </div>
         </div>
         <div class=\"chat-status-ribbon\" id=\"chat_status_ribbon\">
@@ -1813,7 +1872,7 @@ HTML = """
             </div>
           </details>
 
-          <details class=\"drawer\">
+          <details class=\"drawer\" id=\"single_step_runner_drawer\">
             <summary>Single Step Runner</summary>
             <div class=\"drawer-body\">
               <label>Operation</label>
@@ -1842,12 +1901,12 @@ HTML = """
         <h2>Outputs</h2>
         <h3>Runtime + artifacts</h3>
         <div class=\"right-mode-controls\">
-          <label for=\"output_view_mode\">Output View</label>
+          <label for=\"output_view_mode\">UI Mode</label>
           <select id=\"output_view_mode\" onchange=\"onOutputViewModeChanged()\">
             <option value=\"simple\">Simple</option>
             <option value=\"advanced\">Advanced</option>
           </select>
-          <button type=\"button\" id=\"output_view_toggle_btn\" onclick=\"toggleOutputViewMode()\">Use Advanced</button>
+          <button type=\"button\" id=\"output_view_toggle_btn\" onclick=\"toggleOutputViewMode()\">Switch To Advanced</button>
         </div>
         <div class=\"runtime\" id=\"runtime_box\">runtime: (waiting)</div>
         <div class=\"muted\" id=\"runtime_stage_text\">stage: -</div>
@@ -2961,10 +3020,31 @@ HTML = """
         const select = document.getElementById('output_view_mode');
         if (select) select.value = next;
         const btn = document.getElementById('output_view_toggle_btn');
-        if (btn) btn.textContent = next === 'advanced' ? 'Use Simple' : 'Use Advanced';
+        if (btn) btn.textContent = next === 'advanced' ? 'Switch To Simple' : 'Switch To Advanced';
         const stateEle = document.getElementById('output_view_state');
         if (stateEle) stateEle.textContent = next;
+        syncPrimaryUiModeSwitch(next);
         saveUiPrefs(state.ui);
+      }
+
+      function syncPrimaryUiModeSwitch(mode) {
+        const next = normalizeOutputViewMode(mode);
+        const simpleBtn = document.getElementById('ui_mode_simple_btn');
+        const advancedBtn = document.getElementById('ui_mode_advanced_btn');
+        if (simpleBtn) {
+          simpleBtn.classList.toggle('active', next === 'simple');
+          simpleBtn.setAttribute('aria-pressed', next === 'simple' ? 'true' : 'false');
+        }
+        if (advancedBtn) {
+          advancedBtn.classList.toggle('active', next === 'advanced');
+          advancedBtn.setAttribute('aria-pressed', next === 'advanced' ? 'true' : 'false');
+        }
+      }
+
+      function setPrimaryUiMode(mode) {
+        const next = normalizeOutputViewMode(mode);
+        applyOutputViewMode(next);
+        renderEvents([{stage: 'ui_mode', status: 'pass', operation: next}]);
       }
 
       function onOutputViewModeChanged() {

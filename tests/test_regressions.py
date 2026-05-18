@@ -7246,11 +7246,22 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("ui-acceptance-bundle-summary:", content)
         self.assertIn("acceptance ui-bundle-summary (manual)", content)
         self.assertIn("github.event.inputs.run_ui_acceptance_bundle == 'true'", content)
+        self.assertIn("Download ui-freeze acceptance artifacts", content)
+        self.assertIn("Download ui-audit acceptance artifacts", content)
+        self.assertIn("Download ui-release-readiness artifacts", content)
+        self.assertIn("actions/download-artifact@v4", content)
+        self.assertIn("Build ui acceptance bundle verdict", content)
+        self.assertIn("python scripts/check_ui_acceptance_bundle.py", content)
+        self.assertIn("Upload ui acceptance bundle summary artifacts", content)
+        self.assertIn("ui-acceptance-bundle-summary-artifacts", content)
         self.assertIn("Publish ui acceptance bundle summary", content)
         self.assertIn("### UI Acceptance Bundle Summary", content)
         self.assertIn("needs['ui-freeze-acceptance'].result", content)
         self.assertIn("needs['ui-audit-acceptance'].result", content)
         self.assertIn("needs['ui-release-readiness'].result", content)
+        self.assertIn("steps.build_bundle_verdict.outcome", content)
+        self.assertIn("runs/ci/ui_acceptance_bundle_summary.json", content)
+        self.assertIn("runs/ci/ui_acceptance_bundle_summary.md", content)
 
     def test_oled_agent_ci_ui_manual_jobs_support_bundle_trigger(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

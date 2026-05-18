@@ -609,10 +609,67 @@ jobs:
       - ui-release-readiness
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Download ui-freeze acceptance artifacts
+        if: always() && needs['ui-freeze-acceptance'].result != 'skipped'
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-freeze-acceptance-artifacts
+          path: .
+
+      - name: Download ui-audit acceptance artifacts
+        if: always() && needs['ui-audit-acceptance'].result != 'skipped'
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-audit-acceptance-artifacts
+          path: .
+
+      - name: Download ui-release-readiness artifacts
+        if: always() && needs['ui-release-readiness'].result != 'skipped'
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-release-readiness-artifacts
+          path: .
+
+      - name: Build ui acceptance bundle verdict
+        id: build_bundle_verdict
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p runs/ci
+          python scripts/check_ui_acceptance_bundle.py --workspace-root . --out-json runs/ci/ui_acceptance_bundle_summary.json --out-md runs/ci/ui_acceptance_bundle_summary.md
+
+      - name: Upload ui acceptance bundle summary artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-acceptance-bundle-summary-artifacts
+          path: |
+            runs/ci/ui_acceptance_bundle_summary.json
+            runs/ci/ui_acceptance_bundle_summary.md
+          if-no-files-found: warn
+
       - name: Publish ui acceptance bundle summary
+        if: always()
         run: |
           echo "### UI Acceptance Bundle Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- ui-freeze-acceptance: ${{ needs['ui-freeze-acceptance'].result }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- ui-audit-acceptance: ${{ needs['ui-audit-acceptance'].result }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- ui-release-readiness: ${{ needs['ui-release-readiness'].result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- build_bundle_verdict_step: ${{ steps.build_bundle_verdict.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f runs/ci/ui_acceptance_bundle_summary.md ]; then
+            cat runs/ci/ui_acceptance_bundle_summary.md >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f runs/ci/ui_acceptance_bundle_summary.json ]; then
+            cat runs/ci/ui_acceptance_bundle_summary.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui-acceptance bundle summary output file is missing (likely upstream step failed)." >> "$GITHUB_STEP_SUMMARY"
+          fi

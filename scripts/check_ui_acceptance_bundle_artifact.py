@@ -31,6 +31,25 @@ def _load_json_object(path: Path) -> Dict[str, Any]:
     return payload
 
 
+def _failure_category(name: str) -> str:
+    key = str(name or "").strip()
+    if not key:
+        return "unknown"
+    if key.endswith("_exists"):
+        return "missing_artifact"
+    if key.endswith("_parse"):
+        return "invalid_json"
+    if key == "summary_required_keys":
+        return "schema_missing_keys"
+    if key.endswith("_type"):
+        return "schema_type_error"
+    if key.endswith("_count"):
+        return "schema_numeric_error"
+    if key == "summary_status_enum":
+        return "schema_enum_error"
+    return "unknown"
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Validate ui_acceptance_bundle_summary artifact schema")
     p.add_argument("--workspace-root", default=".", help="Workspace root")
@@ -127,6 +146,12 @@ def main() -> int:
             failures.append({"name": "summary_failure_count", "message": "failure_count must be an integer >= 0"})
 
     status = "pass" if not failures else "fail"
+    failure_categories = sorted({_failure_category(str(row.get("name") or "")) for row in failures if isinstance(row, dict)})
+    failure_preview = [
+        {"name": str(row.get("name") or ""), "message": str(row.get("message") or "")}
+        for row in failures[:3]
+        if isinstance(row, dict)
+    ]
     report: Dict[str, Any] = {
         "status": status,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -136,6 +161,8 @@ def main() -> int:
         "summary_status": summary_status,
         "summary_check_count": summary_check_count,
         "summary_failure_count": summary_failure_count,
+        "failure_categories": failure_categories,
+        "failure_preview": failure_preview,
         "checks": checks,
         "failures": failures,
         "check_count": len(checks),

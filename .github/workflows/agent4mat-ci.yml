@@ -744,6 +744,15 @@ jobs:
             print("- summary_status: `{}`".format(payload.get("summary_status")))
             print("- summary_check_count: `{}`".format(payload.get("summary_check_count")))
             print("- summary_failure_count: `{}`".format(payload.get("summary_failure_count")))
+            categories = payload.get("failure_categories")
+            if isinstance(categories, list) and categories:
+                print("- failure_categories: `{}`".format(", ".join(str(x) for x in categories)))
+            preview = payload.get("failure_preview")
+            if isinstance(preview, list) and preview:
+                first = preview[0]
+                if isinstance(first, dict):
+                    print("- first_failure: `{}`".format(first.get("name")))
+                    print("- first_failure_detail: {}".format(first.get("message")))
             PY
           else
             echo "- verify artifact json missing" >> "$GITHUB_STEP_SUMMARY"

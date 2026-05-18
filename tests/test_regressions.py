@@ -7275,6 +7275,8 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("verify_bundle_artifact_step", content)
         self.assertIn("summary_check_count", content)
         self.assertIn("summary_failure_count", content)
+        self.assertIn("failure_categories", content)
+        self.assertIn("first_failure_detail", content)
         self.assertIn("verify artifact json missing", content)
         self.assertIn("UI Acceptance Bundle Verify", content)
 
@@ -7430,7 +7432,8 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("scripts/check_experiment_trace.py", content)
         self.assertIn("scripts/check_resume_idempotence.py", content)
         self.assertIn("$(MAKE) resume-idempotence-guard TASK_ID=\"$(TASK_ID)\" WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
-        self.assertIn("$(MAKE) ui-audit-acceptance WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("$(MAKE) ui-acceptance-bundle WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("$(MAKE) ui-acceptance-bundle-verify-local WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("scripts/check_resume_idempotence.py --workspace-root \"$(WORKSPACE_ROOT)\" --result-json \"runs/agent/$(TASK_ID)/quickstart_result.json\" --task-id \"$(TASK_ID)\"", content)
         self.assertIn("scripts/check_real_no_fallback.py --workspace-root \"$(WORKSPACE_ROOT)\" --out-json \"runs/ci/real_no_fallback_gate.json\"", content)
         self.assertIn("scripts/validate_run_artifacts.py --workspace-root \"$(WORKSPACE_ROOT)\" --result-json \"runs/agent/$(TASK_ID)/quickstart_result.json\"", content)
@@ -9007,6 +9010,8 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(str(payload.get("status") or ""), "pass")
             self.assertEqual(str(payload.get("summary_status") or ""), "pass")
             self.assertEqual(int(payload.get("summary_failure_count", -1)), 0)
+            self.assertEqual(payload.get("failure_categories"), [])
+            self.assertEqual(payload.get("failure_preview"), [])
             self.assertTrue(out_json.exists())
 
     def test_check_ui_acceptance_bundle_artifact_script_missing_markdown_fails(self) -> None:
@@ -9050,6 +9055,10 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertTrue(
                 any("summary_md_exists" == str(item.get("name") or "") for item in failures if isinstance(item, dict))
             )
+            categories = payload.get("failure_categories") if isinstance(payload.get("failure_categories"), list) else []
+            self.assertIn("missing_artifact", categories)
+            preview = payload.get("failure_preview") if isinstance(payload.get("failure_preview"), list) else []
+            self.assertTrue(len(preview) >= 1)
 
 
 class ModelCatalogTests(unittest.TestCase):

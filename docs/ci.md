@@ -67,6 +67,8 @@
   - `summary_status`
   - `summary_check_count`
   - `summary_failure_count`
+  - `failure_categories`
+  - `first_failure` + `first_failure_detail`
 
 ## Real adapter contract smoke
 - `make real-adapter-validate` exercises adapter shells in smoke mode, plus:

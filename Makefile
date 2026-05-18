@@ -7,7 +7,7 @@ RESULT_JSON ?= runs/agent/$(TASK_ID)/acceptance_result.json
 .PHONY: help quickstart adapter-validate real-adapter-validate adapter-self-check test-regressions test-adapters
 .PHONY: doctor llm-smoke llm-connectivity release-check release-boundary script-map request-templates-validate step-request-templates-validate input-smoke experiment-summary
 .PHONY: intake-contract-guard step-mode-guard web-evidence-guard experiment-trace-guard resume-idempotence-guard real-no-fallback-gate ui-freeze-acceptance ui-audit-acceptance ui-acceptance-bundle ui-acceptance-bundle-verify-local
-.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run ui-stability-smoke ui-release-readiness
+.PHONY: real-chain-acceptance real-chain-acceptance-real real-chain-baseline real-chain-baseline-archive real-chain-baseline-archive-tgz real-chain-release-bundle-check real-chain-evidence ui-smoke ui-run ui-stability-smoke ui-simple-readiness ui-release-readiness
 .PHONY: acceptance-local
 
 help:
@@ -41,6 +41,7 @@ help:
 	@echo "  make real-chain-evidence   - collect release evidence from acceptance_result.json"
 	@echo "  make ui-smoke            - run lightweight UI smoke check"
 	@echo "  make ui-stability-smoke  - run targeted UI interaction regressions + freeze+audit acceptance"
+	@echo "  make ui-simple-readiness - run simple-mode UI contract gate"
 	@echo "  make ui-release-readiness - run UI stability smoke + readiness summary gate"
 	@echo "  make ui-run              - launch local UI prototype on http://127.0.0.1:8787"
 	@echo "  make quickstart          - run quickstart chain self-check"
@@ -172,13 +173,18 @@ ui-stability-smoke:
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_freeze_acceptance.py --workspace-root "$(WORKSPACE_ROOT)" --out "runs/ci/ui_stability_smoke.json" --baseline "configs/acceptance/ui_freeze_acceptance_baseline.json"
 	@$(MAKE) ui-audit-acceptance WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 
+ui-simple-readiness:
+	@$(PYTHON) scripts/check_ui_simple_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --out-json "runs/ci/ui_simple_readiness.json" --out-md "runs/ci/ui_simple_readiness.md"
+
 ui-release-readiness:
 	@$(MAKE) ui-stability-smoke
+	@$(MAKE) ui-simple-readiness WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(MAKE) real-no-fallback-gate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-freeze-report --require-audit-report --require-real-no-fallback-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
 
 ui-acceptance-bundle:
 	@$(MAKE) ui-stability-smoke WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
+	@$(MAKE) ui-simple-readiness WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(MAKE) real-no-fallback-gate WORKSPACE_ROOT="$(WORKSPACE_ROOT)"
 	@$(PYTHON) scripts/check_ui_release_readiness.py --workspace-root "$(WORKSPACE_ROOT)" --require-freeze-report --require-audit-report --require-real-no-fallback-report --out-json "runs/ci/ui_release_readiness.json" --out-md "runs/ci/ui_release_readiness.md"
 	@$(PYTHONPATH_ENV) $(PYTHON) scripts/check_ui_acceptance_bundle.py --workspace-root "$(WORKSPACE_ROOT)" --out-json "runs/ci/ui_acceptance_bundle_summary.json" --out-md "runs/ci/ui_acceptance_bundle_summary.md"

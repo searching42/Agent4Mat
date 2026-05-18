@@ -575,6 +575,8 @@ jobs:
           path: |
             runs/ci/ui_release_readiness.json
             runs/ci/ui_release_readiness.md
+            runs/ci/ui_simple_readiness.json
+            runs/ci/ui_simple_readiness.md
             runs/ci/ui_stability_smoke.json
             runs/ci/ui_freeze_acceptance.json
             runs/ci/ui_audit_acceptance.json

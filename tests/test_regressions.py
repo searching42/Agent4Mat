@@ -7521,6 +7521,8 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("ui-release-readiness-artifacts", content)
         self.assertIn("runs/ci/ui_release_readiness.json", content)
         self.assertIn("runs/ci/ui_release_readiness.md", content)
+        self.assertIn("runs/ci/ui_simple_readiness.json", content)
+        self.assertIn("runs/ci/ui_simple_readiness.md", content)
         self.assertIn("runs/ci/ui_freeze_acceptance.json", content)
         self.assertIn("Publish ui-release-readiness summary", content)
         self.assertIn("### UI Release Readiness", content)
@@ -7686,16 +7688,20 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("ui-acceptance-bundle-verify-local:", content)
         self.assertIn("ui-smoke:", content)
         self.assertIn("ui-stability-smoke:", content)
+        self.assertIn("ui-simple-readiness:", content)
         self.assertIn("ui-release-readiness:", content)
         self.assertIn("scripts/check_release_boundary.py", content)
         self.assertIn("scripts/build_script_migration_map.py", content)
         self.assertIn("scripts/summarize_experiments.py", content)
+        self.assertIn("scripts/check_ui_simple_readiness.py", content)
         self.assertIn("scripts/check_ui_freeze_acceptance.py", content)
         self.assertIn("scripts/check_ui_audit_acceptance.py", content)
         self.assertIn("scripts/check_ui_release_readiness.py", content)
         self.assertIn("scripts/check_ui_acceptance_bundle.py", content)
         self.assertIn("scripts/check_ui_acceptance_bundle_artifact.py", content)
         self.assertIn("runs/ci/ui_stability_smoke.json", content)
+        self.assertIn("runs/ci/ui_simple_readiness.json", content)
+        self.assertIn("runs/ci/ui_simple_readiness.md", content)
         self.assertIn("runs/ci/ui_audit_acceptance.json", content)
         self.assertIn("runs/ci/ui_release_readiness.json", content)
         self.assertIn("runs/ci/ui_release_readiness.md", content)
@@ -7715,6 +7721,7 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertIn("check_real_chain_release_bundle.py --workspace-root \"$(WORKSPACE_ROOT)\" --base-task-id \"$(TASK_ID)\" --require-tar-gz", content)
         self.assertIn("$(MAKE) ui-release-readiness WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("$(MAKE) ui-stability-smoke WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
+        self.assertIn("$(MAKE) ui-simple-readiness WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("$(MAKE) real-no-fallback-gate WORKSPACE_ROOT=\"$(WORKSPACE_ROOT)\"", content)
         self.assertIn("check_ui_release_readiness.py --workspace-root \"$(WORKSPACE_ROOT)\" --require-freeze-report --require-audit-report", content)
         self.assertIn("--require-real-no-fallback-report", content)
@@ -7756,6 +7763,7 @@ class PlanProgressAssetsTests(unittest.TestCase):
             repo_root / "scripts" / "check_resume_idempotence.py",
             repo_root / "scripts" / "check_ui_freeze_acceptance.py",
             repo_root / "scripts" / "check_ui_audit_acceptance.py",
+            repo_root / "scripts" / "check_ui_simple_readiness.py",
             repo_root / "scripts" / "check_ui_release_readiness.py",
             repo_root / "scripts" / "check_ui_acceptance_bundle.py",
             repo_root / "scripts" / "check_ui_acceptance_bundle_artifact.py",
@@ -9015,6 +9023,67 @@ class PlanProgressAssetsTests(unittest.TestCase):
             self.assertEqual(payload.get("missing_required_checks"), [])
             self.assertEqual(payload.get("mismatched_required_checks"), [])
             self.assertTrue(out_path.exists())
+
+    def test_check_ui_simple_readiness_script_smoke(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            out_json = td_path / "ui_simple_readiness.json"
+            out_md = td_path / "ui_simple_readiness.md"
+            script = repo_root / "scripts" / "check_ui_simple_readiness.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(repo_root),
+                    "--out-json",
+                    str(out_json),
+                    "--out-md",
+                    str(out_md),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 0, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "pass")
+            self.assertEqual(int(payload.get("failed_count", -1)), 0)
+            self.assertGreaterEqual(int(payload.get("check_count") or 0), 10)
+            self.assertTrue(out_json.exists())
+            self.assertTrue(out_md.exists())
+
+    def test_check_ui_simple_readiness_script_detects_missing_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            fake_ui = td_path / "ui" / "app.py"
+            fake_ui.parent.mkdir(parents=True, exist_ok=True)
+            fake_ui.write_text("print('placeholder')\n", encoding="utf-8")
+            script = repo_root / "scripts" / "check_ui_simple_readiness.py"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--workspace-root",
+                    str(td_path),
+                    "--ui-app-path",
+                    "ui/app.py",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+            )
+            self.assertEqual(cp.returncode, 1, msg=cp.stderr + cp.stdout)
+            payload = json.loads(cp.stdout)
+            self.assertEqual(str(payload.get("status") or ""), "fail")
+            failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
+            failure_names = {str(item.get("name") or "") for item in failures if isinstance(item, dict)}
+            self.assertIn("simple_mode_default_boot", failure_names)
+            self.assertIn("simple_project_strip_present", failure_names)
 
     def test_check_ui_release_readiness_script_reports_pass(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -11132,9 +11201,13 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("quick_candidate_data_path", html)
         self.assertIn("quickUseCandidatePath(", html)
         self.assertIn("simple_input_hub", html)
+        self.assertIn("simple_input_summary", html)
+        self.assertIn("simple_input_status_light", html)
+        self.assertIn("simple_input_summary_text", html)
         self.assertIn("simple_attachment_path", html)
         self.assertIn("simple_web_enabled", html)
         self.assertIn("simple_web_topk", html)
+        self.assertIn("updateSimpleInputHubSummary()", html)
         self.assertIn("syncSimpleInputHubFromMain()", html)
         self.assertIn("syncMainFromSimpleInputHub(", html)
         self.assertIn("onSimpleWebPrefsChanged()", html)
@@ -11463,6 +11536,24 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("Timeline", block)
         self.assertIn("Validate", block)
         self.assertNotIn(">Summary<", block)
+
+    def test_ui_simple_project_strip_interaction_contract(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        client = ui_app_mod.app.test_client()
+        resp = client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        contract_patterns = [
+            r"function switchSimpleProjectFromPicker\(\)\s*\{[\s\S]*?openProjectWorkspace\(pid,\s*\{push:\s*true\}\);",
+            r"function createProjectFromSimpleBar\(\)\s*\{[\s\S]*?document\.getElementById\('project_id'\)\.value = pid;[\s\S]*?"
+            r"document\.getElementById\('project_title'\)\.value = pid;[\s\S]*?"
+            r"apiPost\('/api/projects',\s*\{[\s\S]*?project_id:\s*pid,[\s\S]*?title:\s*pid,[\s\S]*?\}\);[\s\S]*?"
+            r"applyProjectStateToUi\(project\);[\s\S]*?await refreshProjects\(\);[\s\S]*?await loadHistory\(\);[\s\S]*?await loadRunRuntime\(\);",
+            r"function syncProjectPickerValue\(projectId\)\s*\{[\s\S]*?\['project_picker', 'simple_project_picker'\][\s\S]*?picker\.value = hasOption \? pid : '';",
+            r"function syncSimpleProjectBar\(opts\)\s*\{[\s\S]*?simple_project_status[\s\S]*?projects=\$\{rows\.length\}",
+        ]
+        for pat in contract_patterns:
+            self.assertRegex(html, re.compile(pat, re.S))
 
     def test_ui_upload_ref_accepts_multipart_file(self) -> None:
         ui_app_mod = self._load_ui_module()

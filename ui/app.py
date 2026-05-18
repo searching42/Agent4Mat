@@ -965,6 +965,42 @@ HTML = """
         color: #334155;
         font-weight: 700;
       }
+      .simple-input-hub .si-summary {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px 8px;
+        border: 1px solid #d8e4f4;
+        border-radius: 8px;
+        background: #ffffff;
+        font-size: 0.74rem;
+        color: #445166;
+      }
+      .simple-input-hub .si-status-light {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        border: 1px solid #c7d3e7;
+        background: #9aa7bc;
+        flex: 0 0 auto;
+      }
+      .simple-input-hub .si-status-light.pass {
+        background: #0f766e;
+        border-color: #0f766e;
+      }
+      .simple-input-hub .si-status-light.warn {
+        background: #b45309;
+        border-color: #b45309;
+      }
+      .simple-input-hub .si-status-light.fail {
+        background: #b42318;
+        border-color: #b42318;
+      }
+      .simple-input-hub .si-summary-text {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       .simple-input-row {
         display: grid;
         grid-template-columns: 1fr auto auto auto;
@@ -1886,6 +1922,10 @@ HTML = """
               <button type=\"button\" onclick=\"sendWebSearchHint()\">Web Search</button>
               <button class=\"primary\" type=\"button\" onclick=\"simpleSendChat(false)\">Send</button>
               <button type=\"button\" onclick=\"simpleSendChat(true)\">New Task</button>
+            </div>
+            <div class=\"si-summary\" id=\"simple_input_summary\">
+              <span class=\"si-status-light warn\" id=\"simple_input_status_light\"></span>
+              <span class=\"si-summary-text\" id=\"simple_input_summary_text\">path=- | web=on topk=5 | message=not ready</span>
             </div>
           </div>
 
@@ -3267,6 +3307,7 @@ HTML = """
         } catch (e) {
           // ignore storage failures
         }
+        updateSimpleInputHubSummary();
       }
 
       function persistMessageDraft() {
@@ -3289,6 +3330,7 @@ HTML = """
         if (!opts || opts.persist !== false) {
           persistMessageDraft();
         }
+        updateSimpleInputHubSummary();
       }
 
       function clearPendingInput() {
@@ -8331,6 +8373,31 @@ HTML = """
         setQuickCandidateStatus(`simple hub: ${msg}`, 'fail');
       }
 
+      function updateSimpleInputHubSummary() {
+        const lightEle = document.getElementById('simple_input_status_light');
+        const textEle = document.getElementById('simple_input_summary_text');
+        if (!lightEle || !textEle) return;
+        const simplePath = String((document.getElementById('simple_attachment_path') || {}).value || '').trim();
+        const mainPath = String((document.getElementById('attachment_path') || {}).value || '').trim();
+        const path = simplePath || mainPath;
+        const pathBrief = path.length > 58 ? `...${path.slice(-55)}` : (path || '-');
+        const message = String((document.getElementById('message_input') || {}).value || '').trim();
+        const hasMessage = Boolean(message);
+        const prefs = collectWebSearchPrefs();
+        const webState = prefs.enabled ? 'on' : 'off';
+        const topk = Number.isFinite(Number(prefs.topk)) ? Math.max(1, Math.floor(Number(prefs.topk))) : 5;
+        let level = 'warn';
+        let msgState = 'not ready';
+        if (hasMessage) {
+          level = 'pass';
+          msgState = 'ready';
+        } else if (!path) {
+          level = 'fail';
+        }
+        lightEle.className = `si-status-light ${level}`;
+        textEle.textContent = `path=${pathBrief} | web=${webState} topk=${topk} | message=${msgState}`;
+      }
+
       function syncSimpleInputHubFromMain() {
         const mainPath = document.getElementById('attachment_path');
         const simplePath = document.getElementById('simple_attachment_path');
@@ -8347,6 +8414,7 @@ HTML = """
         if (mainTopk && simpleTopk && document.activeElement !== simpleTopk) {
           simpleTopk.value = String(mainTopk.value || '5');
         }
+        updateSimpleInputHubSummary();
       }
 
       function syncMainFromSimpleInputHub(syncPath) {
@@ -8370,11 +8438,13 @@ HTML = """
           mainTopk.value = String(topk);
           simpleTopk.value = String(topk);
         }
+        updateSimpleInputHubSummary();
       }
 
       function onSimpleWebPrefsChanged() {
         syncMainFromSimpleInputHub(false);
         updateWebSearchStatus();
+        updateSimpleInputHubSummary();
       }
 
       function syncQuickCandidatePathFromAttachment() {
@@ -8587,6 +8657,7 @@ HTML = """
         if (!input) return;
         input.addEventListener('input', () => {
           persistMessageDraft();
+          updateSimpleInputHubSummary();
         });
         input.addEventListener('keydown', (evt) => {
           if ((evt.ctrlKey || evt.metaKey) && evt.key === 'Enter') {
@@ -8776,6 +8847,7 @@ HTML = """
         renderFailedReplayQueue(state.failedReplayQueue);
         renderControlCenterAudit();
         refreshWorkspaceHud();
+        updateSimpleInputHubSummary();
       }
 
       boot();

@@ -7222,6 +7222,22 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("Publish ui-audit acceptance summary", content)
         self.assertIn("### UI Audit Acceptance", content)
 
+    def test_oled_agent_ci_has_manual_ui_release_readiness_job(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = self._workflow_path(repo_root)
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("run_ui_release_readiness:", content)
+        self.assertIn("ui-release-readiness:", content)
+        self.assertIn("acceptance ui-release-readiness (manual)", content)
+        self.assertIn("github.event.inputs.run_ui_release_readiness == 'true'", content)
+        self.assertIn("Run ui-release-readiness", content)
+        self.assertIn("make ui-release-readiness WORKSPACE_ROOT=.", content)
+        self.assertIn("ui-release-readiness-artifacts", content)
+        self.assertIn("runs/ci/ui_release_readiness.json", content)
+        self.assertIn("runs/ci/ui_release_readiness.md", content)
+        self.assertIn("Publish ui-release-readiness summary", content)
+        self.assertIn("### UI Release Readiness", content)
+
     def test_oled_agent_ci_validates_structured_reports_schema(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         workflow = self._workflow_path(repo_root)

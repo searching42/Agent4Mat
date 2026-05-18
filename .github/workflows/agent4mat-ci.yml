@@ -33,6 +33,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      run_ui_release_readiness:
+        description: "Run UI release-readiness job"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
   push:
   pull_request:
 
@@ -519,4 +525,48 @@ jobs:
             cat runs/ci/ui_audit_acceptance.json >> "$GITHUB_STEP_SUMMARY"
           else
             echo "ui-audit acceptance output file is missing (likely upstream step failed)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  ui-release-readiness:
+    name: acceptance ui-release-readiness (manual)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_ui_release_readiness == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install CPU profile
+        run: ./scripts/install_profile.sh cpu
+
+      - name: Run ui-release-readiness
+        run: make ui-release-readiness WORKSPACE_ROOT=.
+
+      - name: Upload ui-release-readiness artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-release-readiness-artifacts
+          path: |
+            runs/ci/ui_release_readiness.json
+            runs/ci/ui_release_readiness.md
+            runs/ci/ui_stability_smoke.json
+            runs/ci/ui_audit_acceptance.json
+          if-no-files-found: warn
+
+      - name: Publish ui-release-readiness summary
+        if: always()
+        run: |
+          echo "### UI Release Readiness" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f runs/ci/ui_release_readiness.md ]; then
+            cat runs/ci/ui_release_readiness.md >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f runs/ci/ui_release_readiness.json ]; then
+            cat runs/ci/ui_release_readiness.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui-release-readiness output file is missing (likely upstream step failed)." >> "$GITHUB_STEP_SUMMARY"
           fi

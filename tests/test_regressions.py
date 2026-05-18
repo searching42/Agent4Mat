@@ -11138,6 +11138,10 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("right_simple_actions", html)
         self.assertIn("simple_retry_failed_btn", html)
         self.assertIn("simple_resume_btn", html)
+        self.assertIn("right_simple_core_outputs", html)
+        self.assertIn("simple_target_structures_btn", html)
+        self.assertIn("downloadTargetStructuresCsv()", html)
+        self.assertIn("artifacts_validation_drawer", html)
         self.assertIn("timeline_groups_drawer", html)
         self.assertIn("single_step_runner_drawer", html)
         self.assertIn("session_filter_release_gate", html)
@@ -11191,6 +11195,7 @@ class UiPrototypeTests(unittest.TestCase):
         self.assertIn("body.output-simple-mode #control_center_drawer", html)
         self.assertIn("body.output-simple-mode #chat_timeline_panel_drawer", html)
         self.assertIn("body.output-simple-mode #single_step_runner_drawer", html)
+        self.assertIn("body.output-simple-mode #artifacts_validation_drawer", html)
         self.assertIn("collectWebSearchPrefs(", html)
         self.assertIn("normalizeWebDomains(", html)
         self.assertIn("detectWebPresetName(", html)
@@ -14265,6 +14270,44 @@ class UiPrototypeTests(unittest.TestCase):
             payload = resp.get_json()
             self.assertEqual(payload.get("status"), "missing")
             self.assertEqual(payload.get("artifact"), "plan")
+
+    def test_ui_task_target_structures_csv_downloads_file(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_target_csv_case"
+            run_dir = root / "runs" / "agent" / task_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            result_dir = root / "result" / f"{task_id}-20260518-010101"
+            result_dir.mkdir(parents=True, exist_ok=True)
+            (result_dir / "target_structures.csv").write_text(
+                "candidate_id,smiles,score\nc1,C1=CC=CC=C1,0.91\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/target-structures.csv")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("text/csv", str(resp.content_type or ""))
+            disp = str(resp.headers.get("Content-Disposition") or "")
+            self.assertIn("attachment;", disp)
+            self.assertIn(f"agent4mat-task-{task_id}-target_structures-", disp)
+            body = resp.get_data(as_text=True)
+            self.assertIn("candidate_id,smiles,score", body)
+
+    def test_ui_task_target_structures_csv_missing(self) -> None:
+        ui_app_mod = self._load_ui_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            task_id = "ui_target_csv_missing_case"
+            (root / "runs" / "agent" / task_id).mkdir(parents=True, exist_ok=True)
+            with mock.patch.object(ui_app_mod, "REPO_ROOT", root):
+                client = ui_app_mod.app.test_client()
+                resp = client.get(f"/api/task/{task_id}/target-structures.csv")
+            self.assertEqual(resp.status_code, 404)
+            payload = resp.get_json()
+            self.assertEqual(payload.get("status"), "missing")
+            self.assertEqual(payload.get("error"), "target_structures_not_found")
 
     def test_ui_task_artifact_pack_downloads_zip(self) -> None:
         ui_app_mod = self._load_ui_module()

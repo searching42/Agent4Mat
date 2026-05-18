@@ -981,6 +981,7 @@ HTML = """
       body.output-simple-mode #control_center_drawer,
       body.output-simple-mode #chat_timeline_panel_drawer,
       body.output-simple-mode #single_step_runner_drawer,
+      body.output-simple-mode #artifacts_validation_drawer,
       body.output-simple-mode .chat-quick-chips,
       body.output-simple-mode #prompt_history_box,
       body.output-simple-mode .web-preset-row {
@@ -1261,6 +1262,20 @@ HTML = """
         gap: 6px;
         flex-wrap: wrap;
         margin: 8px 0 10px 0;
+      }
+      .right-simple-core {
+        display: grid;
+        gap: 6px;
+        margin: 8px 0 8px 0;
+        padding: 8px;
+        border: 1px solid #d7e2f2;
+        border-radius: 10px;
+        background: #f7faff;
+      }
+      .right-simple-core .title {
+        font-size: 0.76rem;
+        color: #334155;
+        font-weight: 700;
       }
       .right-simple-actions button {
         margin-top: 0;
@@ -1914,12 +1929,22 @@ HTML = """
         <div class=\"muted\" id=\"runtime_progress_text\">progress: -</div>
         <div class=\"runtime\" id=\"resume_diag_box\">resume_diagnostics: -</div>
         <div class=\"muted\" id=\"resume_diag_steps\">steps: -</div>
+        <div class=\"right-simple-core simple-only\" id=\"right_simple_core_outputs\">
+          <div class=\"title\">Core Outputs</div>
+          <div class=\"btn-row\">
+            <button onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
+            <button id=\"simple_target_structures_btn\" onclick=\"downloadTargetStructuresCsv()\">Target CSV</button>
+            <button onclick=\"downloadTaskBundle()\">Bundle</button>
+          </div>
+          <div class=\"muted\">面向快速验证：summary、target_structures.csv、bundle。</div>
+        </div>
         <div class=\"right-simple-actions simple-only\" id=\"right_simple_actions\">
-          <button onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
+          <button onclick=\"loadCurrentArtifactLinksForExport()\">Artifact Links</button>
           <button onclick=\"showTimeline()\">Timeline</button>
+          <button onclick=\"validateTask()\">Validate</button>
+          <button onclick=\"showCurrentTaskSummaryInline()\">Summary</button>
           <button id=\"simple_retry_failed_btn\" onclick=\"retryFailedStep()\">Retry Failed</button>
           <button id=\"simple_resume_btn\" onclick=\"retryCurrentTask()\">Resume</button>
-          <button onclick=\"downloadTaskBundle()\">Bundle</button>
         </div>
         <div class=\"right-advanced\" id=\"right_retry_controls\">
           <label>Failed Tool Name (optional)</label>
@@ -1967,7 +1992,7 @@ HTML = """
           </div>
         </details>
 
-        <details class=\"drawer\" open>
+        <details class=\"drawer right-advanced\" open id=\"artifacts_validation_drawer\">
           <summary>Artifacts & Validation</summary>
           <div class=\"drawer-body\">
             <label>Artifact</label>
@@ -7737,6 +7762,18 @@ HTML = """
         renderEvents([{stage: 'bundle_download', status: 'requested'}]);
       }
 
+      function downloadTargetStructuresCsv() {
+        const tid = taskId();
+        if (!tid || tid === '-') {
+          renderJsonOut({status: 'fail', error: 'no current_task_id'});
+          return;
+        }
+        const url = `/api/task/${encodeURIComponent(tid)}/target-structures.csv`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        renderEvents([{stage: 'target_structures_export', status: 'requested'}], {project: state.project});
+        renderJsonOut({status: 'pass', action: 'target_structures_export_requested', task_id: tid, url: url});
+      }
+
       function renderArtifactLinksForExport(payload) {
         const box = document.getElementById('output_export_links_out');
         if (!box) return;
@@ -8670,6 +8707,19 @@ def _task_artifact_paths(task_id: str) -> Dict[str, Path]:
     return out
 
 
+def _task_target_structures_csv_path(task_id: str) -> Optional[Path]:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return None
+    result_dir = _latest_prefixed_dir((REPO_ROOT / "result").resolve(), f"{tid}-")
+    if not isinstance(result_dir, Path) or not result_dir.exists() or not result_dir.is_dir():
+        return None
+    csv_path = (result_dir / "target_structures.csv").resolve()
+    if csv_path.exists() and csv_path.is_file() and _path_within(REPO_ROOT, csv_path):
+        return csv_path
+    return None
+
+
 def _path_meta(path: Optional[Path]) -> Dict[str, Any]:
     if not isinstance(path, Path):
         return {"path": "", "exists": False, "is_file": False, "is_dir": False, "repo_rel": ""}
@@ -8721,6 +8771,7 @@ def _task_artifact_links_payload(task_id: str) -> Dict[str, Any]:
     run_dir = (REPO_ROOT / "runs" / "agent" / tid).resolve()
     by_name = _task_artifact_paths(tid)
     result_dir = _latest_prefixed_dir((REPO_ROOT / "result").resolve(), f"{tid}-")
+    target_structures_csv_path = _task_target_structures_csv_path(tid)
     logging_dir = _latest_prefixed_dir((REPO_ROOT / "logging").resolve(), f"{tid}-")
     rank_dir = _latest_prefixed_dir((REPO_ROOT / "runs").resolve(), f"agent_rank_{tid}_")
     decision = _load_json_if_exists(by_name["decision_summary"])
@@ -8735,6 +8786,7 @@ def _task_artifact_links_payload(task_id: str) -> Dict[str, Any]:
         "result_dir": _path_meta(result_dir),
         "logging_dir": _path_meta(logging_dir),
         "rank_dir": _path_meta(rank_dir),
+        "target_structures_csv_path": _path_meta(target_structures_csv_path),
         "decision_summary_path": _path_meta(by_name["decision_summary"]),
         "execution_path": _path_meta(by_name["execution"]),
         "task_state_path": _path_meta(by_name["task_state"]),
@@ -8744,6 +8796,7 @@ def _task_artifact_links_payload(task_id: str) -> Dict[str, Any]:
         "decision_summary_api": f"/api/task/{tid}/artifact/decision_summary",
         "artifact_export_api": f"/api/task/{tid}/artifact-export",
         "artifact_pack_api": f"/api/task/{tid}/artifact-pack",
+        "target_structures_csv_api": f"/api/task/{tid}/target-structures.csv",
         "bundle_api": f"/api/task/{tid}/bundle",
     }
 
@@ -14329,6 +14382,31 @@ def api_task_artifact_links(task_id: str):
     if not _is_safe_task_id(tid):
         return jsonify({"status": "fail", "error": "invalid task_id"}), 400
     return jsonify(_task_artifact_links_payload(tid))
+
+
+@app.get("/api/task/<task_id>/target-structures.csv")
+def api_task_target_structures_csv(task_id: str):
+    tid = str(task_id or "").strip()
+    if not tid:
+        return jsonify({"status": "fail", "error": "missing task_id"}), 400
+    if not _is_safe_task_id(tid):
+        return jsonify({"status": "fail", "error": "invalid task_id"}), 400
+    csv_path = _task_target_structures_csv_path(tid)
+    if csv_path is None:
+        return (
+            jsonify(
+                {
+                    "status": "missing",
+                    "task_id": tid,
+                    "error": "target_structures_not_found",
+                }
+            ),
+            404,
+        )
+    filename = f"agent4mat-task-{tid}-target_structures-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
+    payload = csv_path.read_bytes()
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(payload, mimetype="text/csv", headers=headers)
 
 
 @app.get("/api/task/<task_id>/release-context")

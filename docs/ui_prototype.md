@@ -9,6 +9,30 @@ PYTHONPATH=src python3 ui/app.py
 ```
 Open: `http://127.0.0.1:8787`
 
+## CI / Acceptance linkage
+- workflow file: `.github/workflows/agent4mat-ci.yml`
+- manual trigger: `workflow_dispatch`
+- local command vs Actions input mapping:
+  - `make ui-freeze-acceptance WORKSPACE_ROOT=.` ↔ `run_ui_freeze_acceptance=true`
+  - `make ui-audit-acceptance WORKSPACE_ROOT=.` ↔ `run_ui_audit_acceptance=true`
+  - `make ui-release-readiness WORKSPACE_ROOT=.` ↔ `run_ui_release_readiness=true`
+  - one-click bundle (`freeze + audit + release-readiness`) ↔ `run_ui_acceptance_bundle=true`
+- bundle summary:
+  - when bundle or any UI manual gate is selected, workflow also runs `ui-acceptance-bundle-summary`
+  - summary prints the final result of:
+    - `ui-freeze-acceptance`
+    - `ui-audit-acceptance`
+    - `ui-release-readiness`
+- generated artifacts (under `runs/ci/`):
+  - `ui_freeze_acceptance.json`
+  - `ui_audit_acceptance.json`
+  - `ui_stability_smoke.json`
+  - `ui_release_readiness.json`
+  - `ui_release_readiness.md`
+- recommended manual release check order:
+  - default path: run `run_ui_acceptance_bundle=true`
+  - if bundle fails, re-run single gate inputs to isolate the failing stage
+
 ## Scope
 - chat-first interaction:
   - user sends natural-language messages

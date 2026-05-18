@@ -425,6 +425,30 @@ HTML = """
       .hud-actions button {
         margin-top: 0;
       }
+      .simple-project-strip {
+        margin-top: 8px;
+        border: 1px solid #d7e2f2;
+        border-radius: 10px;
+        padding: 8px;
+        background: #f7faff;
+        display: grid;
+        gap: 6px;
+      }
+      .simple-project-strip .sps-row {
+        display: grid;
+        grid-template-columns: minmax(180px, 1fr) auto auto auto;
+        gap: 6px;
+        align-items: center;
+      }
+      .simple-project-strip .sps-row input,
+      .simple-project-strip .sps-row select,
+      .simple-project-strip .sps-row button {
+        margin-top: 0;
+      }
+      .simple-project-strip .sps-meta {
+        font-size: 0.74rem;
+        color: #5b6578;
+      }
       .hud-mode-toggle {
         display: inline-flex;
         align-items: center;
@@ -1349,6 +1373,9 @@ HTML = """
         .simple-input-row.compact {
           grid-template-columns: 1fr 1fr;
         }
+        .simple-project-strip .sps-row {
+          grid-template-columns: 1fr 1fr;
+        }
         .panel.left-drawer,
         .panel.right-drawer {
           position: static;
@@ -1684,6 +1711,23 @@ HTML = """
               </div>
             </div>
           </div>
+        </div>
+        <div class=\"simple-project-strip simple-only\" id=\"simple_project_strip\">
+          <div class=\"sps-row\">
+            <select id=\"simple_project_picker\" onchange=\"switchSimpleProjectFromPicker()\">
+              <option value=\"\">(select project)</option>
+            </select>
+            <button type=\"button\" onclick=\"switchSimpleProjectFromPicker()\">Open</button>
+            <button type=\"button\" onclick=\"refreshProjects()\">Refresh</button>
+            <button type=\"button\" onclick=\"openWorkspaceWindow()\">New Window</button>
+          </div>
+          <div class=\"sps-row\">
+            <input id=\"simple_new_project_id\" placeholder=\"new project_id (e.g. oled_470_v2)\" />
+            <button type=\"button\" onclick=\"createProjectFromSimpleBar()\">Create + Open</button>
+            <button type=\"button\" onclick=\"setSimpleProjectDraftFromCurrent()\">Use Current ID</button>
+            <button type=\"button\" onclick=\"suggestSimpleProjectDraft()\">Suggest ID</button>
+          </div>
+          <div class=\"sps-meta\" id=\"simple_project_status\">project: -</div>
         </div>
         <div class=\"chat-status-ribbon\" id=\"chat_status_ribbon\">
           <div class=\"status-text\" id=\"chat_status_text\">status: waiting for first task</div>
@@ -4726,6 +4770,7 @@ HTML = """
         if (pidEle) pidEle.textContent = projectId || '-';
         if (tidEle) tidEle.textContent = task || '-';
         if (hEle) hEle.textContent = formatRuntimeHealth(health);
+        syncSimpleProjectBar({keepDraft: true});
       }
 
       function renderProjectOptions(project) {
@@ -4957,6 +5002,30 @@ HTML = """
         ele.value = suggestCloneProjectId(selectedProjectId());
       }
 
+      function suggestSimpleProjectId(baseProjectId) {
+        let base = String(baseProjectId || selectedProjectId() || '').trim() || 'project';
+        base = base.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[^A-Za-z0-9]+/, 'p');
+        if (!base) base = 'project';
+        const existing = new Set(
+          (Array.isArray(state.projects) ? state.projects : [])
+            .map((row) => String((row && row.project_id) || '').trim())
+            .filter((x) => Boolean(x))
+        );
+        let candidate = `${base}_new`;
+        if (candidate.length > 128) candidate = candidate.slice(0, 128);
+        let idx = 2;
+        while (existing.has(candidate) && idx < 1000) {
+          const suffix = `_${idx}`;
+          const maxBaseLen = Math.max(1, 128 - suffix.length);
+          candidate = `${base.slice(0, maxBaseLen)}${suffix}`;
+          idx += 1;
+        }
+        if (!isSafeProjectId(candidate)) {
+          candidate = suggestCloneProjectId(base).replace(/_clone$/, '_new');
+        }
+        return isSafeProjectId(candidate) ? candidate : 'project_new';
+      }
+
       function isSafeProjectId(projectId) {
         return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(projectId || '').trim());
       }
@@ -4983,11 +5052,44 @@ HTML = """
       }
 
       function syncProjectPickerValue(projectId) {
-        const picker = document.getElementById('project_picker');
-        if (!picker) return;
         const pid = String(projectId || '').trim();
-        const hasOption = Array.from(picker.options || []).some((opt) => String(opt.value || '') === pid);
-        picker.value = hasOption ? pid : '';
+        for (const pickerId of ['project_picker', 'simple_project_picker']) {
+          const picker = document.getElementById(pickerId);
+          if (!picker) continue;
+          const hasOption = Array.from(picker.options || []).some((opt) => String(opt.value || '') === pid);
+          picker.value = hasOption ? pid : '';
+        }
+      }
+
+      function syncSimpleProjectBar(opts) {
+        const conf = (opts && typeof opts === 'object') ? opts : {};
+        const pid = selectedProjectId();
+        const tid = taskId();
+        const rows = Array.isArray(state.projects) ? state.projects : [];
+        const statusEle = document.getElementById('simple_project_status');
+        if (statusEle) {
+          statusEle.textContent = `project=${pid || '-'} | task=${tid || '-'} | projects=${rows.length}`;
+        }
+        if (!conf.keepDraft) {
+          const draftEle = document.getElementById('simple_new_project_id');
+          if (draftEle && !String(draftEle.value || '').trim()) {
+            draftEle.value = suggestSimpleProjectId(pid);
+          }
+        }
+      }
+
+      function setSimpleProjectDraftFromCurrent() {
+        const draftEle = document.getElementById('simple_new_project_id');
+        if (!draftEle) return;
+        draftEle.value = selectedProjectId();
+        syncSimpleProjectBar({keepDraft: true});
+      }
+
+      function suggestSimpleProjectDraft() {
+        const draftEle = document.getElementById('simple_new_project_id');
+        if (!draftEle) return;
+        draftEle.value = suggestSimpleProjectId(selectedProjectId());
+        syncSimpleProjectBar({keepDraft: true});
       }
 
       function syncWorkspaceUrl(projectId, opts) {
@@ -5021,6 +5123,7 @@ HTML = """
         document.getElementById('clone_project_id').value = '';
         refreshCloneTargetSuggestion();
         refreshWorkspaceHud();
+        syncSimpleProjectBar({keepDraft: true});
         renderConversationSummaryCard(project);
       }
 
@@ -5547,7 +5650,11 @@ HTML = """
         const r = await apiGet('/api/projects?limit=120');
         renderJsonOut(r.data);
         const picker = document.getElementById('project_picker');
+        const simplePicker = document.getElementById('simple_project_picker');
         while (picker.options.length > 1) picker.remove(1);
+        if (simplePicker) {
+          while (simplePicker.options.length > 1) simplePicker.remove(1);
+        }
         const projects = Array.isArray(r.data.projects) ? r.data.projects : [];
         state.projects = projects;
         for (const p of projects) {
@@ -5558,9 +5665,16 @@ HTML = """
           opt.value = pid;
           opt.textContent = label;
           picker.appendChild(opt);
+          if (simplePicker) {
+            const simpleOpt = document.createElement('option');
+            simpleOpt.value = pid;
+            simpleOpt.textContent = label;
+            simplePicker.appendChild(simpleOpt);
+          }
         }
         syncProjectPickerValue(selectedProjectId());
         renderProjectSessionBoard(projects);
+        syncSimpleProjectBar();
       }
 
       function readSessionBoardControls() {
@@ -7363,6 +7477,43 @@ HTML = """
         const pid = String(picker.value || '').trim();
         if (!pid) return;
         await openProjectWorkspace(pid, {push: true});
+      }
+
+      async function switchSimpleProjectFromPicker() {
+        const picker = document.getElementById('simple_project_picker');
+        const pid = String((picker && picker.value) || '').trim();
+        if (!pid) return;
+        await openProjectWorkspace(pid, {push: true});
+      }
+
+      async function createProjectFromSimpleBar() {
+        const draftEle = document.getElementById('simple_new_project_id');
+        const pid = String((draftEle && draftEle.value) || '').trim();
+        if (!pid) {
+          renderJsonOut({status: 'fail', error: 'empty project_id'});
+          return;
+        }
+        if (!isSafeProjectId(pid)) {
+          renderJsonOut({status: 'fail', error: 'invalid project_id', project_id: pid});
+          return;
+        }
+        document.getElementById('project_id').value = pid;
+        document.getElementById('project_title').value = pid;
+        const r = await apiPost('/api/projects', {
+          project_id: pid,
+          title: pid,
+          options: collectOptions(),
+          memory_notes: '',
+        });
+        renderJsonOut(r.data);
+        const project = r.data && r.data.project ? r.data.project : null;
+        if (project) {
+          state.project = project;
+          applyProjectStateToUi(project);
+        }
+        await refreshProjects();
+        await loadHistory();
+        await loadRunRuntime();
       }
 
       async function saveProject() {
